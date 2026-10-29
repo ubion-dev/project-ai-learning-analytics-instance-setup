@@ -77,3 +77,8 @@ AGENTS.md → 계획 → 이 문서 → git status/diff/log를 읽고 현재 단
   codex/ala-migration, 8f3462e, 문서 두 개만 변경. 원본 실행 스크립트/사용자 untracked PDF는 보존.
 - PR 자동 merge 및 정식 v0.1.0 발행은 하지 않았다. 실제 서버에 접속/설치/재부팅을 수행하지 않았다.
 - 계획 압축/재개 파일은 AGENTS.md, docs/plans/ala-v1-plan.md, 이 문서다. 다음 세션은 이 세 파일과 git 상태를 읽고 ALA-07의 실기기 수용만 이어간다.
+
+## 운영 기록 비공개 처리
+
+개별 장비의 접속·식별·장애 조사 기록은 공개 이력에서 제외했다.
+

@@ -3,7 +3,6 @@ import json
 import os
 import stat
 import tempfile
-import time
 import unittest
 from unittest.mock import patch
 
@@ -11,6 +10,14 @@ from ala.config import Config
 from ala.engine import BASE_PACKAGES, DOCKER_PACKAGES, Engine, SCRIPTS, SLEEP_UNITS, UPDATE_UNITS, _template
 from ala.model import CheckResult, Report
 from ala.system import Command, Paths
+
+
+# One synthetic clock drives boot time, service starts, and fixture file mtimes.
+# Wall-clock writes can cross the engine's one-second restart-age tolerance on CI.
+FAKE_BOOT_SECONDS = 1_700_000_000
+FAKE_SERVICE_START_US = 1_000_000_000
+FAKE_SERVICE_START_NS = (FAKE_BOOT_SECONDS * 1_000_000_000 + FAKE_SERVICE_START_US * 1000)
+FAKE_FILE_START_NS = (FAKE_BOOT_SECONDS + 100) * 1_000_000_000
 
 
 class FakeHost:
@@ -45,7 +52,7 @@ class FakeHost:
         if argv == ("gsettings", "list-schemas"):
             return Command(0, "\n".join(("org.gnome.desktop.session", "org.gnome.desktop.screensaver", "org.gnome.settings-daemon.plugins.power")))
         if argv[:2] == ("systemctl", "show") and "--property=ExecMainStartTimestampMonotonic" in argv:
-            return Command(0, "1000000000\n")
+            return Command(0, f"{FAKE_SERVICE_START_US}\n")
         if argv == ("/usr/sbin/sshd", "-T"):
             return Command(0, "port 22\nport 2222\n")
         if argv[:2] == ("firewall-cmd", "--get-default-zone"):
@@ -79,6 +86,7 @@ class EngineTests(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
         self.paths = Paths(Path(self.tmp.name))
         self.host = FakeHost()
+        self.file_time_ns = FAKE_FILE_START_NS
         self.config = Config(user="user")
         self.engine = Engine(self.config, self.host, self.paths)
         self.addCleanup(patch.stopall)
@@ -91,10 +99,12 @@ class EngineTests(unittest.TestCase):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(content)
         path.chmod(mode)
+        self.file_time_ns += 10_000_000
+        os.utime(path, ns=(self.file_time_ns, self.file_time_ns))
         return path
 
     def prepare(self):
-        self.write("/proc/stat", f"btime {int(time.time()) - 1000}\n")
+        self.write("/proc/stat", f"btime {FAKE_BOOT_SECONDS}\n")
         self.paths.at("/sys/bus/pci/devices").mkdir(parents=True)
         self.write("/usr/local/bin/chrome-did", (SCRIPTS / "bin/chrome-did").read_text(), 0o755)
         policy = self.write("/etc/opt/chrome/policies/managed/did-display.json", json.dumps({key: False for key in ("TranslateEnabled", "DefaultBrowserSettingEnabled", "PromotionsEnabled")}))
@@ -290,10 +300,27 @@ class EngineTests(unittest.TestCase):
 
     def test_changed_docker_options_are_pending_until_restart(self):
         path = self.paths.at("/etc/docker/daemon.json")
-        os.utime(path, (time.time() + 100, time.time() + 100))
+        changed_ns = FAKE_SERVICE_START_NS + 100 * 1_000_000_000
+        os.utime(path, ns=(changed_ns, changed_ns))
         report = self.engine.inspect()
         self.assertEqual(self.by_id(report, "docker.runtime.config_age").state, "pending")
         self.assertEqual(report.exit_code, 2)
+
+    def test_fixture_writes_use_the_same_clock_as_service_start(self):
+        path = self.write("/etc/docker/daemon.json", self.paths.at("/etc/docker/daemon.json").read_text())
+        self.assertEqual(path.stat().st_mtime_ns, self.file_time_ns)
+        self.assertGreater(path.stat().st_mtime_ns, FAKE_FILE_START_NS)
+        self.assertLess(path.stat().st_mtime_ns, FAKE_SERVICE_START_NS)
+        self.assertEqual(self.engine.inspect().exit_code, 0)
+
+    def test_runtime_age_boundary_is_deterministic(self):
+        path = self.paths.at("/etc/docker/daemon.json")
+        for offset_seconds, expected in ((-1, "ok"), (1, "ok"), (2, "pending")):
+            with self.subTest(offset_seconds=offset_seconds):
+                timestamp_ns = FAKE_SERVICE_START_NS + offset_seconds * 1_000_000_000
+                os.utime(path, ns=(timestamp_ns, timestamp_ns))
+                result = self.engine._restart_pending("docker.runtime.config_age", "docker.service", "/etc/docker/daemon.json")
+                self.assertEqual(result.state, expected)
 
     def test_unknown_user_does_not_apply(self):
         self.host.replies[("getent", "passwd", "user")] = Command(2, "", "unknown user")
