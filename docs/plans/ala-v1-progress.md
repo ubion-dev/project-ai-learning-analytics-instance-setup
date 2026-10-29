@@ -4,7 +4,7 @@
 
 - ALA-00~06: 구현·모의/headless·임시 설치·Python3.12 CI 검증 및 RC 공개 완료. 실기기 수용은 별도다.
 - ALA-07: 실기기 수용 미수행. 대상 서버/유지보수 시간/화면 관찰 경로가 미정이다. 정식 v0.1.0으로 표시하지 않는다.
-- repo: ubion-dev/project-ai-learning-analytics-setup (private). main은 계획 문서 최초 커밋, 개발은 codex/ala-v1.
+- repo: ubion-dev/project-ai-learning-analytics-instance-setup (private). main은 계획 문서 최초 커밋, 개발은 codex/ala-v1.
 - 로컬: 현재 이 파일을 포함한 repo. 모든 명령은 이 프로젝트 root를 workdir로 명시한다.
 - 다음 행동: 실제 CPU/GPU 대상·유지보수 시간·화면 확인 경로를 정한 뒤 docs/ACCEPTANCE.md의 수용을 수행한다. 새 기능을 재구현하지 않는다.
 
@@ -65,12 +65,12 @@ AGENTS.md → 계획 → 이 문서 → git status/diff/log를 읽고 현재 단
 
 ## 원격 인계 결과
 
-- 구현 Draft PR: https://github.com/ubion-dev/project-ai-learning-analytics-setup/pull/1
+- 구현 Draft PR: https://github.com/ubion-dev/project-ai-learning-analytics-instance-setup/pull/1
 - 코드 기준: 81a5f347ba0732b1393e865afcf0a0ec7fa648bc (이후 문서 기록 갱신만).
-- Python3.12 CI: https://github.com/ubion-dev/project-ai-learning-analytics-setup/actions/runs/40825661860
+- Python3.12 CI: https://github.com/ubion-dev/project-ai-learning-analytics-instance-setup/actions/runs/40825661860
   205 passed + 31 subtests, 64.22s; Bash/lock 설치/후보 빌드/smoke도 성공.
 - PR 이벤트 CI 40825729241 역시 성공. private visibility 확인 완료.
-- RC: https://github.com/ubion-dev/project-ai-learning-analytics-setup/releases/tag/v0.1.0-rc.1
+- RC: https://github.com/ubion-dev/project-ai-learning-analytics-instance-setup/releases/tag/v0.1.0-rc.1
 - 첨부: ala-0.1.0rc1.tar.gz + .sha256. 실제 CI가 만든 묶음을 사용했고 manifest/현재 runtime 파일과 대조했다.
 - SHA256: 42a55614daa579f0b7c4dc464fb4980cda32f2e936b708f8367ba8f7b4b62396
 - 기존 PTZ 이전 안내 Draft PR: [비공개 원본 이전 안내]
@@ -94,3 +94,13 @@ AGENTS.md → 계획 → 이 문서 → git status/diff/log를 읽고 현재 단
 - 실제 네트워크 관련 변경은 firewalld 시작·SSH 포트 허용, Docker 설치·서비스 기동이다. Docker 네트워크/방화벽 간접 영향은 실제서버조회전 배제할 수 없다. --upgrade 명시시만 전체 dnf upgrade.
 - Wi-Fi 부팅 자동 연결을 켜거나 검증하는 로직도 현재는 없다. 새기능을 추측 추가하지 않고 이 결과부터 사용자에게 전달한다.
 - fixture 수정 후 GitHub Python3.12 CI는 207 passed+34 subtests(64.19s)로 두 실행 모두 통과했다. docs-only 감사 기록에는 테스트를 재실행할 필요가 없다.
+
+## 최신 작업: 레포지토리 이름 변경
+
+- 사용자 승인으로 GitHub 정식 이름을 `ubion-dev/project-ai-learning-analytics-instance-setup`으로 변경했다.
+- 레포 ID `R_kgDOVbW9rw`, 비공개 설정, PR #1, RC v0.1.0-rc.1 및 첨부 해시가 유지됨을 확인했다.
+- 로컬 디렉터리는 현재 workspace의 `project-ai-learning-analytics-instance-setup`, origin도 새 URL로 갱신했다.
+- CLI `ala`, Python 배포 식별자, 설치·서비스·프로필 경로와 런타임 코드는 변경하지 않는다.
+- 설치 안내·계획·진행·기존 PTZ 이전 안내 및 PR/RC 설명의 정식 URL을 갱신한다. 이미 게시된 RC 묶음은 재작성하지 않는다.
+- 이름/문서 변경이므로 기존 통과 테스트를 재실행하지 않고 diff와 링크·메타데이터만 검증한다.
+- 네트워크 문제에 대해서는 원격 변경을 수행하지 않았다. 직전 사용자의 코드 감사 요청 결과와 접속 제한은 위 기록을 따른다.

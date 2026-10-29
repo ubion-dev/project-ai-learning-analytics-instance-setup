@@ -41,7 +41,7 @@ dist/ala-0.1.0rc1.tar.gz.sha256
 
 ```bash
 gh release download v0.1.0-rc.1 \
-  --repo ubion-dev/project-ai-learning-analytics-setup \
+  --repo ubion-dev/project-ai-learning-analytics-instance-setup \
   --pattern 'ala-0.1.0rc1.tar.gz*'
 shasum -a 256 -c ala-0.1.0rc1.tar.gz.sha256
 

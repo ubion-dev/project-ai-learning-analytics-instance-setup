@@ -1,7 +1,7 @@
 # ala v1 구현 계획 — 승인 기준
 
 승인일: 2026-10-29. 이 문서는 사용자가 승인한 계획의 실행 기준이다.
-프로젝트: `ubion-dev/project-ai-learning-analytics-setup` (비공개), 명령: `ala`.
+프로젝트: `ubion-dev/project-ai-learning-analytics-instance-setup` (비공개), 명령: `ala`.
 
 ### 승인 후 추가 지시
 
