@@ -2,11 +2,11 @@
 
 ## 현재 상태 — 재개할 때 여기부터
 
-- ALA-00~05: 구현 및 모의 검증 완료. ALA-06: 로컬 통합 검증 완료, GitHub Python3.12 CI 확인 예정.
+- ALA-00~06: 구현·모의/headless·임시 설치·Python3.12 CI 검증 및 RC 공개 완료. 실기기 수용은 별도다.
 - ALA-07: 실기기 수용 미수행. 대상 서버/유지보수 시간/화면 관찰 경로가 미정이다. 정식 v0.1.0으로 표시하지 않는다.
 - repo: ubion-dev/project-ai-learning-analytics-setup (private). main은 계획 문서 최초 커밋, 개발은 codex/ala-v1.
 - 로컬: 현재 이 파일을 포함한 repo. 모든 명령은 이 프로젝트 root를 workdir로 명시한다.
-- 다음 행동: 통합 커밋·원격 PR → CI 결과 확인/필요 수정 → 최종 RC 묶음/태그 → PTZ 이전 안내 draft → 인계.
+- 다음 행동: 실제 CPU/GPU 대상·유지보수 시간·화면 확인 경로를 정한 뒤 docs/ACCEPTANCE.md의 수용을 수행한다. 새 기능을 재구현하지 않는다.
 
 ## 확정 결정
 
@@ -22,9 +22,9 @@ UI는 Textual 화살표형, root 시스템 변경과 일반 사용자 Chrome을 
 | ALA-02 | efe9bed 공통 Engine, 26 모의 tests | 미수행 |
 | ALA-03 | d60d2e7, 4d3a62a: CLI/root job/설치 묶음, installer 13 tests | SSH 종료 지속/실설치 미수행 |
 | ALA-04 | 4d3a62a display 25 tests, GNOME/Chrome 복구 | GUI/재부팅/GPU 미수행 |
-| ALA-05 | tui.py/test_tui.py 15 headless tests | 실제 TTY sudo·SSH 렌더링 미수행 |
-| ALA-06 | 로컬 통합 및 배포 smoke 완료, CI 확인 예정 | 정식 전 수용 필요 |
-| ALA-07 | 수용 양식 작성, 이전 안내·RC 준비 | CPU→GPU 전체 미수행 |
+| ALA-05 | 81a5f34, TUI 15 headless tests | 실제 TTY sudo·SSH 렌더링 미수행 |
+| ALA-06 | 81a5f34, Python3.12 CI 205 tests+31 subtests, RC 게시 | 정식 전 수용 필요 |
+| ALA-07 | 수용 양식·이전 안내 Draft PR #11·RC 준비 완료 | CPU→GPU 전체 미수행 |
 
 ## 검증 증거
 
@@ -62,3 +62,18 @@ UI는 Textual 화살표형, root 시스템 변경과 일반 사용자 Chrome을 
 
 AGENTS.md → 계획 → 이 문서 → git status/diff/log를 읽고 현재 단계/남은 통과 조건/다음 행동을 보고한다.
 완료 단계를 재구현하지 않는다. 최신 사용자 결정/코드와 다른 기록은 이유를 남겨 고친다. 구현/자동 검증/실기기 수용 완료를 구분한다.
+
+## 원격 인계 결과
+
+- 구현 Draft PR: https://github.com/ubion-dev/project-ai-learning-analytics-setup/pull/1
+- 코드 기준: 81a5f347ba0732b1393e865afcf0a0ec7fa648bc (이후 문서 기록 갱신만).
+- Python3.12 CI: https://github.com/ubion-dev/project-ai-learning-analytics-setup/actions/runs/40825661860
+  205 passed + 31 subtests, 64.22s; Bash/lock 설치/후보 빌드/smoke도 성공.
+- PR 이벤트 CI 40825729241 역시 성공. private visibility 확인 완료.
+- RC: https://github.com/ubion-dev/project-ai-learning-analytics-setup/releases/tag/v0.1.0-rc.1
+- 첨부: ala-0.1.0rc1.tar.gz + .sha256. 실제 CI가 만든 묶음을 사용했고 manifest/현재 runtime 파일과 대조했다.
+- SHA256: 42a55614daa579f0b7c4dc464fb4980cda32f2e936b708f8367ba8f7b4b62396
+- 기존 PTZ 이전 안내 Draft PR: [비공개 원본 이전 안내]
+  codex/ala-migration, 8f3462e, 문서 두 개만 변경. 원본 실행 스크립트/사용자 untracked PDF는 보존.
+- PR 자동 merge 및 정식 v0.1.0 발행은 하지 않았다. 실제 서버에 접속/설치/재부팅을 수행하지 않았다.
+- 계획 압축/재개 파일은 AGENTS.md, docs/plans/ala-v1-plan.md, 이 문서다. 다음 세션은 이 세 파일과 git 상태를 읽고 ALA-07의 실기기 수용만 이어간다.
