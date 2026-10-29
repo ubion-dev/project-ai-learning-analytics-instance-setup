@@ -82,3 +82,15 @@ AGENTS.md → 계획 → 이 문서 → git status/diff/log를 읽고 현재 단
 
 개별 장비의 접속·식별·장애 조사 기록은 공개 이력에서 제외했다.
 
+## 운영 기록 비공개 처리
+
+개별 장비의 접속·식별·장애 조사 기록은 공개 이력에서 제외했다.
+
+## 사용자 최신 우선순위: setup.sh 코드 감사
+
+- 사용자 요청에 따라 원격 진단보다 setup.sh와 호출 하위 스크립트 코드 확인을 우선했다. 추가 SSH 시도는 하지 않는다.
+- setup.sh 전체·common·base·ssh·docker·display·update·GPU 모듈 확인. Wi-Fi off/rfkill/NetworkManager stop·disable·mask/connection down·modify/autoconnect 해제/직접 DNS·gateway 변경 명령 없음.
+- nmcli는 setup-ssh.sh 39/41행의 현재 연결/zone 조회 두 곳뿐이다. ip route 명령도 조회만 한다.
+- 실제 네트워크 관련 변경은 firewalld 시작·SSH 포트 허용, Docker 설치·서비스 기동이다. Docker 네트워크/방화벽 간접 영향은 실제서버조회전 배제할 수 없다. --upgrade 명시시만 전체 dnf upgrade.
+- Wi-Fi 부팅 자동 연결을 켜거나 검증하는 로직도 현재는 없다. 새기능을 추측 추가하지 않고 이 결과부터 사용자에게 전달한다.
+- fixture 수정 후 GitHub Python3.12 CI는 207 passed+34 subtests(64.19s)로 두 실행 모두 통과했다. docs-only 감사 기록에는 테스트를 재실행할 필요가 없다.
