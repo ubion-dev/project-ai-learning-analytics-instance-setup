@@ -1,0 +1,132 @@
+from __future__ import annotations
+
+from pathlib import Path
+import asyncio
+import json
+import os
+import pwd
+import subprocess
+import sys
+
+from .config import Config
+from .jobs import JobStore, change_lock, protected_directory, trusted_release
+from .system import Host, Paths, atomic_json, platform_error
+
+class Operations:
+    """Fixed privileged API. Tests inject paths/host, never environment overrides."""
+    def __init__(self, paths=None, host=None, release=None):
+        self.paths, self.host = paths or Paths(), host or Host()
+        self.release = release or Path(__file__).resolve().parents[1]
+
+    def config(self):
+        if not self.paths.config.exists():
+            user = os.environ.get('SUDO_USER', '')
+            return Config(user=user if user != 'root' else '')
+        info = self.paths.config.lstat()
+        if self.paths.config.is_symlink() or info.st_uid != os.geteuid() or info.st_mode & 0o022:
+            raise PermissionError('구성 파일 소유자/쓰기 권한을 확인하세요.')
+        return Config.load(self.paths.config)
+
+    def dispatch(self, action, payload):
+        if action == 'config-show':
+            return {'config': self.config().to_dict(), 'exists': self.paths.config.exists()}
+        if action == 'config-save':
+            config = Config.from_dict(payload)
+            if config.user:
+                record = pwd.getpwnam(config.user)
+                if record.pw_uid == 0 or not Path(record.pw_dir).is_dir():
+                    raise ValueError('존재하는 일반 사용자와 홈이 필요합니다.')
+            with change_lock(self.paths):
+                if any(r['state'] in {'queued', 'running'} for r in JobStore(self.paths, self.host).list()):
+                    raise RuntimeError('설치 작업 중에는 구성을 변경할 수 없습니다.')
+                protected_directory(self.paths.config.parent, 0o755)
+                if not self.paths.config.exists() or self.config() != config or self.paths.config.stat().st_mode & 0o777 != 0o644:
+                    atomic_json(self.paths.config, config.to_dict(), 0o644)
+            return {'config': config.to_dict(), 'saved': True}
+        if action in {'inspect', 'plan', 'status'}:
+            from .engine import Engine
+            config = self.config()
+            report = (Engine(config, host=self.host, paths=self.paths).plan() if action == 'plan' else
+                      Engine(config, host=self.host, paths=self.paths).inspect()).to_dict()
+            if action == 'status':
+                import socket
+                report.update(hostname=socket.gethostname(), config=config.to_dict(), runs=JobStore(self.paths, self.host).list())
+            return report
+        if action == 'submit':
+            config = self.config()
+            if not config.user:
+                raise ValueError('먼저 ala config edit에서 화면 사용자를 지정하세요.')
+            record = pwd.getpwnam(config.user)
+            if record.pw_uid == 0 or not Path(record.pw_dir).is_dir():
+                raise ValueError('사용 가능한 일반 사용자가 아닙니다.')
+            return JobStore(self.paths, self.host).submit(config, self.release, self.release / '.venv/bin/python')
+        if action == 'runs-list':
+            return {'runs': JobStore(self.paths, self.host).list()}
+        if action == 'runs-show':
+            return JobStore(self.paths, self.host).load(payload['run_id'])
+        if action == 'logs':
+            store = JobStore(self.paths, self.host)
+            directory = store.directory(payload['run_id'])
+            # Read a bounded tail; do not load an unbounded compiler/package log into TUI memory.
+            with (directory / 'output.log').open('rb') as stream:
+                stream.seek(0, 2)
+                stream.seek(max(0, stream.tell() - 128 * 1024))
+                content = stream.read().decode(errors='replace')
+            return {'run_id': payload['run_id'], 'log': content}
+        if action == 'chrome':
+            from .display import chrome_action
+            if payload.get('action') not in {'start', 'stop', 'restart', 'status', 'logs', 'check'}:
+                raise ValueError('허용되지 않은 Chrome 작업입니다.')
+            if payload['action'] in {'start','stop','restart'}:
+                with change_lock(self.paths):
+                    if any(r['state'] in {'queued','running'} for r in JobStore(self.paths, self.host).list()):
+                        raise RuntimeError('설치 중에는 Chrome 변경 작업을 하지 않습니다.')
+                    return chrome_action(payload['action'], self.config(), host=self.host, paths=self.paths)
+            return chrome_action(payload['action'], self.config(), host=self.host, paths=self.paths)
+        raise ValueError('허용되지 않은 관리자 작업입니다.')
+
+class Service:
+    """CLI and TUI use this exact API; no localized log parsing."""
+    def __init__(self, release=None):
+        self.release = release or Path(__file__).resolve().parents[1]
+
+    def authenticate(self):
+        if os.geteuid() != 0:
+            if not sys.stdin.isatty():
+                result = subprocess.run(['sudo', '-n', '-v'], check=False)
+            else:
+                result = subprocess.run(['sudo', '-v'], check=False)
+            if result.returncode:
+                raise PermissionError('sudo 인증이 필요합니다.')
+
+    def request(self, action: str, payload=None):
+        release = trusted_release(self.release)
+        args = [str(release / '.venv/bin/python'), '-I', str(release / 'entry.py'), '_privileged', action]
+        if os.geteuid() != 0:
+            args = ['sudo', '-n', '--', *args]
+        result = subprocess.run(args, input=json.dumps(payload or {}), capture_output=True, text=True, check=False)
+        try:
+            value = json.loads(result.stdout)
+        except ValueError:
+            raise RuntimeError(result.stderr.strip() or '관리자 응답을 읽을 수 없습니다.') from None
+        if result.returncode or 'error' in value:
+            raise RuntimeError(value.get('error', result.stderr.strip() or '관리자 작업 실패'))
+        return value
+
+    async def call(self, action: str, payload=None):
+        return await asyncio.to_thread(self.request, action, payload)
+
+def privileged(action):
+    if os.geteuid() != 0:
+        raise PermissionError('관리자 실행기는 root 전용입니다.')
+    release = trusted_release(Path(__file__).resolve().parents[1])
+    error = platform_error()
+    if error:
+        raise RuntimeError(error)
+    raw = sys.stdin.buffer.read(1024 * 1024 + 1)
+    if len(raw) > 1024 * 1024:
+        raise ValueError('요청이 너무 큽니다.')
+    payload = json.loads(raw or b'{}')
+    if not isinstance(payload, dict):
+        raise ValueError('요청은 object여야 합니다.')
+    return Operations(release=release).dispatch(action, payload)
