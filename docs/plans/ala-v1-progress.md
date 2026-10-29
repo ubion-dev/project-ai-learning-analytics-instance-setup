@@ -2,16 +2,17 @@
 
 ## 현재 상태 — 재개할 때 여기부터
 
+- 최신 작업 ALA-08: 공식 장치 드라이버 자동 준비와 설치 중 커널/release 유지 구현·Python3.12 CI 검증·RC2 게시 완료. 실기기 수용은 미수행이다. 계획의 추가 지시를 먼저 읽는다.
 - ALA-00~06: 구현·모의/headless·임시 설치·Python3.12 CI 검증 및 RC 공개 완료. 실기기 수용은 별도다.
-- ALA-07: 실기기 수용 미수행. 대상 서버/유지보수 시간/화면 관찰 경로가 미정이다. 정식 v0.1.0으로 표시하지 않는다.
-- repo: ubion-dev/project-ai-learning-analytics-instance-setup (private). main은 계획 문서 최초 커밋, 개발은 codex/ala-v1.
+- ALA-07: 실기기 수용 미수행. 사용자는 세팅 전 장비의 설치·테스트를 허용했다. 알려진 SSH 대상의 호스트키 확인과 실제 화면 관찰 경로가 남아 있다. 정식 v0.1.0으로 표시하지 않는다.
+- repo: ubion-dev/project-ai-learning-analytics-instance-setup (private). 기존 구현 PR #1은 main 659d97e에 병합됨을 원격 확인했다. ALA-08 개발 브랜치는 codex/ala-hardware-preparation이다.
 - 로컬: 현재 이 파일을 포함한 repo. 모든 명령은 이 프로젝트 root를 workdir로 명시한다.
-- 다음 행동: 실제 CPU/GPU 대상·유지보수 시간·화면 확인 경로를 정한 뒤 docs/ACCEPTANCE.md의 수용을 수행한다. 새 기능을 재구현하지 않는다.
+- 다음 행동: PR #2 검토와 SSH 대상 기기 키 확인 후 RC2로 docs/ACCEPTANCE.md의 CPU/GPU 수용을 수행한다. 유지보수 시간 승인을 반복 요청하지 않는다.
 
 ## 확정 결정
 
 AGENTS.md와 ala-v1-plan.md를 먼저 읽는다. Linux 기존 계정 재사용, DID는 로그인 없는 URL, 기존 브라우저 프로필은 보관만 하고 새 표시 프로필에 basic 저장 방식을 적용한다. 키링 자동 해제/암호 저장/웹 자동 인증은 만들지 않는다.
-UI는 Textual 화살표형, root 시스템 변경과 일반 사용자 Chrome을 분리한다. 실제 서버 설치/재부팅은 아직 승인된 대상/시간이 없어 실행하지 않는다.
+UI는 Textual 화살표형, root 시스템 변경과 일반 사용자 Chrome을 분리한다. 실제 서버 설치/재부팅은 사용자 승인 범위 안에 있으며, 현재는 SSH 기기 키 확인을 기다리고 있다.
 
 ## 작업 표
 
@@ -25,6 +26,7 @@ UI는 Textual 화살표형, root 시스템 변경과 일반 사용자 Chrome을 
 | ALA-05 | 81a5f34, TUI 15 headless tests | 실제 TTY sudo·SSH 렌더링 미수행 |
 | ALA-06 | 81a5f34, Python3.12 CI 205 tests+31 subtests, RC 게시 | 정식 전 수용 필요 |
 | ALA-07 | 수용 양식·이전 안내 Draft PR #11·RC 준비 완료 | CPU→GPU 전체 미수행 |
+| ALA-08 | f9a8546, Python3.12 253 tests+40 subtests, RC2 게시, Draft PR #2 | 실제 DNF solver/장치·재부팅 미수행 |
 
 ## 검증 증거
 
@@ -104,3 +106,25 @@ AGENTS.md → 계획 → 이 문서 → git status/diff/log를 읽고 현재 단
 - 설치 안내·계획·진행·기존 PTZ 이전 안내 및 PR/RC 설명의 정식 URL을 갱신한다. 이미 게시된 RC 묶음은 재작성하지 않는다.
 - 이름/문서 변경이므로 기존 통과 테스트를 재실행하지 않고 diff와 링크·메타데이터만 검증한다.
 - 네트워크 문제에 대해서는 원격 변경을 수행하지 않았다. 직전 사용자의 코드 감사 요청 결과와 접속 제한은 위 기록을 따른다.
+
+## ALA-08 시작 — 공식 드라이버 자동 준비
+
+- 사용자 요청: 완료 상태, OS 업그레이드 차단 여부 확인 및 필요한 드라이버의 초기 자동 설치.
+- 현재는 DNF Automatic/PackageKit/GNOME 자동 업데이트 차단, NVIDIA 자동 감지가 구현되어 있다. 일반 dnf install 의존성에 의한 커널/release 변경은 별도 보호가 없어 보완한다.
+- 범위: PCI/USB 조사와 공식 펌웨어 누락 보완, 실행 커널 버전의 공식 모듈만 준비. 기존 정상 드라이버와 연결을 유지하고 자동 재부팅/모듈 언로드/임의 드라이버 다운로드는 하지 않는다.
+- 계획 변경 이유와 완료 기준은 ala-v1-plan.md의 ALA-08에 기록했다. 코드는 RC2로 올리고 RC1 자산은 보존한다.
+- 실기기 설치/재부팅은 여전히 미수행. SSH 대상의 호스트키 확인 문제가 해결되지 않았으므로 원격 변경 없이 모의 검증부터 진행한다.
+- 코드 검토 보완: 사용하지 않는 오디오/보조 저장장치나 USB 복합 인터페이스의 binding 부재를 필수 실패로 만들면 정상 초기 설치가 막힌다. 따라서 이들은 정보 조사만 하고 generic 모듈 보완은 네트워크·그래픽/명확한 USB 네트워크로 제한한다. 장치 지원 진단은 최종 결과에 남기되 독립 설정은 계속하고, 실제 패키지 설치 실패는 중단한다.
+- GitHub 조회 중 기존 PR #1의 MERGED 상태를 확인했다. origin/main 659d97e는 기존 개발 HEAD와 동일한 코드 트리여서 fast-forward로 반영하고 codex/ala-hardware-preparation으로 새 브랜치를 만들었다. 이번 변경은 별도 PR로 제출한다.
+- 구현: ala/hardware.py 공통 조사/적용, Engine 기본 hardware 단계, 공식 Rocky 펌웨어 매핑, 실행 커널 정확 일치 모듈, 재부팅 기록과 readonly/재실행 유지. USB CDC 직렬·Bluetooth·허브/오디오/보조 저장장치 오탐을 제외했다.
+- DNF 보호: 공통 Bash helper, Chrome RPM 직접 설치, installer Python/pip bootstrap에 새 부팅 kernel/kernel-core/debug/UKI 및 Rocky release/repo/key 제외·weak deps off를 적용했다. 기존 명시 --upgrade는 기본 off로 유지한다. kmod 기본 설치/검사를 맞췄다.
+- 로컬 Python3.14 전체 pytest: 251 passed + 40 subtests, 115.04s. 이후 리뷰에서 설치 중 새 USB 진단이 생겨도 독립 설정을 계속하는 회귀 1개를 추가하고 Engine+hardware 65 passed + 6 subtests를 확인했다. 현재 전체 수집 항목은 252개다.
+- 추가 검증: common/Chrome/NVIDIA/installer 45개, common/verify/legacy 47개+30 subtests, 하드웨어 모듈 33개+3 subtests, 수정 Shell 5개 bash -n 통과. git diff --check, local 문서 링크, RC2 묶음 manifest/모듈·DRIVERS문서 포함/--version·--help smoke 통과.
+- RC2 로컬 후보는 dist/ala-0.1.0rc2.tar.gz다. GitHub Python3.12 CI와 PR 제출이 다음 행동이다. 기존 RC1을 덮어쓰지 않는다.
+- 실제 Rocky DNF solver에서 기존 동일 버전 커널 의존성 충족, 물리 장치 설치·통신·GPU·전체화면·재부팅 수용은 미검증이다. 테스트 통과를 실장비 보장으로 해석하지 않는다.
+- 최종 리뷰에서 ECM+ACM 복합 USB의 모든 data class를 네트워크로 추정하는 오탐을 재현했다. USB union/IAD를 해석하지 않는 v1에서는 제어 인터페이스나 실제 네트워크 driver 증거만 사용하도록 수정했다. 하드웨어 34개+3 subtests, 최종 Engine+hardware 66개+6 subtests 통과. 현재 전체 수집은 253개다.
+- 최종 기능 커밋: f9a85466c022a11e38848e50a1b50167dc15c527. Draft PR #2: https://github.com/ubion-dev/project-ai-learning-analytics-instance-setup/pull/2 (자동 병합하지 않음).
+- Python3.12 CI: https://github.com/ubion-dev/project-ai-learning-analytics-instance-setup/actions/runs/40842796588 — 253 passed + 40 subtests, 48.78s. Bash 문법·고정 wheel·후보 빌드·CLI smoke 성공.
+- CI 산출물의 전체 manifest/현재 runtime 소스 일치를 확인하고 별도 RC2에 게시했다: https://github.com/ubion-dev/project-ai-learning-analytics-instance-setup/releases/tag/v0.1.0-rc.2
+- RC2 SHA256: 27c1c5083f37f7188164d1f5266e9b3d475a2c010f81a72b6c126661c2fcd3ab. 기존 RC1 자산은 변경하지 않았다.
+- 남은 조건은 ALA-07 실기기 수용과 이번 장치/커널 보존 수용이다. 실제 서버에 설정·설치·재부팅을 수행하지 않았다.

@@ -1,7 +1,8 @@
 """Real venv/offline-wheel installation inside a patched temporary filesystem.
 
 Production installer has no test-root/environment override. Only the test copy is
-rewritten; mocked dnf refuses every call. No /opt, /etc, /usr/local is modified.
+rewritten; mocked dnf refuses every call, recording expected bootstrap failures.
+No /opt, /etc, /usr/local is modified.
 """
 from __future__ import annotations
 
@@ -21,6 +22,8 @@ import zipfile
 import pytest
 
 REPO = Path(__file__).resolve().parents[1]
+DNF_INSTALL_OPTIONS = ['--setopt=install_weak_deps=False',
+                       '--exclude=kernel,kernel-core,kernel-debug*,kernel-uki*,rocky-release*,rocky-repos*,rocky-gpg-keys*']
 spec = importlib.util.spec_from_file_location('ala_build_release', REPO / 'scripts/build-release.py')
 builder = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(builder)
@@ -70,7 +73,7 @@ class Installation:
     def launcher(self):
         return self.root / 'usr/local/bin/ala'
 
-    def bundle(self, version='0.1.0rc1', *, broken_entry=False):
+    def bundle(self, version='0.1.0rc1', *, broken_entry=False, missing_python=False, missing_pip=False):
         source = self.tmp / f'source-{version}'
         source.mkdir()
         (source / 'ala').mkdir()
@@ -90,6 +93,11 @@ class Installation:
         installer = installer.replace('if [[ $EUID != 0 ]]; then', 'if [[ false == true ]]; then')
         installer = installer.replace('OS_RELEASE=/etc/os-release', f'OS_RELEASE="{self.os_release}"')
         installer = installer.replace('ROOT = Path("/")', f'ROOT = Path({str(self.root)!r})')
+        if missing_python:
+            installer = installer.replace('if ! command -v python3 >/dev/null; then', 'if true; then')
+        if missing_pip:
+            installer = installer.replace("if subprocess.run([sys.executable, '-I', '-m', 'pip', '--version'], stdout=subprocess.DEVNULL).returncode:",
+                                          'if True:  # test-only missing pip fixture')
         (source / 'install.sh').write_text(installer)
         (source / '.git').mkdir()
         (source / '.git/credentials').write_text('must not ship')
@@ -138,6 +146,33 @@ def test_corrupt_payload_fails_before_installation(installation):
     result = installation.install(bundle)
     assert result.returncode == 1
     assert '검증 실패' in result.stderr
+    assert not (installation.root / 'opt').exists()
+
+
+@pytest.mark.parametrize('package', ['python3', 'python3-pip'])
+def test_package_bootstrap_protects_boot_kernel_and_release_without_fallback(installation, package):
+    bundle, _ = installation.bundle(missing_python=package == 'python3', missing_pip=package == 'python3-pip')
+    log = installation.tmp / 'dnf-arguments'
+    executable(installation.mock_bin / 'dnf', '#!/bin/sh\nprintf "%s\\n" "$@" > "$TEST_DNF_LOG"\nexit 42\n')
+    result = installation.install(bundle, TEST_DNF_LOG=str(log))
+    assert result.returncode != 0
+    assert log.read_text().splitlines() == ['install', '-y', *DNF_INSTALL_OPTIONS, package]
+    assert '실행 커널' in result.stderr and '명시적 유지보수' in result.stderr
+    assert not installation.current.exists()
+    if package == 'python3-pip':
+        assert not list((installation.root / 'opt/ala/releases').glob('*'))
+    else:
+        assert not (installation.root / 'opt').exists()
+
+
+def test_missing_pip_bootstrap_still_waits_for_payload_verification(installation):
+    bundle, _ = installation.bundle(missing_pip=True)
+    (bundle / 'entry.py').write_text('print("tampered")\n')
+    log = installation.tmp / 'dnf-arguments'
+    executable(installation.mock_bin / 'dnf', '#!/bin/sh\nprintf "%s\\n" "$@" > "$TEST_DNF_LOG"\nexit 42\n')
+    result = installation.install(bundle, TEST_DNF_LOG=str(log))
+    assert result.returncode == 1 and '검증 실패' in result.stderr
+    assert not log.exists()
     assert not (installation.root / 'opt').exists()
 
 

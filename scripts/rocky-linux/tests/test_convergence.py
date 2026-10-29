@@ -1,4 +1,5 @@
 """Re-running setup converges without repeating system mutations."""
+import fnmatch
 import json
 import os
 from pathlib import Path
@@ -7,6 +8,8 @@ import tempfile
 import unittest
 
 SCRIPTS = Path(__file__).resolve().parents[1]
+DNF_OPTIONS = ['--setopt=install_weak_deps=False',
+               '--exclude=kernel,kernel-core,kernel-debug*,kernel-uki*,rocky-release*,rocky-repos*,rocky-gpg-keys*']
 
 
 class ConvergenceTests(unittest.TestCase):
@@ -26,6 +29,7 @@ state = json.loads(path.read_text())
 name = pathlib.Path(sys.argv[0]).name
 args = sys.argv[1:]
 if name == 'rpm':
+    if os.environ.get('TEST_RPM_FAILURE'): sys.exit(int(os.environ['TEST_RPM_FAILURE']))
     sys.exit(0 if args[-1] in state['packages'] else 1)
 if name == 'systemctl' and args[0] in ('is-active', 'is-enabled'):
     key = args[-1]
@@ -42,7 +46,8 @@ with open(os.environ['TEST_LOG'], 'a') as log:
     log.write(name + ' ' + ' '.join(args) + '\\n')
 if name == 'dnf':
     assert args[:2] == ['install', '-y'], args
-    state['packages'].extend(args[2:])
+    if os.environ.get('TEST_DNF_FAILURE'): sys.exit(int(os.environ['TEST_DNF_FAILURE']))
+    state['packages'].extend(arg for arg in args[2:] if not arg.startswith('-'))
 elif name == 'systemctl':
     key = args[-1]
     if args[0] == 'enable': state['enabled'].append(key)
@@ -67,7 +72,42 @@ path.write_text(json.dumps(state))
 
     def test_only_missing_packages_are_installed_and_second_run_has_no_transaction(self):
         self.run_shell('install_missing_packages git tmux; install_missing_packages git tmux')
-        self.assertEqual(self.log.read_text().splitlines(), ['dnf install -y tmux'])
+        # ALA-08 adds transaction protection without weakening the no-op assertion.
+        self.assertEqual(self.log.read_text().splitlines(), [' '.join(['dnf', 'install', '-y', *DNF_OPTIONS, 'tmux'])])
+
+    def test_install_policy_blocks_boot_kernel_and_release_but_allows_current_kernel_components(self):
+        packages = ['kernel-devel-6.12-test', 'kernel-modules-6.12-test', 'kernel-modules-extra-6.12-test']
+        self.run_shell('install_missing_packages "$@"', *packages)
+        command = self.log.read_text().strip().split()
+        self.assertEqual(command, ['dnf', 'install', '-y', *DNF_OPTIONS, *packages])
+        excludes = next(arg.split('=', 1)[1].split(',') for arg in command if arg.startswith('--exclude='))
+        for name in ['kernel', 'kernel-core', 'kernel-debug-core', 'kernel-uki-virt',
+                     'rocky-release', 'rocky-repos', 'rocky-gpg-keys']:
+            self.assertTrue(any(fnmatch.fnmatchcase(name, pattern) for pattern in excludes), name)
+        for name in ['kernel-devel', 'kernel-modules', 'kernel-modules-extra']:
+            self.assertFalse(any(fnmatch.fnmatchcase(name, pattern) for pattern in excludes), name)
+
+    def test_install_failure_is_reported_without_upgrade_or_removal_fallback(self):
+        result = subprocess.run(['bash', '-c', 'source "$1"; install_missing_packages tmux', '_',
+                                 str(SCRIPTS / 'common.sh')], env=dict(self.env, TEST_DNF_FAILURE='42'),
+                                capture_output=True, text=True)
+        self.assertEqual(result.returncode, 42, result.stderr)
+        self.assertIn('실행 커널', result.stderr)
+        self.assertIn('명시적 유지보수', result.stderr)
+        self.assertEqual(json.loads(self.state.read_text())['packages'], ['git'])
+        self.assertEqual(len(self.log.read_text().splitlines()), 1)
+        self.assertNotIn('upgrade', self.log.read_text())
+        self.assertNotIn('remove', self.log.read_text())
+
+    def test_rpm_query_failure_is_not_treated_as_a_missing_package(self):
+        for status in (2, 126, 127):
+            with self.subTest(status=status):
+                result = subprocess.run(['bash', '-c', 'source "$1"; install_missing_packages tmux', '_',
+                                         str(SCRIPTS / 'common.sh')],
+                                        env=dict(self.env, TEST_RPM_FAILURE=str(status)), capture_output=True, text=True)
+                self.assertEqual(result.returncode, status, result.stderr)
+                self.assertIn('설치 여부 조회 실패', result.stderr)
+                self.assertFalse(self.log.exists())
 
     def test_unchanged_file_preserves_mtime_and_does_not_create_another_backup(self):
         source, target = self.root / 'candidate', self.root / 'config'

@@ -14,16 +14,35 @@ backup_file() {
   # Hidden backups are not parsed as dconf policy or lock files.
   [[ ! -e $1 ]] || cp -a -- "$1" "$(dirname -- "$1")/.$(basename -- "$1").backup.$(date +%Y%m%d-%H%M%S).$$"
 }
+dnf_install() {
+  # Keep the boot kernel/release unchanged, including dependencies. Exact running-
+  # kernel modules/devel remain installable; do not replace this with kernel*.
+  local result=0
+  dnf install -y --setopt=install_weak_deps=False \
+    --exclude='kernel,kernel-core,kernel-debug*,kernel-uki*,rocky-release*,rocky-repos*,rocky-gpg-keys*' \
+    "$@" || result=$?
+  if ((result)); then
+    printf '패키지 설치 실패: 기본 설치는 부팅 커널과 Rocky release 변경을 허용하지 않습니다.\n' >&2
+    printf '실행 커널 %s에 맞는 kernel-devel/modules가 현재 저장소에 있는지 확인하세요.\n' "$(uname -r)" >&2
+    printf 'OS/커널 변경이 필요하면 별도 명시적 유지보수 작업으로 진행하세요. 자동 업그레이드·삭제로 우회하지 않습니다.\n' >&2
+  fi
+  return "$result"
+}
 install_missing_packages() {
-  local package missing=()
+  local package query_status missing=()
   for package in "$@"; do
     if rpm -q "$package" >/dev/null 2>&1; then
       printf '[유지] 패키지: %s\n' "$package"
     else
+      query_status=$?
+      if ((query_status != 1)); then
+        printf '패키지 설치 여부 조회 실패 (rpm 종료 %s): %s. 설치를 중단합니다.\n' "$query_status" "$package" >&2
+        return "$query_status"
+      fi
       missing+=("$package")
     fi
   done
-  if ((${#missing[@]})); then dnf install -y "${missing[@]}"; fi
+  if ((${#missing[@]})); then dnf_install "${missing[@]}"; fi
 }
 ensure_service() {
   local service=$1

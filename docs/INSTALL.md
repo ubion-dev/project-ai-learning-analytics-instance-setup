@@ -13,14 +13,14 @@ python3 -m venv .venv
 .venv/bin/python scripts/build-release.py
 ```
 
-생성 결과는 다음과 같습니다. GitHub 후보 태그 `v0.1.0-rc.1`의 Python 버전 표기는 `0.1.0rc1`입니다.
+생성 결과는 다음과 같습니다. GitHub 후보 태그 `v0.1.0-rc.2`의 Python 버전 표기는 `0.1.0rc2`입니다.
 
 ```text
-dist/ala-0.1.0rc1.tar.gz
-dist/ala-0.1.0rc1.tar.gz.sha256
+dist/ala-0.1.0rc2.tar.gz
+dist/ala-0.1.0rc2.tar.gz.sha256
 ```
 
-묶음 내부 최상위 디렉터리는 `ala-0.1.0rc1`입니다. 실행 코드, 내부 Rocky 스크립트, 설치기,
+묶음 내부 최상위 디렉터리는 `ala-0.1.0rc2`입니다. 실행 코드, 내부 Rocky 스크립트, 설치기,
 고정된 runtime lock, universal wheel, 파일별 SHA256 manifest만 포함합니다.
 전체 Git 이력, 작업 기록, 고객 자료, 테스트, 개발 가상환경은 포함하지 않습니다.
 
@@ -40,14 +40,14 @@ dist/ala-0.1.0rc1.tar.gz.sha256
 아직 릴리스하지 않은 후보는 위 builder로 생성한 파일을 사용합니다.
 
 ```bash
-gh release download v0.1.0-rc.1 \
+gh release download v0.1.0-rc.2 \
   --repo ubion-dev/project-ai-learning-analytics-instance-setup \
-  --pattern 'ala-0.1.0rc1.tar.gz*'
-shasum -a 256 -c ala-0.1.0rc1.tar.gz.sha256
+  --pattern 'ala-0.1.0rc2.tar.gz*'
+shasum -a 256 -c ala-0.1.0rc2.tar.gz.sha256
 
 TARGET_USER='user'
 SERVER_HOST='서버IP'
-scp ala-0.1.0rc1.tar.gz ala-0.1.0rc1.tar.gz.sha256 "${TARGET_USER}@${SERVER_HOST}:~/"
+scp ala-0.1.0rc2.tar.gz ala-0.1.0rc2.tar.gz.sha256 "${TARGET_USER}@${SERVER_HOST}:~/"
 ssh "${TARGET_USER}@${SERVER_HOST}"
 ```
 
@@ -56,9 +56,9 @@ ssh "${TARGET_USER}@${SERVER_HOST}"
 ## CLI 설치 — Rocky SSH 터미널
 
 ```bash
-sha256sum -c ala-0.1.0rc1.tar.gz.sha256
-tar -xzf ala-0.1.0rc1.tar.gz
-cd ala-0.1.0rc1
+sha256sum -c ala-0.1.0rc2.tar.gz.sha256
+tar -xzf ala-0.1.0rc2.tar.gz
+cd ala-0.1.0rc2
 sudo bash ./install.sh
 ala --version
 ala --help
@@ -69,6 +69,7 @@ ala --help
 설치기는 root·OS·아키텍처·Python 버전을 검사합니다. 시스템 `python3`가 없으면 DNF로 설치하고,
 가상환경 준비에 pip가 없으면 `python3-pip`을 설치합니다. Python은 3.12 이상이 필요합니다.
 이 OS 전제 패키지의 DNF 설치에는 패키지 저장소 접속이 필요할 수 있습니다.
+기본 설치는 부팅 커널과 Rocky release 패키지를 제외합니다. 해당 변경이 필요한 의존성은 설치 실패로 남기며 자동 OS 업그레이드로 우회하지 않습니다.
 Textual과 그 의존성은 배포 묶음의 wheel에서 해시를 검증해 전용 venv에 오프라인 설치합니다.
 시스템 Python에 pip 패키지를 설치하거나 uv를 설치하지 않습니다.
 
@@ -76,7 +77,7 @@ Textual과 그 의존성은 배포 묶음의 wheel에서 해시를 검증해 전
 
 | 경로 | 역할 |
 |---|---|
-| `/opt/ala/releases/0.1.0rc1` | 버전 고정 코드·wheel·전용 venv |
+| `/opt/ala/releases/0.1.0rc2` | 버전 고정 코드·wheel·전용 venv |
 | `/opt/ala/current` | 사용할 버전의 심볼릭 링크 |
 | `/usr/local/bin/ala` | root 소유 명령 진입점 |
 | `/run/lock/ala/operation.lock` | 환경 변경·도구 갱신 공유 잠금 |

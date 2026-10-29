@@ -68,6 +68,7 @@ ensure_repo_enabled crb
 install_missing_packages epel-release
 install_missing_packages gcc make dkms kernel-headers
 if [[ ! -d /usr/src/kernels/$(uname -r) ]]; then
+  # Never substitute the repository's newest kernel/devel pair for this kernel.
   install_missing_packages "kernel-devel-$(uname -r)"
 fi
 [[ -d /usr/src/kernels/$(uname -r) ]] || \

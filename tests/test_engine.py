@@ -106,6 +106,7 @@ class EngineTests(unittest.TestCase):
     def prepare(self):
         self.write("/proc/stat", f"btime {FAKE_BOOT_SECONDS}\n")
         self.paths.at("/sys/bus/pci/devices").mkdir(parents=True)
+        self.paths.at("/sys/bus/usb/devices").mkdir(parents=True)
         self.write("/usr/local/bin/chrome-did", (SCRIPTS / "bin/chrome-did").read_text(), 0o755)
         policy = self.write("/etc/opt/chrome/policies/managed/did-display.json", json.dumps({key: False for key in ("TranslateEnabled", "DefaultBrowserSettingEnabled", "PromotionsEnabled")}))
         policy.parent.chmod(0o755)
@@ -158,6 +159,60 @@ class EngineTests(unittest.TestCase):
         self.assertIn(("base", "completed"), stages)
         self.engine.apply()
         self.assertEqual(len(self.host.executed), 1)
+
+    def test_hardware_pending_continues_other_stages_without_shell_runner(self):
+        state = "change_required"
+
+        def hardware(apply=False):
+            nonlocal state
+            if apply:
+                state = "pending"
+            return [CheckResult("hardware.reboot", state)]
+
+        stages = []
+        with patch.object(self.engine, "_hardware", side_effect=hardware):
+            report = self.engine.apply(lambda *args: stages.append(args))
+        self.assertEqual(report.exit_code, 2)
+        self.assertIn(("hardware", "pending"), stages)
+        self.assertIn(("chrome", "completed"), stages)
+        self.assertEqual(self.host.executed, [])
+
+    def test_hardware_install_failure_remains_in_final_report(self):
+        def hardware(apply=False):
+            return [CheckResult("hardware.apply", "error", actual="DNF failed")] if apply else [CheckResult("hardware.package.firmware", "change_required")]
+
+        stages = []
+        with patch.object(self.engine, "_hardware", side_effect=hardware):
+            report = self.engine.apply(lambda *args: stages.append(args))
+        self.assertEqual(self.by_id(report, "hardware.apply").state, "error")
+        self.assertIn(("hardware", "failed"), stages)
+        self.assertNotIn(("chrome", "started"), stages)
+
+    def test_unresolved_hardware_is_reported_while_independent_setup_continues(self):
+        stages = []
+        with patch.object(self.engine, "_hardware", return_value=[CheckResult("hardware.device.pci.example", "blocked")]):
+            report = self.engine.apply(lambda *args: stages.append(args))
+        self.assertEqual(report.exit_code, 1)
+        self.assertIn(("hardware", "blocked"), stages)
+        self.assertIn(("chrome", "completed"), stages)
+        self.assertEqual(self.host.executed, [])
+
+    def test_new_hardware_diagnostic_after_install_does_not_stop_independent_setup(self):
+        state = "change_required"
+
+        def hardware(apply=False):
+            nonlocal state
+            if apply:
+                state = "unknown"
+            return [CheckResult("hardware.device.usb.hotplug", state)]
+
+        stages = []
+        with patch.object(self.engine, "_hardware", side_effect=hardware):
+            report = self.engine.apply(lambda *args: stages.append(args))
+        self.assertEqual(report.exit_code, 1)
+        self.assertEqual(self.by_id(report, "hardware.device.usb.hotplug").state, "unknown")
+        self.assertIn(("hardware", "blocked"), stages)
+        self.assertIn(("chrome", "completed"), stages)
 
     def test_inspection_continues_after_command_failure(self):
         self.host.replies[("timedatectl", "show", "--property=Timezone", "--value")] = Command(1, "", "permission denied")

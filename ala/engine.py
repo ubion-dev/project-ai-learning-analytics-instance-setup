@@ -20,7 +20,7 @@ from .system import Host, Paths, platform_error
 
 
 SCRIPTS = Path(__file__).resolve().parent.parent / "scripts" / "rocky-linux"
-BASE_PACKAGES = ("dnf-plugins-core", "git", "curl", "ca-certificates", "bash-completion", "firewalld", "chrony", "python3", "iproute")
+BASE_PACKAGES = ("dnf-plugins-core", "git", "curl", "ca-certificates", "bash-completion", "firewalld", "chrony", "python3", "iproute", "kmod")
 DOCKER_PACKAGES = ("docker-ce", "docker-ce-cli", "containerd.io", "docker-buildx-plugin", "docker-compose-plugin")
 CONFLICT_PACKAGES = ("podman", "podman-docker", "runc", "docker", "docker-common", "docker-engine")
 UPDATE_UNITS = tuple(f"dnf-automatic{suffix}.{kind}" for kind in ("timer", "service")
@@ -441,6 +441,10 @@ class Engine:
         return ([self._package(name, "dev_tools") for name in ("neovim", "btop", "tmux")]
                 if self.config.dev_tools else [self._result("dev_tools", "not_applicable", False, False)])
 
+    def _hardware(self, apply=False):
+        from .hardware import apply_hardware, inspect_hardware
+        return (apply_hardware if apply else inspect_hardware)(self.host, self.paths)
+
     def _extra_display(self, apply=False):
         try:
             from .display import apply_display, inspect_display
@@ -457,7 +461,7 @@ class Engine:
         results = [self._result("platform", "ok", "Rocky Linux 10 x86_64", "지원 환경")]
         _, account = self._account(self.config.user)
         results.append(account)
-        stages = [self._base, self._updates, self._shell, self._ssh, self._docker, self._gpu, self._dev_tools, self._display_policy, self._extra_display]
+        stages = [self._base, self._updates, self._hardware, self._shell, self._ssh, self._docker, self._gpu, self._dev_tools, self._display_policy, self._extra_display]
         for inspect in stages:
             try:
                 results.extend(inspect())
@@ -486,6 +490,7 @@ class Engine:
         specs = [
             ("base", self._base, "setup-base.sh", ["--timezone", self.config.timezone]),
             ("update", self._updates, "setup-update-policy.sh", ["--with-display"] if self.config.display else []),
+            ("hardware", self._hardware, None, []),
             ("shell", self._shell, "setup-bash.sh", ["--user", self.config.user] + (["--with-root"] if self.config.root_bash else [])),
             ("ssh", self._ssh, "setup-ssh.sh", ["--ssh-zone", self.config.ssh_zone] if self.config.ssh_zone else []),
             ("docker", self._docker, "setup-docker.sh", []),
@@ -499,12 +504,30 @@ class Engine:
                         (stage == "gpu" and r.id == "gpu.secure_boot" and "mokutil" in r.next_action)]
             if blocking:
                 event(stage, "blocked")
+                if stage == "hardware":
+                    # Ambiguous device support does not make unrelated shell,
+                    # Docker, or display policy changes dependent on that device.
+                    # The final report still retains the blocked/unknown checks.
+                    continue
                 return Report(self.inspect().results)
             changed = any(r.state == "change_required" for r in current)
             if changed:
                 event(stage, "started")
-                code = self.host.execute(["bash", str(SCRIPTS / script), *args])
-                if stage == "gpu" and code == 10:
+                if stage == "hardware":
+                    outcome = self._hardware(apply=True)
+                    if any(r.state == "error" for r in outcome):
+                        event(stage, "failed")
+                        report = self.inspect()
+                        observed = {r.id for r in outcome}
+                        report.results = [r for r in report.results if r.id not in observed] + outcome
+                        return report
+                    if any(r.state in {"blocked", "unknown", "change_required"} for r in outcome):
+                        event(stage, "blocked")
+                        continue
+                    code = 10 if any(r.state == "pending" for r in outcome) else 0
+                else:
+                    code = self.host.execute(["bash", str(SCRIPTS / script), *args])
+                if stage in {"gpu", "hardware"} and code == 10:
                     event(stage, "pending")
                 elif code != 0:
                     event(stage, "failed")
@@ -523,6 +546,8 @@ class Engine:
                     event("gpu_container", "completed")
                     after = inspect()
             if any(r.state in {"error", "blocked", "unknown", "change_required"} for r in after):
+                if stage == "hardware" and not any(r.state == "error" for r in after):
+                    continue
                 return Report(self.inspect().results)
         event("chrome", "started")
         extra = self._extra_display(apply=True)

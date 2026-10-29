@@ -33,7 +33,7 @@ class BaseChromeTests(unittest.TestCase):
         (self.root / 'common.sh').write_text(common)
         self.packages = self.root / 'packages.json'
         self.packages.write_text(json.dumps(['dnf-plugins-core', 'git', 'curl', 'ca-certificates',
-                                           'bash-completion', 'firewalld', 'chrony', 'python3', 'iproute']))
+                                           'bash-completion', 'firewalld', 'chrony', 'python3', 'iproute', 'kmod']))
         self.log = self.root / 'mutations'
         binary = self.root / 'bin'
         binary.mkdir()
@@ -62,6 +62,9 @@ if name == 'rpm' and args[0] == '--import':
 if name == 'dnf':
     assert args[:2] == ['install', '-y'], args
     assert '--setopt=localpkg_gpgcheck=1' in args, args
+    assert '--setopt=gpgcheck=1' in args, args
+    assert '--setopt=install_weak_deps=False' in args, args
+    assert '--exclude=kernel,kernel-core,kernel-debug*,kernel-uki*,rocky-release*,rocky-repos*,rocky-gpg-keys*' in args, args
     assert args[-1] == os.environ['RPM_URL'], args
     installed.append('google-chrome-stable')
     packages.write_text(json.dumps(installed)); sys.exit(0)

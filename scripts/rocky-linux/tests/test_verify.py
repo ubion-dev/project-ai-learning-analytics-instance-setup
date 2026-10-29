@@ -65,7 +65,7 @@ if name == 'google-chrome-stable':
     print('Google Chrome test-version'); sys.exit(0)
 if name == 'rpm':
     assert args[0] == '-q', args
-    sys.exit(0)
+    sys.exit(1 if args[-1] == os.environ.get('TEST_MISSING_PACKAGE') else 0)
 if name == 'firewall-cmd': sys.exit(1)
 if name == 'timedatectl': sys.exit(1 if os.environ.get('TEST_INFO_FAILURE') else 0)
 if name in ('docker', 'ss', 'df'): sys.exit(0)
@@ -91,6 +91,14 @@ raise AssertionError(('unexpected host mutation', name, args))
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn('실패 0 / 대기 0', result.stdout)
         self.assertFalse(any(call[0] in ('runuser', 'dnf', 'systemd-run') for call in calls))
+
+    def test_missing_kernel_module_tools_are_reported_without_package_installation(self):
+        result, calls = self.verify(TEST_MISSING_PACKAGE='kmod')
+        self.assertEqual(result.returncode, 1)
+        self.assertIn('[FAIL] 커널 모듈 도구 패키지', result.stderr)
+        self.assertTrue(any(call == ['rpm', '-q', 'kmod'] for call in calls))
+        self.assertTrue(any(call[0] == 'df' for call in calls))
+        self.assertFalse(any(call[0] in ('dnf', 'systemd-run') for call in calls))
 
     def test_inactive_service_does_not_skip_later_checks_and_summary(self):
         result, calls = self.verify(TEST_INACTIVE='docker')

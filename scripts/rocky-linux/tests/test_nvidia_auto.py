@@ -115,8 +115,12 @@ if name == 'dnf' and args[:2] == ['-q', 'repolist']: print('crb'); sys.exit(0)
 with open(os.environ['TEST_OPERATIONS'], 'a') as log: log.write(name + ' ' + ' '.join(args) + '\\n')
 if name == 'dnf':
     assert args[:2] == ['install', '-y'], args
-    installed.extend(args[2:]); packages.write_text(json.dumps(installed))
-    if any(p.startswith('kernel-devel-') and p != 'kernel-devel-matched' for p in args[2:]):
+    assert '--setopt=install_weak_deps=False' in args, args
+    assert '--exclude=kernel,kernel-core,kernel-debug*,kernel-uki*,rocky-release*,rocky-repos*,rocky-gpg-keys*' in args, args
+    targets = [arg for arg in args[2:] if not arg.startswith('-')]
+    if os.environ.get('KERNEL_UNAVAILABLE') and any(p.startswith('kernel-devel-') for p in targets): sys.exit(1)
+    installed.extend(targets); packages.write_text(json.dumps(installed))
+    if any(p.startswith('kernel-devel-') and p != 'kernel-devel-matched' for p in targets):
         pathlib.Path(os.environ['TEST_KERNEL_DIR']).mkdir(parents=True, exist_ok=True)
 elif name == 'curl':
     target = args[args.index('-o') + 1]
@@ -211,6 +215,18 @@ else: raise AssertionError((name, args))
         result = self.apply()
         self.assertEqual(result.returncode, 10, result.stderr)
         self.assertIn('kernel-devel-6.12-test', json.loads(self.packages.read_text()))
+
+    def test_current_kernel_devel_unavailable_stops_without_installing_driver_or_new_kernel(self):
+        self.device()
+        (self.root / 'kernels/6.12-test').rmdir()
+        result = self.apply(KERNEL_UNAVAILABLE='yes')
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertIn('실행 커널 6.12-test', result.stderr)
+        self.assertIn('명시적 유지보수', result.stderr)
+        self.assertNotIn('nvidia-open', json.loads(self.packages.read_text()))
+        self.assertFalse((self.root / 'state/nvidia-reboot-required').exists())
+        self.assertNotIn('dnf upgrade', self.log.read_text())
+        self.assertNotIn('dnf remove', self.log.read_text())
 
 
 if __name__ == '__main__':
