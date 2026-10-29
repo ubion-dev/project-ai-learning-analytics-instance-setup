@@ -2,12 +2,12 @@
 
 ## 현재 상태 — 재개할 때 여기부터
 
-- 최신 작업 ALA-08: 사용자 요청으로 공식 장치 드라이버 자동 준비와 설치 중 커널/release 유지 기능을 추가한다. 기존 ALA-00~06을 재구현하지 않는다. 계획의 추가 지시를 먼저 읽는다.
+- 최신 작업 ALA-08: 공식 장치 드라이버 자동 준비와 설치 중 커널/release 유지 구현·Python3.12 CI 검증·RC2 게시 완료. 실기기 수용은 미수행이다. 계획의 추가 지시를 먼저 읽는다.
 - ALA-00~06: 구현·모의/headless·임시 설치·Python3.12 CI 검증 및 RC 공개 완료. 실기기 수용은 별도다.
 - ALA-07: 실기기 수용 미수행. 사용자는 세팅 전 장비의 설치·테스트를 허용했다. 알려진 SSH 대상의 호스트키 확인과 실제 화면 관찰 경로가 남아 있다. 정식 v0.1.0으로 표시하지 않는다.
 - repo: ubion-dev/project-ai-learning-analytics-instance-setup (private). 기존 구현 PR #1은 main 659d97e에 병합됨을 원격 확인했다. ALA-08 개발 브랜치는 codex/ala-hardware-preparation이다.
 - 로컬: 현재 이 파일을 포함한 repo. 모든 명령은 이 프로젝트 root를 workdir로 명시한다.
-- 다음 행동: ALA-08 자동 검증과 RC2 후보 준비 후, SSH 대상의 기기 키를 확인하고 docs/ACCEPTANCE.md의 CPU/GPU 수용을 수행한다. 유지보수 시간 승인을 반복 요청하지 않는다.
+- 다음 행동: PR #2 검토와 SSH 대상 기기 키 확인 후 RC2로 docs/ACCEPTANCE.md의 CPU/GPU 수용을 수행한다. 유지보수 시간 승인을 반복 요청하지 않는다.
 
 ## 확정 결정
 
@@ -26,6 +26,7 @@ UI는 Textual 화살표형, root 시스템 변경과 일반 사용자 Chrome을 
 | ALA-05 | 81a5f34, TUI 15 headless tests | 실제 TTY sudo·SSH 렌더링 미수행 |
 | ALA-06 | 81a5f34, Python3.12 CI 205 tests+31 subtests, RC 게시 | 정식 전 수용 필요 |
 | ALA-07 | 수용 양식·이전 안내 Draft PR #11·RC 준비 완료 | CPU→GPU 전체 미수행 |
+| ALA-08 | f9a8546, Python3.12 253 tests+40 subtests, RC2 게시, Draft PR #2 | 실제 DNF solver/장치·재부팅 미수행 |
 
 ## 검증 증거
 
@@ -122,3 +123,8 @@ AGENTS.md → 계획 → 이 문서 → git status/diff/log를 읽고 현재 단
 - RC2 로컬 후보는 dist/ala-0.1.0rc2.tar.gz다. GitHub Python3.12 CI와 PR 제출이 다음 행동이다. 기존 RC1을 덮어쓰지 않는다.
 - 실제 Rocky DNF solver에서 기존 동일 버전 커널 의존성 충족, 물리 장치 설치·통신·GPU·전체화면·재부팅 수용은 미검증이다. 테스트 통과를 실장비 보장으로 해석하지 않는다.
 - 최종 리뷰에서 ECM+ACM 복합 USB의 모든 data class를 네트워크로 추정하는 오탐을 재현했다. USB union/IAD를 해석하지 않는 v1에서는 제어 인터페이스나 실제 네트워크 driver 증거만 사용하도록 수정했다. 하드웨어 34개+3 subtests, 최종 Engine+hardware 66개+6 subtests 통과. 현재 전체 수집은 253개다.
+- 최종 기능 커밋: f9a85466c022a11e38848e50a1b50167dc15c527. Draft PR #2: https://github.com/ubion-dev/project-ai-learning-analytics-instance-setup/pull/2 (자동 병합하지 않음).
+- Python3.12 CI: https://github.com/ubion-dev/project-ai-learning-analytics-instance-setup/actions/runs/40842796588 — 253 passed + 40 subtests, 48.78s. Bash 문법·고정 wheel·후보 빌드·CLI smoke 성공.
+- CI 산출물의 전체 manifest/현재 runtime 소스 일치를 확인하고 별도 RC2에 게시했다: https://github.com/ubion-dev/project-ai-learning-analytics-instance-setup/releases/tag/v0.1.0-rc.2
+- RC2 SHA256: 27c1c5083f37f7188164d1f5266e9b3d475a2c010f81a72b6c126661c2fcd3ab. 기존 RC1 자산은 변경하지 않았다.
+- 남은 조건은 ALA-07 실기기 수용과 이번 장치/커널 보존 수용이다. 실제 서버에 설정·설치·재부팅을 수행하지 않았다.
