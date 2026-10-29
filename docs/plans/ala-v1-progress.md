@@ -128,3 +128,9 @@ AGENTS.md → 계획 → 이 문서 → git status/diff/log를 읽고 현재 단
 - CI 산출물의 전체 manifest/현재 runtime 소스 일치를 확인하고 별도 RC2에 게시했다: https://github.com/ubion-dev/project-ai-learning-analytics-instance-setup/releases/tag/v0.1.0-rc.2
 - RC2 SHA256: 27c1c5083f37f7188164d1f5266e9b3d475a2c010f81a72b6c126661c2fcd3ab. 기존 RC1 자산은 변경하지 않았다.
 - 남은 조건은 ALA-07 실기기 수용과 이번 장치/커널 보존 수용이다. 실제 서버에 설정·설치·재부팅을 수행하지 않았다.
+
+
+## ALA-09~12 시작 (2026-10-29)
+사용자 승인 계획을 먼저 저장했다. main 773ebb5, PR #2 병합 확인. 브랜치 codex/ala-initial-prepare.
+현재 구현 전. network/prepare/display를 분리하고 공통 인터페이스는 계획의 추가 계약을 따른다.
+기존 RC2 검증은 재사용. 새 변경은 RC3로 검증. 실기기 접속 키/화면 관찰 미확인으로 실기기 수용 미수행.

@@ -141,3 +141,42 @@ AGENTS.md, 이 문서, ala-v1-progress.md를 시작/재개 시 읽고 git 상태
 의미 있는 변경/검증마다 진행 기록을 갱신한다. 구현/자동 테스트/실기기 수용 완료를 구분한다.
 계획 변경은 최신 사용자 결정과 코드 근거를 기록한 뒤 반영한다. 과거 검증과 코드가 같으면 결과를 재사용한다.
 위임에는 작업 ID, 허용 수정 영역, 선행 완료 조건, 이 문서 경로를 반드시 전달한다.
+
+
+## 2026-10-29 승인 추가 계획 — ALA-09~12
+
+기준 main 773ebb5(PR #2 병합), 기존 RC2 보존, 새 후보 RC3. 다음 순서로 구현한다.
+
+### ALA-09 Wi-Fi 진단
+`ala doctor network [--json] [--probe-url URL]`과 TUI 검사에서 동일 Report 사용.
+PCI/USB 장치 → modalias/실행 커널 모듈/blacklist/override → 펌웨어 RPM/현재 부팅 로그 → 무선 인터페이스/초기화 → rfkill/NM 관리 → 기존 프로필 자동 연결 → IP/route/DNS 구분.
+모듈은 조회만 한다. 현재 성공 상태가 과거 오류/선택적 펌웨어 fallback보다 우선한다. AX200 -110은 초기화 실패이며 Windows Fast Startup은 가능한 원인으로만 안내.
+명령·권한·로그 부재는 unknown, Wi-Fi 없음은 N/A, 사용하지 않는 미연결은 드라이버 장애와 구분.
+외부 요청은 명시 probe-url에서만 제한시간/TLS 검증 적용. 호스트 통신 성공을 Wi-Fi 성공으로 표시하지 않는다.
+기존 setup은 확인된 공식 누락 패키지만 설치. 설치된 초기화 실패/손상/모호한 장치는 자동 재설치하지 않는다. NM restart, 무선 재연결, 모듈 unload, 비밀번호/SSID/route 변경 및 비밀정보 수집 금지.
+
+### ALA-10 최초 OS 준비
+`ala prepare [--plan|--apply] [--detach] [--json]`, 기본 plan. TUI 설치 화면에 초기 OS 준비/환경 설정 구분.
+Rocky10 x86_64/저장소/공간/패키지 작업/외부 모듈 점검 → 자동 업데이트 차단 → 공식 10계열 업데이트 → 트랜잭션/패키지/boot ID/예상 커널 기록 → 변경시 재부팅 대기 → 사용자가 재부팅 후 같은 apply로 검증 → setup 안내.
+외부 NVIDIA/DKMS 모듈 있으면 호환성 검토 차단. 외부 Chrome/Docker/NVIDIA repo 갱신/메이저 변경/삭제/서명 우회 금지. 패키지 업데이트에 의한 서비스 재시작 가능성을 계획에 표시.
+완료 후 전체 upgrade 반복 금지. 업데이트 없음+적절한 현재 커널이면 불필요한 reboot 없음. 새 커널 설치후 구커널 부팅은 완료 금지.
+고정 버전 systemd job/기존 단일 잠금 재사용, SSH 종료와 독립. 전원 차단시 자동 재개 금지, 명시 실행에서 재조사. 초기 준비 상태는 config와 분리. 기존 setup의 업그레이드 제외 계약 유지.
+plan의 DNF 조회 캐시/log/persist는 임시 디렉터리만 사용. 최종 solver 변경 확정이라고 주장하지 않는다.
+
+### ALA-11 자동 로그인 보강
+기존 display/autologin 기본 true, 기존 일반 사용자, GDM 설정/enable/graphical.target/초기 안내 완료를 재사용.
+URL 없어도 바탕화면 준비, autostart off도 autologin 유지. 잠금/화면꺼짐/절전 정책 및 live 값을 검사.
+설정 준비/실제 활성 로컬 세션/실제 화면 수용을 분리. 세션 없으면 GDM과 현재 부팅 로그 안내. 로그인/잠금/그래픽 장애를 구분. GDM 재시작/암호삭제/root로그인/SSH인증 변경 금지. BIOS/LUKS 범위밖.
+
+### ALA-12 통합 및 수용
+기존 CheckResult/Report/종료코드 유지, CLI/TUI 동등성, config 호환. 기존 설치에 prepare 강제하지 않는다.
+네트워크 모든 계층/펌웨어 fallback/과거 오류/유선 성공 오판/unknown/readonly/멱등성 테스트.
+prepare 무변경/성공/실패/전원중단/같은boot/예상커널/구커널/중복job/SSH 독립 테스트.
+SSH만으로 GUI 첫로그인 전 준비, URL없음/autostart off, 설정정상+세션없음, TUI/JSON/sudo/작업중 종료 테스트.
+CPU → GPU 실기기 첫적용/재실행/재부팅/SSH재접속/화면검사, GPU smi+컨테이너. 화면 관찰 불가면 미검증. 정식발행은 수용후.
+
+### 공통 인터페이스/분담
+주담당: CLI/service/jobs/TUI/engine 통합, 문서/배포. 분담은 모듈별 독립 영역만 수정.
+network.inspect_network(host=None, paths=None, probe_url=None) -> Report (읽기전용).
+prepare.Prepare(config, host=None, paths=None).plan()/inspect()/apply(on_stage=None) -> Report.
+prepare.apply는 worker 잠금 안에서 실행되며 재부팅하지 않는다. operation='prepare' job과 operation='setup' 기존 job을 구분한다.
