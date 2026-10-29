@@ -53,9 +53,15 @@ class ApplyConfirmation(ModalScreen[bool]):
     #apply-dialog Button { margin-left: 1; }
     """
 
+    def __init__(self, operation="setup"):
+        super().__init__()
+        self.operation = operation
+
     def compose(self) -> ComposeResult:
         with Vertical(id="apply-dialog"):
-            yield Label("확인한 구성으로 설치·설정을 적용합니다.")
+            yield Label("초기 OS 업데이트를 적용합니다." if self.operation == "prepare" else "확인한 구성으로 설치·설정을 적용합니다.")
+            if self.operation == "prepare":
+                yield Static("패키지 업데이트로 서비스가 재시작될 수 있습니다.\n재부팅은 자동으로 하지 않습니다.", markup=False)
             yield Static("현재 상태를 다시 검사하고 필요한 변경만 수행합니다.\n화면을 종료하거나 SSH가 끊겨도 시작한 설치는 계속됩니다.", markup=False)
             with Horizontal():
                 yield Button("취소", id="cancel-apply")
@@ -117,6 +123,7 @@ class AlaApp(App[None]):
         self._stored_config: dict[str, Any] | None = None
         self._plan_config: dict[str, Any] | None = None
         self._last_plan: dict[str, Any] | None = None
+        self._plan_operation = "setup"
         self._reports: dict[str, list[dict[str, Any]]] = {}
         self._active_job: str | None = None
         self._selected_job: str | None = None
@@ -156,14 +163,17 @@ class AlaApp(App[None]):
                         yield Button("다시 읽기", id="reload-config")
                 with Vertical(id="setup", classes="panel"):
                     with Horizontal(classes="actions"):
-                        yield Button("변경 계획", id="make-plan", variant="primary")
+                        yield Button("환경 설정 계획", id="make-plan", variant="primary")
                         yield Button("계획 적용", id="apply-plan", variant="warning", disabled=True)
+                        yield Button("초기 OS 계획", id="prepare-plan")
                     yield Static("변경 계획을 먼저 확인하세요.", id="plan-summary", classes="summary", markup=False)
                     yield DataTable(id="plan-table", classes="report-table", cursor_type="row")
                     yield TextArea("", id="plan-detail", classes="details", read_only=True)
                     yield Static("설치 실행 기록이 없습니다.", id="job-summary", markup=False)
                     yield TextArea("", id="setup-log", read_only=True)
                 with Vertical(id="check", classes="panel"):
+                    with Horizontal(classes="actions"):
+                        yield Button("Wi-Fi 진단", id="network-check")
                     yield Static("설정·서비스를 변경하지 않고 검사합니다.", id="check-summary", classes="summary", markup=False)
                     yield DataTable(id="check-table", classes="report-table", cursor_type="row")
                     yield TextArea("", id="check-detail", classes="details", read_only=True)
@@ -232,6 +242,8 @@ class AlaApp(App[None]):
             if value is None:
                 return
             self.SUB_TITLE = str(value.get("hostname", "SSH 환경 관리"))
+            if value.get("preparation", {}).get("results"):
+                value = dict(value, results=value.get("results", []) + value["preparation"]["results"])
             self.render_report("dashboard", value)
             config = value.get("config", {})
             active = next((r for r in value.get("runs", []) if r.get("state") in ACTIVE_JOBS), None)
@@ -313,9 +325,13 @@ class AlaApp(App[None]):
             self.run_worker(self.load_config(), group="section", exclusive=True, exit_on_error=False)
         elif key == "make-plan":
             self.run_worker(self.make_plan(), group="plan", exclusive=True, exit_on_error=False)
+        elif key == "prepare-plan":
+            self.run_worker(self.make_plan("prepare"), group="plan", exclusive=True, exit_on_error=False)
+        elif key == "network-check":
+            self.run_worker(self.network_check(), group="section", exclusive=True, exit_on_error=False)
         elif key == "apply-plan":
             if self._plan_config is not None and not self._submitting:
-                self.push_screen(ApplyConfirmation(), self.confirmed_apply)
+                self.push_screen(ApplyConfirmation(self._plan_operation), self.confirmed_apply)
         elif key and key.startswith("chrome-"):
             self.run_worker(self.chrome_action(key.removeprefix("chrome-")), group="chrome", exclusive=True, exit_on_error=False)
 
@@ -379,15 +395,21 @@ class AlaApp(App[None]):
             self.invalidate_plan()
             self.notice("구성을 저장했습니다. 설치·설정에서 변경 계획을 다시 확인하세요.")
 
-    async def make_plan(self):
+    async def network_check(self):
+        value = await self.api("doctor-network")
+        if value is not None:
+            self.render_report("check", value)
+
+    async def make_plan(self, operation="setup"):
         self.invalidate_plan()
+        self._plan_operation = operation
         if self.config_dirty():
             self.notice("편집한 구성을 먼저 저장하거나 다시 읽은 뒤 변경 계획을 확인하세요.")
             return
         before = await self.api("config-show")
         if before is None:
             return
-        value = await self.api("plan")
+        value = await self.api("prepare-plan" if operation == "prepare" else "plan")
         if value is None:
             return
         after = await self.api("config-show")
@@ -398,7 +420,9 @@ class AlaApp(App[None]):
             self.notice("조사 중 구성이 변경됐습니다. 변경 계획을 다시 확인하세요.")
             return
         blockers = {"blocked", "unknown", "error"}
-        if any(r.get("state") in blockers for r in value.get("results", [])):
+        if any(r.get("state") in blockers and not (operation == "setup" and
+               str(r.get("id", "")).startswith(("network.", "hardware.")))
+               for r in value.get("results", [])):
             self.notice("차단·확인 불가·실패 항목을 해결한 후 계획을 다시 확인하세요.")
             return
         self._plan_config = before["config"]
@@ -418,7 +442,7 @@ class AlaApp(App[None]):
                 self.invalidate_plan()
                 self.notice("구성이 바뀌었거나 확인할 수 없습니다. 변경 계획을 다시 확인하세요.")
                 return
-            job = await self.api("submit", {"expected_config": reviewed})
+            job = await self.api("prepare-submit" if self._plan_operation == "prepare" else "submit", {"expected_config": reviewed})
             self.invalidate_plan()
             if job is not None:
                 self._active_job = job["run_id"]
@@ -463,7 +487,7 @@ class AlaApp(App[None]):
     def render_job(self, job):
         stages = job.get("stages", [])
         current = stages[-1] if stages else None
-        text = f"실행: {job['run_id']} · {JOB_LABELS.get(job.get('state'), job.get('state'))}"
+        text = f"{'초기 OS 준비' if job.get('operation') == 'prepare' else '환경 설정'} 실행: {job['run_id']} · {JOB_LABELS.get(job.get('state'), job.get('state'))}"
         if current:
             text += f"\n최근 단계: {current.get('id')} · {current.get('state')}"
         if job.get("reason"):

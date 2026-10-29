@@ -95,7 +95,9 @@ class JobStore:
     def save(self, value):
         atomic_json(self.directory(value['run_id']) / 'result.json', value)
 
-    def submit(self, config, release: Path, python: Path, *, expected_config=None):
+    def submit(self, config, release: Path, python: Path, *, expected_config=None, operation="setup"):
+        if operation not in {"setup", "prepare"}:
+            raise ValueError("허용되지 않은 설치 작업입니다.")
         with change_lock(self.paths):
             config = config() if callable(config) else config
             if expected_config is not None and config != Config.from_dict(expected_config):
@@ -107,8 +109,8 @@ class JobStore:
             run_id = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ-') + uuid.uuid4().hex[:8]
             directory = self.directory(run_id)
             protected_directory(directory)
-            unit = f'ala-setup-{run_id}.service'
-            value = dict(run_id=run_id, state='queued', version=__version__, release=str(release),
+            unit = f'ala-{operation}-{run_id}.service'
+            value = dict(run_id=run_id, operation=operation, state='queued', version=__version__, release=str(release),
                          boot_id=boot_id(self.paths), unit=unit, started_at=now(), finished_at=None, stages=[])
             atomic_json(directory / 'config.json', config.to_dict())
             (directory / 'output.log').touch(mode=0o600, exist_ok=False)
@@ -126,9 +128,6 @@ class JobStore:
             return value
 
 def run_worker(run_id, paths=None, host=None, engine_factory=None):
-    if engine_factory is None:
-        from .engine import Engine
-        engine_factory = Engine
     paths, host = paths or Paths(), host or Host()
     store = JobStore(paths, host)
     with change_lock(paths, blocking=True):
@@ -142,6 +141,16 @@ def run_worker(run_id, paths=None, host=None, engine_factory=None):
             store.save(raw)
             print(f'[{state}] {stage_id}', flush=True)
         try:
+            operation = raw.get('operation', 'setup')
+            if operation not in {'setup', 'prepare'}:
+                raise ValueError('허용되지 않은 설치 작업입니다.')
+            if engine_factory is None:
+                if operation == 'prepare':
+                    from .prepare import Prepare
+                    engine_factory = Prepare
+                else:
+                    from .engine import Engine
+                    engine_factory = Engine
             config = Config.load(store.directory(run_id) / 'config.json')
             report = engine_factory(config, host=host, paths=paths).apply(on_stage=stage)
             raw.update(state={0:'completed', 1:'failed', 2:'pending'}[report.exit_code],

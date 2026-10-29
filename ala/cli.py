@@ -24,12 +24,17 @@ def parser():
     config.add_parser('edit')
     config.add_parser('show').add_argument('--json', action='store_true')
     config.add_parser('import').add_argument('file', type=Path)
-    setup = sub.add_parser('setup', help='계획 또는 설치')
-    mode = setup.add_mutually_exclusive_group()
-    mode.add_argument('--plan', action='store_true')
-    mode.add_argument('--apply', action='store_true')
-    setup.add_argument('--detach', action='store_true')
-    setup.add_argument('--json', action='store_true')
+    for name, description in (('setup', '환경 설치·설정'), ('prepare', '최초 OS 업데이트·재부팅 확인')):
+        setup = sub.add_parser(name, help=description)
+        mode = setup.add_mutually_exclusive_group()
+        mode.add_argument('--plan', action='store_true')
+        mode.add_argument('--apply', action='store_true')
+        setup.add_argument('--detach', action='store_true')
+        setup.add_argument('--json', action='store_true')
+    doctor = sub.add_parser('doctor', help='읽기 전용 진단').add_subparsers(dest='action', required=True)
+    network = doctor.add_parser('network', help='Wi-Fi·네트워크 계층 진단')
+    network.add_argument('--probe-url', help='명시한 HTTP/HTTPS 주소만 통신 확인')
+    network.add_argument('--json', action='store_true')
     for name in ('status', 'check'):
         sub.add_parser(name).add_argument('--json', action='store_true')
     chrome = sub.add_parser('chrome')
@@ -109,11 +114,18 @@ def main(argv=None, *, service=None):
                 config = Config.load(args.file)
                 emit(svc.request('config-save', config.to_dict()))
             return 0
-        if args.command == 'setup':
+        if args.command == 'doctor':
+            if args.probe_url:
+                Config(url=args.probe_url)  # Same credential-free HTTP(S) validation as DID URLs.
+            result = svc.request('doctor-network', {'probe_url': args.probe_url})
+            emit(result, as_json)
+            return result.get('exit_code', 1)
+        if args.command in {'setup', 'prepare'}:
+            prefix = 'prepare-' if args.command == 'prepare' else ''
             if not args.apply:
-                result = svc.request('plan'); emit(result, as_json)
+                result = svc.request(prefix + 'plan'); emit(result, as_json)
                 return 1 if any(r['state'] in {'blocked','unknown','error'} for r in result['results']) else 0
-            job = svc.request('submit')
+            job = svc.request(prefix + 'submit')
             if args.detach:
                 emit(job, as_json); return 0
             if not as_json:

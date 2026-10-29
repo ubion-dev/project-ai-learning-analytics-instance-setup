@@ -41,12 +41,12 @@ class FakeService:
         if action == "config-save":
             self.config = Config.from_dict(payload).to_dict()
             return {"config": deepcopy(self.config), "saved": True}
-        if action in {"plan", "inspect"}:
+        if action in {"plan", "inspect", "prepare-plan", "doctor-network"}:
             return deepcopy(self.report)
-        if action == "submit":
+        if action in {"submit", "prepare-submit"}:
             assert payload == {"expected_config": self.config}
             run_id = "20261029T000000Z-1234abcd"
-            self.jobs[run_id] = {"run_id": run_id, "state": "queued", "started_at": "2026-10-29", "stages": []}
+            self.jobs[run_id] = {"run_id": run_id, "operation": "prepare" if action == "prepare-submit" else "setup", "state": "queued", "started_at": "2026-10-29", "stages": []}
             return deepcopy(self.jobs[run_id])
         if action == "runs-list":
             return {"runs": deepcopy(list(self.jobs.values()))}
@@ -336,4 +336,69 @@ def test_q_exits_readonly_log_without_stopping_browser():
             app.query_one("#chrome-output", TextArea).focus()
             await pilot.press("q")
         assert not any(action == "chrome" and payload["action"] == "stop" for action, payload in service.calls)
+    run(scenario())
+
+
+def test_prepare_is_explicit_keyboard_plan_and_survives_exit():
+    async def scenario():
+        service = FakeService()
+        app = AlaApp(service=service, initial_section='setup')
+        async with app.run_test(size=(80, 24)) as pilot:
+            await pilot.pause()
+            app.query_one('#prepare-plan', Button).focus()
+            await pilot.press('enter')
+            await pilot.pause()
+            assert app._plan_operation == 'prepare'
+            assert any(action == 'prepare-plan' for action, _ in service.calls)
+            await confirm_with_keyboard(app, pilot)
+            job = service.jobs[app._active_job]
+            assert job['operation'] == 'prepare'
+            assert not any(action == 'submit' for action, _ in service.calls)
+            await pilot.press('escape', 'q')
+        assert job['state'] == 'queued'
+    run(scenario())
+
+
+def test_network_diagnosis_button_is_readonly():
+    async def scenario():
+        service = FakeService()
+        app = AlaApp(service=service, initial_section='check')
+        async with app.run_test(size=(80, 24)) as pilot:
+            await pilot.pause()
+            app.query_one('#network-check', Button).focus()
+            await pilot.press('enter')
+            await pilot.pause()
+            assert any(action == 'doctor-network' for action, _ in service.calls)
+            assert not any(action in {'submit', 'prepare-submit', 'config-save'} for action, _ in service.calls)
+    run(scenario())
+
+
+def test_network_diagnostic_failure_does_not_block_unrelated_configuration():
+    async def scenario():
+        service = FakeService()
+        service.report = Report([
+            CheckResult('network.device.pci.initialization', 'blocked', actual='timeout -110'),
+            CheckResult('display.autologin', 'change_required'),
+        ]).to_dict()
+        app = AlaApp(service=service, initial_section='setup')
+        async with app.run_test(size=(80, 24)) as pilot:
+            await pilot.pause()
+            await make_plan_with_keyboard(app, pilot)
+            assert app._reports['plan'][0]['state'] == 'blocked'
+            await confirm_with_keyboard(app, pilot)
+            assert any(action == 'submit' for action, _ in service.calls)
+    run(scenario())
+
+
+def test_prepare_verification_retry_can_be_reviewed_and_applied():
+    async def scenario():
+        service = FakeService()
+        service.report = Report([CheckResult('prepare.recovery', 'change_required', detail='검증만 재시도')]).to_dict()
+        app = AlaApp(service=service, initial_section='setup')
+        async with app.run_test(size=(80, 24)) as pilot:
+            await pilot.pause()
+            await app.make_plan('prepare')
+            assert not app.query_one('#apply-plan', Button).disabled
+            await confirm_with_keyboard(app, pilot)
+            assert any(action == 'prepare-submit' for action, _ in service.calls)
     run(scenario())

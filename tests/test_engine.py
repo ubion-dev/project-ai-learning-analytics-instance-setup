@@ -107,6 +107,7 @@ class EngineTests(unittest.TestCase):
         self.write("/proc/stat", f"btime {FAKE_BOOT_SECONDS}\n")
         self.paths.at("/sys/bus/pci/devices").mkdir(parents=True)
         self.paths.at("/sys/bus/usb/devices").mkdir(parents=True)
+        self.paths.at("/sys/class/net").mkdir(parents=True)
         self.write("/usr/local/bin/chrome-did", (SCRIPTS / "bin/chrome-did").read_text(), 0o755)
         policy = self.write("/etc/opt/chrome/policies/managed/did-display.json", json.dumps({key: False for key in ("TranslateEnabled", "DefaultBrowserSettingEnabled", "PromotionsEnabled")}))
         policy.parent.chmod(0o755)

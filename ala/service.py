@@ -43,6 +43,15 @@ class Operations:
                 if not self.paths.config.exists() or self.config() != config or self.paths.config.stat().st_mode & 0o777 != 0o644:
                     atomic_json(self.paths.config, config.to_dict(), 0o644)
             return {'config': config.to_dict(), 'saved': True}
+        if action == 'doctor-network':
+            from .network import inspect_network
+            return inspect_network(host=self.host, paths=self.paths, probe_url=payload.get('probe_url')).to_dict()
+        if action == 'prepare-plan':
+            from .prepare import Prepare
+            return Prepare(self.config(), host=self.host, paths=self.paths).plan().to_dict()
+        if action == 'prepare-submit':
+            return JobStore(self.paths, self.host).submit(self.config, self.release, self.release / '.venv/bin/python',
+                expected_config=payload.get('expected_config'), operation='prepare')
         if action in {'inspect', 'plan', 'status'}:
             from .engine import Engine
             config = self.config()
@@ -50,7 +59,9 @@ class Operations:
                       Engine(config, host=self.host, paths=self.paths).inspect()).to_dict()
             if action == 'status':
                 import socket
-                report.update(hostname=socket.gethostname(), config=config.to_dict(), runs=JobStore(self.paths, self.host).list())
+                from .prepare import Prepare
+                report.update(hostname=socket.gethostname(), config=config.to_dict(), runs=JobStore(self.paths, self.host).list(),
+                              preparation=Prepare(config, host=self.host, paths=self.paths).inspect().to_dict())
             return report
         if action == 'submit':
             def current_config():
