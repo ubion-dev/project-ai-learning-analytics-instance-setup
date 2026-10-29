@@ -10,7 +10,18 @@ os_version=$(awk -F= '$1 == "VERSION_ID" {gsub(/"/, "", $2); print $2}' "$OS_REL
 [[ $os_id == rocky && ${os_version%%.*} == 10 && $(uname -m) == x86_64 ]] || {
   echo 'Rocky Linux 10 x86_64 전용입니다.' >&2; exit 1;
 }
-if ! command -v python3 >/dev/null; then dnf install -y python3; fi
+if ! command -v python3 >/dev/null; then
+  # Do not source the bundle's helpers before its manifest is verified.
+  if dnf install -y --setopt=install_weak_deps=False \
+    --exclude='kernel,kernel-core,kernel-debug*,kernel-uki*,rocky-release*,rocky-repos*,rocky-gpg-keys*' python3; then
+    :
+  else
+    status=$?
+    printf 'Python 설치 실패: 부팅 커널과 Rocky release 변경은 허용하지 않습니다.\n' >&2
+    printf '실행 커널 %s의 저장소/의존성을 확인하고, OS 변경은 별도 명시적 유지보수 작업으로 진행하세요.\n' "$(uname -r)" >&2
+    exit "$status"
+  fi
+fi
 python3 -I -c 'import sys; sys.exit(0 if sys.version_info >= (3,12) else 1)' || {
   echo '시스템 python3는 3.12 이상이어야 합니다.' >&2; exit 1;
 }
@@ -37,6 +48,16 @@ os.umask(0o022)
 
 def fail(message):
     raise RuntimeError(message)
+
+def dnf_install(*packages):
+    # Keep this bootstrap policy in sync with scripts/rocky-linux/common.sh.
+    result = subprocess.run(['dnf', 'install', '-y', '--setopt=install_weak_deps=False',
+                             '--exclude=kernel,kernel-core,kernel-debug*,kernel-uki*,rocky-release*,rocky-repos*,rocky-gpg-keys*',
+                             *packages])
+    if result.returncode:
+        fail(f'패키지 설치 실패: 부팅 커널과 Rocky release 변경은 허용하지 않습니다. '
+             f'실행 커널 {os.uname().release}의 저장소/의존성을 확인하고, '
+             'OS 변경은 별도 명시적 유지보수 작업으로 진행하세요. 자동 업그레이드·삭제로 우회하지 않습니다.')
 
 def sha(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
@@ -207,7 +228,7 @@ def install():
                 created = True
                 # Create venv at its final location: venv scripts have absolute shebangs.
                 if subprocess.run([sys.executable, '-I', '-m', 'pip', '--version'], stdout=subprocess.DEVNULL).returncode:
-                    subprocess.run(['dnf', 'install', '-y', 'python3-pip'], check=True)
+                    dnf_install('python3-pip')
                 subprocess.run([sys.executable, '-I', '-m', 'venv', str(release / '.venv')], check=True)
                 interpreter = release / '.venv/bin/python'
                 subprocess.run([str(interpreter), '-I', '-m', 'pip', '--isolated', 'install', '--no-index',

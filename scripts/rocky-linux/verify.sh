@@ -57,6 +57,7 @@ done
 if $ssh; then check 'SSH 설정 문법' /usr/sbin/sshd -t; fi
 check 'Docker 응답' docker info
 check 'Compose plugin' docker compose version
+check '커널 모듈 도구 패키지' rpm -q kmod
 check 'Chrome stable 패키지' rpm -q google-chrome-stable
 check 'Chrome 버전' google-chrome-stable --version
 check 'Chrome 번역·기본 브라우저·소개 정책' python3 "$ROCKY_SCRIPT_DIR/lib/chrome_policy.py" --check

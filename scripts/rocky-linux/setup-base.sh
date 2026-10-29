@@ -13,13 +13,13 @@ while (($#)); do
 done
 require_rocky
 install_missing_packages dnf-plugins-core git curl ca-certificates bash-completion \
-  firewalld chrony python3 iproute
+  firewalld chrony python3 iproute kmod
 if rpm -q google-chrome-stable >/dev/null 2>&1; then
   echo '[유지] 패키지: google-chrome-stable'
 else
   [[ $(uname -m) == x86_64 ]] || die 'Chrome 신규 설치는 x86_64 공식 RPM을 사용합니다. 이 아키텍처는 별도 설치가 필요합니다.'
   rpm --import https://dl.google.com/linux/linux_signing_key.pub
-  dnf install -y --setopt=localpkg_gpgcheck=1 --setopt=gpgcheck=1 \
+  dnf_install --setopt=localpkg_gpgcheck=1 --setopt=gpgcheck=1 \
     https://dl.google.com/linux/direct/google-chrome-stable_current_x86_64.rpm
 fi
 command -v google-chrome-stable >/dev/null || die 'Chrome 패키지의 실행 파일이 없습니다. 기존 설치 상태를 확인하세요.'
