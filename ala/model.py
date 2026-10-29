@@ -2,8 +2,21 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
 from typing import Any
+import re
 
 STATES = {"ok", "change_required", "pending", "not_applicable", "blocked", "unknown", "error"}
+
+def redact(value):
+    """Don't echo daemon proxy credentials or secret-shaped keys into reports."""
+    if isinstance(value, dict):
+        return {key: '[redacted]' if re.search(r'password|token|secret|credential|authorization|api.?key', str(key), re.I)
+                else redact(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [redact(item) for item in value]
+    if isinstance(value, str):
+        value = re.sub(r'(?i)(https?://)[^/@\s]+@', r'\1[redacted]@', value)
+        return re.sub(r'(?i)([?&](?:access_token|token|password|api_key|secret)=)[^&\s]+', r'\1[redacted]', value)
+    return value
 
 @dataclass
 class CheckResult:
@@ -19,7 +32,7 @@ class CheckResult:
             raise ValueError(f"잘못된 검사 상태: {self.state}")
 
     def to_dict(self):
-        return asdict(self)
+        return redact(asdict(self))
 
 @dataclass
 class Report:

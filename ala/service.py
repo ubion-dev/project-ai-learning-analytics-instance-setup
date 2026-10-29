@@ -53,13 +53,18 @@ class Operations:
                 report.update(hostname=socket.gethostname(), config=config.to_dict(), runs=JobStore(self.paths, self.host).list())
             return report
         if action == 'submit':
-            config = self.config()
-            if not config.user:
-                raise ValueError('먼저 ala config edit에서 화면 사용자를 지정하세요.')
-            record = pwd.getpwnam(config.user)
-            if record.pw_uid == 0 or not Path(record.pw_dir).is_dir():
-                raise ValueError('사용 가능한 일반 사용자가 아닙니다.')
-            return JobStore(self.paths, self.host).submit(config, self.release, self.release / '.venv/bin/python')
+            def current_config():
+                if not self.paths.config.is_file():
+                    raise ValueError('먼저 ala config edit 또는 config import로 구성을 저장하세요.')
+                config = self.config()
+                if not config.user:
+                    raise ValueError('먼저 ala config edit에서 화면 사용자를 지정하세요.')
+                record = pwd.getpwnam(config.user)
+                if record.pw_uid == 0 or not Path(record.pw_dir).is_dir() or record.pw_shell.endswith(('nologin','false')):
+                    raise ValueError('사용 가능한 일반 사용자가 아닙니다.')
+                return config
+            return JobStore(self.paths, self.host).submit(current_config, self.release, self.release / '.venv/bin/python',
+                                                         expected_config=payload.get('expected_config'))
         if action == 'runs-list':
             return {'runs': JobStore(self.paths, self.host).list()}
         if action == 'runs-show':
@@ -99,22 +104,51 @@ class Service:
             if result.returncode:
                 raise PermissionError('sudo 인증이 필요합니다.')
 
-    def request(self, action: str, payload=None):
+    def command(self, action):
         release = trusted_release(self.release)
         args = [str(release / '.venv/bin/python'), '-I', str(release / 'entry.py'), '_privileged', action]
         if os.geteuid() != 0:
             args = ['sudo', '-n', '--', *args]
-        result = subprocess.run(args, input=json.dumps(payload or {}), capture_output=True, text=True, check=False)
+        return args
+
+    @staticmethod
+    def decode(returncode, stdout, stderr):
         try:
-            value = json.loads(result.stdout)
+            value = json.loads(stdout)
         except ValueError:
-            raise RuntimeError(result.stderr.strip() or '관리자 응답을 읽을 수 없습니다.') from None
-        if result.returncode or 'error' in value:
-            raise RuntimeError(value.get('error', result.stderr.strip() or '관리자 작업 실패'))
+            raise RuntimeError(stderr.strip() or '관리자 응답을 읽을 수 없습니다.') from None
+        if not isinstance(value, dict):
+            raise RuntimeError('잘못된 관리자 응답입니다.')
+        if returncode or 'error' in value:
+            raise RuntimeError(value.get('error', stderr.strip() or '관리자 작업 실패'))
         return value
 
+    def request(self, action: str, payload=None):
+        try:
+            result = subprocess.run(self.command(action), input=json.dumps(payload or {}), capture_output=True,
+                                    text=True, check=False, timeout=180)
+        except subprocess.TimeoutExpired:
+            raise RuntimeError('관리자 조회 제한 시간 초과. 시작한 작업은 ala runs list로 확인하세요.') from None
+        return self.decode(result.returncode, result.stdout, result.stderr)
+
     async def call(self, action: str, payload=None):
-        return await asyncio.to_thread(self.request, action, payload)
+        process = await asyncio.create_subprocess_exec(*self.command(action), stdin=asyncio.subprocess.PIPE,
+                                                       stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+        try:
+            stdout, stderr = await asyncio.wait_for(process.communicate(json.dumps(payload or {}).encode()), timeout=180)
+            return self.decode(process.returncode, stdout.decode(), stderr.decode())
+        except (asyncio.CancelledError, asyncio.TimeoutError) as exc:
+            # This is only the RPC client, never the detached installation unit.
+            if process.returncode is None:
+                try:
+                    process.terminate()
+                    await asyncio.wait_for(process.wait(), timeout=2)
+                except (ProcessLookupError, asyncio.TimeoutError):
+                    if process.returncode is None:
+                        process.kill()
+            if isinstance(exc, asyncio.TimeoutError):
+                raise RuntimeError('관리자 조회 제한 시간 초과. 진행 중 설치는 실행 기록으로 확인하세요.') from None
+            raise
 
 def privileged(action):
     if os.geteuid() != 0:

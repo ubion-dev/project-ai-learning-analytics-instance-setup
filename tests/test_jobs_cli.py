@@ -1,7 +1,10 @@
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+import asyncio
 import json
 import os
+import sys
+import time
 import pytest
 
 from ala.cli import main
@@ -15,7 +18,7 @@ class FakeHost:
         self.calls=[]
     def run(self, argv, **kwargs):
         self.calls.append(argv)
-        return Command(0, 'active\n')
+        return Command(0, 'ActiveState=active\nLoadState=loaded\n')
 
 @pytest.fixture
 def store(tmp_path):
@@ -42,6 +45,23 @@ def test_power_interruption_is_computed_without_mutating_records(store):
     store.paths.at('/proc/sys/kernel/random/boot_id').write_text('boot-two')
     assert store.load(job['run_id'])['state']=='interrupted'
     assert result_file.read_bytes()==before
+
+def test_reviewed_config_is_checked_inside_submission_lock(store):
+    before=Config(user='user',url='https://before.example.com')
+    after=Config(user='user',url='https://after.example.com')
+    with pytest.raises(RuntimeError, match='구성이 변경'):
+        store.submit(lambda:after,Path('/release'),Path('/python'),expected_config=before.to_dict())
+    assert not store.paths.runs.exists()
+
+def test_unit_query_failure_does_not_claim_interruption(store):
+    job=store.submit(Config(user='user'),Path('/release'),Path('/python'))
+    job['started_at']=(datetime.now(timezone.utc)-timedelta(minutes=2)).isoformat()
+    store.save(job)
+    store.host.run=lambda *a,**k:Command(124,'','timeout')
+    queried=store.load(job['run_id'])
+    assert queried['state']=='queued' and 'query_warning' in queried
+    store.host.run=lambda *a,**k:Command(1,'LoadState=not-found\nActiveState=inactive\n','')
+    assert store.load(job['run_id'])['state']=='interrupted'
 
 def test_worker_preserves_pending_and_records_stage(store):
     class Engine:
@@ -75,6 +95,14 @@ def test_lock_exclusion_and_path_validation(store):
 def test_source_tree_cannot_become_sudo_helper(tmp_path):
     with pytest.raises((PermissionError,FileNotFoundError)):
         trusted_release(tmp_path)
+
+def test_missing_saved_config_is_rejected_before_any_install(store):
+    from ala.service import Operations
+    operations=Operations(paths=store.paths,host=store.host)
+    with pytest.raises(ValueError,match='구성을 저장'):
+        operations.dispatch('submit',{})
+    assert store.host.calls==[]
+    assert not store.paths.runs.exists()
 
 class Service:
     def __init__(self, report=None):
@@ -120,3 +148,28 @@ def test_detach_returns_run_id_without_waiting(capsys):
     service=Service()
     assert main(['setup','--apply','--detach','--json'],service=service)==0
     assert json.loads(capsys.readouterr().out)['run_id']=='some-run'
+
+def test_async_rpc_is_json_and_cancellable_without_waiting_for_thread():
+    from ala.service import Service as RealService
+    service=RealService()
+    service.command=lambda action:[sys.executable,'-c','import json; print(json.dumps({"ok":True}))']
+    assert asyncio.run(service.call('status'))=={'ok':True}
+    service.command=lambda action:[sys.executable,'-c','import time; time.sleep(30)']
+    async def cancel():
+        task=asyncio.create_task(service.call('status'))
+        await asyncio.sleep(0.05)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError): await task
+    started=time.monotonic()
+    asyncio.run(cancel())
+    assert time.monotonic()-started<3
+
+def test_private_user_rpc_connects_display_contract(monkeypatch,capsys):
+    import ala.display as display
+    monkeypatch.setattr(display,'user_action',lambda action:{'exit_code':2,'state':'pending','action':action})
+    assert main(['_chrome-user','check'])==2
+    assert json.loads(capsys.readouterr().out)['action']=='check'
+    monkeypatch.setattr(display,'session_start',lambda:0)
+    monkeypatch.setattr(display,'run_chrome',lambda:2)
+    assert main(['_session'])==0
+    assert main(['_chrome-run'])==2

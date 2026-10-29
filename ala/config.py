@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass, fields
 from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.parse import urlsplit, parse_qsl
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 import json
 import re
@@ -39,6 +39,10 @@ class Config:
                 valid = False
             if not valid or parts.username is not None or parts.password is not None:
                 raise ValueError("인증정보 없는 http/https URL을 지정하세요.")
+            sensitive = {'token','access_token','refresh_token','id_token','password','passwd','api_key',
+                         'apikey','authorization','auth','secret','client_secret','signature'}
+            if any(key.lower().replace('-', '_') in sensitive for key, _ in parse_qsl(parts.query, keep_blank_values=True)):
+                raise ValueError("인증 토큰·암호가 포함된 URL은 저장하지 않습니다. 로그인 없는 표시 URL을 사용하세요.")
         if not isinstance(self.timezone, str):
             raise ValueError("timezone에는 문자열이 필요합니다.")
         try:

@@ -1,45 +1,64 @@
 # ala v1 진행 기록
 
-## 현재 상태
-- 단계: ALA-02 진행 중. ALA-00/01 완료. 공통 계약 저장, engine 구현 위임 중.
-- 최신 사용자 승인: ala v1 전체 계획 구현 (2026-10-29).
-- 자동 검증/실기기 수용/정식 배포는 아직 미완료.
-- 다음: 문서 첫 커밋 → 새 비공개 원격 → 원본 출처 검사 및 Rocky 스크립트 분리.
+## 현재 상태 — 재개할 때 여기부터
 
-## 재개 시 필수
-AGENTS.md → ala-v1-plan.md → 이 문서 → git status/diff/log 순으로 확인한다.
-완료된 단계를 재구현하지 말고 현재 ID와 남은 완료 기준부터 보고한다.
+- ALA-00~05: 구현 및 모의 검증 완료. ALA-06: 로컬 통합 검증 완료, GitHub Python3.12 CI 확인 예정.
+- ALA-07: 실기기 수용 미수행. 대상 서버/유지보수 시간/화면 관찰 경로가 미정이다. 정식 v0.1.0으로 표시하지 않는다.
+- repo: ubion-dev/project-ai-learning-analytics-setup (private). main은 계획 문서 최초 커밋, 개발은 codex/ala-v1.
+- 로컬: 현재 이 파일을 포함한 repo. 모든 명령은 이 프로젝트 root를 workdir로 명시한다.
+- 다음 행동: 통합 커밋·원격 PR → CI 결과 확인/필요 수정 → 최종 RC 묶음/태그 → PTZ 이전 안내 draft → 인계.
 
-## 조사 메모
-- 원본 로컬 작업 브랜치: codex/configure-chrome-display-policy, head 9f41e1c.
-- 계획 첫 커밋: cf81793. 분리·공통 계약 커밋: 9244598.
-- GitHub 비공개 레포지토리 생성 및 main 문서 커밋 업로드 완료.
-- 원본 untracked .DS_Store/PDF 두 개는 범위 밖이며 건드리지 않는다.
-- 초기 기준 커밋 조회 실패는 로컬 fetch 미완료 때문이었다. git fetch origin main 후 4a7128c가 PR #10 merge임을 확인하고 git archive로 scripts/rocky-linux만 추출했다. 계획 기준 변경 없음.
-- 시스템 python3는 3.9.6이므로 개발/검증에는 별도 Python 3.12+ 런타임을 찾는다.
+## 확정 결정
+
+AGENTS.md와 ala-v1-plan.md를 먼저 읽는다. Linux 기존 계정 재사용, DID는 로그인 없는 URL, 기존 브라우저 프로필은 보관만 하고 새 표시 프로필에 basic 저장 방식을 적용한다. 키링 자동 해제/암호 저장/웹 자동 인증은 만들지 않는다.
+UI는 Textual 화살표형, root 시스템 변경과 일반 사용자 Chrome을 분리한다. 실제 서버 설치/재부팅은 아직 승인된 대상/시간이 없어 실행하지 않는다.
 
 ## 작업 표
-| ID | 상태 | 증거 |
+
+| ID | 구현/자동 검증 | 실기기 수용 |
 |---|---|---|
-| ALA-00 | 완료 | cf81793; 비공개 GitHub 생성 |
-| ALA-01 | 완료 | 기준 커밋 archive; 85 tests 통과 |
-| ALA-02 | 진행 | config/model/system 계약; ala_engine 위임 |
-| ALA-03 | 미착수 | |
-| ALA-04 | 미착수 | |
-| ALA-05 | 미착수 | |
-| ALA-06 | 미착수 | |
-| ALA-07 | 미착수 | 실기기 대상/유지보수 시간/화면 경로 미정 |
+| ALA-00 | cf81793 계획/진행/AGENTS 먼저 커밋, private repo 생성 | 해당 없음 |
+| ALA-01 | 9244598 승인 커밋에서 Rocky 폴더만 archive, 원본 85 tests 통과 | 미수행 |
+| ALA-02 | efe9bed 공통 Engine, 26 모의 tests | 미수행 |
+| ALA-03 | d60d2e7, 4d3a62a: CLI/root job/설치 묶음, installer 13 tests | SSH 종료 지속/실설치 미수행 |
+| ALA-04 | 4d3a62a display 25 tests, GNOME/Chrome 복구 | GUI/재부팅/GPU 미수행 |
+| ALA-05 | tui.py/test_tui.py 15 headless tests | 실제 TTY sudo·SSH 렌더링 미수행 |
+| ALA-06 | 로컬 통합 및 배포 smoke 완료, CI 확인 예정 | 정식 전 수용 필요 |
+| ALA-07 | 수용 양식 작성, 이전 안내·RC 준비 | CPU→GPU 전체 미수행 |
 
-## 실행 계약 (모든 작업자 필독)
-- Config는 ala/config.py, CheckResult/Report는 ala/model.py, Host/Command/Paths는 ala/system.py를 사용한다.
-- Engine(config, host=None, paths=None).inspect()/plan()/apply(on_stage=None) -> Report.
-- Chrome 작업은 ala/display.py: inspect_display(config,host,paths)->list[CheckResult], apply_display(config,host,paths)->list[CheckResult], chrome_action(action,config,host=None,paths=None)->dict 계약.
-- TUI는 service 객체의 비동기 인터페이스를 쓰며 root CLI가 곧 계약을 추가한다.
-- 개발 Python: /tmp/ala-dev/bin/python (3.14); 실제 지원/CI는 Python3.12. Textual8.2.8.
+## 검증 증거
 
-## 진행 체크포인트
-- 분리 기준선85 tests 통과(72.021s). Config/model/path22 + root job/CLI11 =33 tests 통과(1.65s).
-- ALA-02 engine 실구현 및 모의18검증이 도착하여 root 통합검토 중.
-- ALA-03의 job/CLI 고정 인터페이스를 사전 구현·검증했고 패키징 작업은 ala_packaging에 독립 위임했다. 이 단계의 완료 선언은 engine/패키징 통합 검증 이후 한다.
-- 실행 잠금은 Linux /run/lock 자체 권한 차이를 피하기 위해 /run/lock/ala/operation.lock로 구체화했다.
-- 다음: 엔진 검토/테스트 통과 후 Chrome/TUI 병렬 위임.
+- 분리 원본: main 4a7128c6e7bd188e523faaf316a28eac0557008f (PR #10 merge), git archive scripts/rocky-linux.
+- 초기 git show 실패는 원본 local fetch가 되지 않은 탓이었다. fetch 후 기준 커밋/경로 정상 확인. 기준 변경 없음.
+- 분리 직후 unittest: 85 passed, 72.021s.
+- 최종 전체 pytest(모의·headless·임시 설치): 204 passed + 31 subtests, 133.56s. 이후 RPC 연결 테스트 1개를 추가해 대상 테스트만 실행함.
+- TUI headless 15개: 키보드 전체 설치 동선, 단일 확인, stale/미저장 구성, 권한 인증과 draft 보존, 느린 조회/종료, resize, job/log 경량 poll.
+- Installer 13개: 실제 임시 venv+오프라인 wheel, 동일 버전 멱등성, 실패 시 current 유지, 변조/링크/lock/활성 job 거부, 원본 폴더 삭제 후 실행.
+- Bash fence 46개 문법과 신규 문서 local link 8개 정상. git diff --check 통과.
+- dist/ala-0.1.0rc1.tar.gz: SHA256 manifest·allow-list·압축 해제 후 --version/--help·examples/instance.json 확인.
+- 실제 Rocky 설치/화면/팝업/재부팅/호스트 및 컨테이너 GPU는 검증하지 않았다.
+
+## 구현 계약
+
+- Config/config.py; CheckResult·Report/model.py; Host·Command·Paths/system.py.
+- Engine(config,host,paths).inspect()/plan()/apply(on_stage) → Report; 콜백(stage_id,state).
+- display.inspect_display/apply_display → list[CheckResult], chrome_action → dict.
+- private entry: _session→session_start, _chrome-run→run_chrome, _chrome-user ACTION→user_action JSON+exit_code.
+- Service.request 동기 / call 비동기 / authenticate sudo-v. async는 취소 가능한 subprocess RPC이며 systemd 작업은 분리됨.
+- submit expected_config는 잠금 안에서 현재 저장 구성과 비교한다. 구성 파일 없는 apply는 사전 거부한다.
+- 공용 잠금: /run/lock/ala/operation.lock. /run/lock의 sticky 권한과 ala 소유 디렉터리를 구분한다.
+- systemctl 조회 오류는 interrupted로 단정하지 않고 query_warning, 확인된 not-found/inactive/부팅 변경만 중단 판정.
+- 보고서의 프록시 인증정보는 redaction, URL credential query는 Config에서 거부.
+
+## 개발 환경/분담
+
+- Python: /tmp/ala-dev/bin/python (3.14). 운영/CI는 Python3.12. Textual8.2.8.
+- wheelhouse: /tmp/ala-wheelhouse. 빌드: 해당 Python scripts/build-release.py --wheelhouse 해당경로.
+- 모든 worker 변경 종료: ala_engine(engine+tests), ala_packaging(installer/builder/locks/CI/INSTALL+tests), ala_display(display+tests), ala_tui(tui+tests).
+- root가 공통 계약·문서·통합·git/PR·릴리스를 관리한다. 기존 PTZ repo의 untracked .DS_Store/PDF 두 개는 건드리지 않는다.
+- 테스트 코드가 변하지 않으면 통과 결과를 반복하지 말고 변경 범위만 추가 검증한다. 배포는 최신 runtime 코드로 다시 빌드한다.
+
+## 압축·재개 절차
+
+AGENTS.md → 계획 → 이 문서 → git status/diff/log를 읽고 현재 단계/남은 통과 조건/다음 행동을 보고한다.
+완료 단계를 재구현하지 않는다. 최신 사용자 결정/코드와 다른 기록은 이유를 남겨 고친다. 구현/자동 검증/실기기 수용 완료를 구분한다.

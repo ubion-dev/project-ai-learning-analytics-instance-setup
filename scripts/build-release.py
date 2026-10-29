@@ -68,7 +68,8 @@ def source_files(root: Path):
     files += list((root / 'ala').rglob('*.py'))
     legacy = root / 'scripts/rocky-linux'
     files += list(legacy.glob('*.sh')) + list((legacy / 'lib').glob('*.py')) + [legacy / 'bin/chrome-did']
-    files += [root / name for name in ('README.md', 'docs/INSTALL.md', 'docs/OPERATIONS.md', 'docs/SOURCE.md') if (root / name).is_file()]
+    files += [root / name for name in ('README.md', 'docs/INSTALL.md', 'docs/OPERATIONS.md', 'docs/SOURCE.md',
+                                      'docs/ACCEPTANCE.md', 'examples/instance.json') if (root / name).is_file()]
     for path in sorted(set(files)):
         if path.is_symlink() or not path.is_file():
             raise ValueError(f'배포 파일이 없거나 일반 파일이 아닙니다: {path}')

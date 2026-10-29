@@ -45,9 +45,15 @@ def parser():
     return p
 
 def emit(value, as_json=False):
-    if as_json or 'results' not in value:
+    if not as_json and 'log' in value:
+        print(value['log'], end='' if value['log'].endswith('\n') else '\n')
+    elif as_json or 'results' not in value:
         print(json.dumps(value, ensure_ascii=False, indent=2))
     else:
+        if 'hostname' in value:
+            print(f'호스트: {value["hostname"]} | 화면 사용자: {value.get("config",{}).get("user", "미지정")}')
+            for run in value.get('runs', [])[:3]:
+                print(f'실행 {run["run_id"]}: {run["state"]}')
         for result in value['results']:
             print(f'[{result["state"]}] {result["id"]}: 기대={result.get("expected")} / 현재={result.get("actual")}')
             if result.get('next_action'):
@@ -57,7 +63,7 @@ def emit(value, as_json=False):
 def main(argv=None, *, service=None):
     argv = list(sys.argv[1:] if argv is None else argv)
     # Not part of the public command grammar. Root-owned installed entry only.
-    if argv and argv[0] in {'_privileged','_worker','_session','_chrome-run'}:
+    if argv and argv[0] in {'_privileged','_worker','_session','_chrome-run','_chrome-user'}:
         try:
             if argv[0] == '_privileged' and len(argv) == 2:
                 print(json.dumps(privileged(argv[1]), ensure_ascii=False))
@@ -72,6 +78,11 @@ def main(argv=None, *, service=None):
             if argv[0] in {'_session','_chrome-run'} and len(argv) == 1:
                 from .display import session_start, run_chrome
                 return session_start() if argv[0] == '_session' else run_chrome()
+            if argv[0] == '_chrome-user' and len(argv) == 2:
+                from .display import user_action
+                value = user_action(argv[1])
+                print(json.dumps(value, ensure_ascii=False))
+                return value.get('exit_code', 0)
             return 64
         except Exception as exc:
             print(json.dumps({'error': str(exc)}, ensure_ascii=False))
@@ -110,6 +121,9 @@ def main(argv=None, *, service=None):
             while job['state'] in {'queued','running'}:
                 time.sleep(1)
                 job = svc.request('runs-show', {'run_id': job['run_id']})
+                if job.get('query_warning'):
+                    emit(job, as_json)
+                    return 1
             emit(job, as_json)
             return job.get('exit_code', 1)
         if args.command in {'check','status'}:

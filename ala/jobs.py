@@ -46,7 +46,8 @@ def change_lock(paths=Paths(), *, blocking=False):
     protected_directory(lock.parent, 0o755)
     fd = os.open(lock, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
     try:
-        if os.fstat(fd).st_uid != os.geteuid():
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid() or info.st_mode & 0o022:
             raise PermissionError('ala 잠금 소유자가 올바르지 않습니다.')
         try:
             fcntl.flock(fd, fcntl.LOCK_EX | (0 if blocking else fcntl.LOCK_NB))
@@ -71,10 +72,15 @@ class JobStore:
             if value['boot_id'] != boot_id(self.paths):
                 value = dict(value, state='interrupted', reason='부팅이 바뀌었습니다. 다시 적용하기 전에 계획을 확인하세요.')
             else:
-                active = self.host.run(['systemctl', 'show', value['unit'], '--property=ActiveState', '--value'])
+                active = self.host.run(['systemctl', 'show', value['unit'], '--property=ActiveState', '--property=LoadState'])
+                properties = dict(line.split('=', 1) for line in active.stdout.splitlines() if '=' in line)
                 age = (datetime.now(timezone.utc) - datetime.fromisoformat(value['started_at'])).total_seconds()
-                if age > 15 and (active.returncode or active.stdout.strip() not in {'active', 'activating', 'reloading'}):
+                confirmed_stopped = properties.get('LoadState') == 'not-found' or (
+                    active.returncode == 0 and properties.get('ActiveState') in {'inactive', 'failed'})
+                if age > 15 and confirmed_stopped:
                     value = dict(value, state='interrupted', reason='실행 unit이 없거나 종료 기록이 없습니다.')
+                elif active.returncode or not properties.get('ActiveState'):
+                    value = dict(value, query_warning='unit 상태 조회 불가. 실행 중단으로 단정하지 않습니다.')
         return value
 
     def list(self):
@@ -89,8 +95,11 @@ class JobStore:
     def save(self, value):
         atomic_json(self.directory(value['run_id']) / 'result.json', value)
 
-    def submit(self, config: Config, release: Path, python: Path):
+    def submit(self, config, release: Path, python: Path, *, expected_config=None):
         with change_lock(self.paths):
+            config = config() if callable(config) else config
+            if expected_config is not None and config != Config.from_dict(expected_config):
+                raise RuntimeError('검토 후 구성이 변경되었습니다. 변경 계획을 다시 확인하세요.')
             if any(r['state'] in {'queued', 'running'} for r in self.list()):
                 raise RuntimeError('설치 작업이 이미 진행 중입니다. ala status로 확인하세요.')
             protected_directory(self.paths.at('/var/lib/ala'))

@@ -10,6 +10,7 @@ from ala.system import Paths, atomic_json
  {"schema_version": 2}, {"user": "root"}, {"user": "x;touch /tmp/no"}, {"user": "-n"},
  {"url": "https://user:password@example.com"}, {"url": "file:///etc/passwd"},
  {"url": "https://example.com\n"}, {"url": "http://host:bad"}, {"url": "http://["},
+ {"url": "https://example.com/?access_token=secret"}, {"url": "https://example.com/?api%5Fkey=secret"},
  {"display": 1}, {"autostart": "true"}, {"timezone": "../../etc/passwd"}, {"ssh_zone": "$(id)"}])
 def test_config_rejects_ambiguous_or_unsafe_data(value):
     with pytest.raises((ValueError, TypeError)):
@@ -36,3 +37,8 @@ def test_paths_are_explicitly_injected_without_env_override(tmp_path, monkeypatc
 def test_invalid_state_rejected():
     with pytest.raises(ValueError):
         CheckResult("test", "fine")
+
+def test_report_does_not_echo_daemon_proxy_credentials():
+    value=Report([CheckResult('docker','ok',actual={'proxies':{'http-proxy':'http://user:password@proxy:3128'},'api_key':'abcdef'})]).to_dict()
+    assert 'user:password' not in json.dumps(value)
+    assert 'abcdef' not in json.dumps(value)

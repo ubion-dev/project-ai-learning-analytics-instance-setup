@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "user": "user",
+  "url": "https://example.com",
+  "timezone": "Asia/Seoul",
+  "root_bash": false,
+  "dev_tools": false,
+  "ssh": true,
+  "display": true,
+  "autologin": true,
+  "autostart": true,
+  "ssh_zone": null
+}
