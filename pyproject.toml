@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ai-learning-analytics-setup"
+version = "0.1.0rc1"
+description = "AI 학습 분석실 DID 인스턴스 환경 관리 도구"
+requires-python = ">=3.12"
+dependencies = ["textual==8.2.8"]
+
+[project.scripts]
+ala = "ala.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["ala*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests", "scripts/rocky-linux/tests"]
