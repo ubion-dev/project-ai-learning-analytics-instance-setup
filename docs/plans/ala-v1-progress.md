@@ -2,12 +2,12 @@
 
 ## 현재 상태 — 재개할 때 여기부터
 
-- ALA-09~11 구현 완료, ALA-12 최종 CI/RC3 후보 준비 중. 기준 main 773ebb5(PR #2 병합), 브랜치 codex/ala-initial-prepare.
+- ALA-09~12 구현·최종 Python3.12 CI·RC3 게시 완료. 기준 main 773ebb5(PR #2 병합), 브랜치 codex/ala-initial-prepare.
 - doctor network 읽기 전용 계층 진단, prepare 최초 OS 업데이트/수동 재부팅 검증, 기존 GDM 자동 로그인·실제 세션 구분을 추가했다.
 - 기존 setup은 전체 OS 업데이트를 하지 않는다. prepare 완료후 upgrade 반복 없음. 모든 재부팅은 명시적 사용자 작업.
 - ALA-00~08/RC2 기존 구현·검증은 재사용한다. RC2를 덮어쓰지 않는다.
 - 실기기 수용 ALA-07 및 RC3 추가 수용 미수행. 접속 장비 식별/호스트키 확인과 실제 화면 관찰이 남아 있다. 유지보수 시간 허락을 다시 묻지 않는다.
-- 다음: 최종 Python3.12 CI → RC3 배포 묶음 검증 → PR/후보 기록. 실제 장비 수용 전 정식 v0.1.0으로 표시하지 않는다.
+- 다음: Draft PR #3 검토 및 장비 식별/호스트키·화면 확인 경로 확보 후 CPU→GPU 실기기 수용. 실제 장비 수용 전 정식 v0.1.0으로 표시하지 않는다.
 
 ## 확정 결정
 
@@ -148,3 +148,14 @@ AGENTS.md → 계획 → 이 문서 → git status/diff/log를 읽고 현재 단
 - 변경범위 최종 prepare/network/TUI: 96 passed(10.96s). 앞선 engine/jobs/display/network:118 passed+3subtests. prepare44/network33/display35 개별통과.
 - 빌드: Python3.14 고정 wheelhouse로 dist/ala-0.1.0rc3.tar.gz 생성. diff --check/entry help/installer bash 문법 정상. 최종 Python3.12 CI 및 후보 manifest 확인이 남음.
 - 최종 수용은 docs/ACCEPTANCE.md의 RC3 항목을 CPU→GPU 순서로 수행. 새 원격 로그인·설치·재부팅은 이 작업에서 수행하지 않았다.
+
+
+## RC3 최종 검증 및 인계
+
+- 기능 commit: 4bc033b762e061555abad30b9e17ef0c0744e475. PR #3: https://github.com/ubion-dev/project-ai-learning-analytics-instance-setup/pull/3 (Draft, 자동 병합 안 함).
+- Python3.12 CI: https://github.com/ubion-dev/project-ai-learning-analytics-instance-setup/actions/runs/40890011688 — 348 passed + 40 subtests, 62.98s. Bash 문법/고정 wheel 후보 빌드/CLI smoke 성공.
+- 로컬 변경범위 최종96 tests 통과. 배포의51개 manifest hash 및 각 source 일치, CI archive와 local archive byte 일치, 문서 local links 정상.
+- RC3: https://github.com/ubion-dev/project-ai-learning-analytics-instance-setup/releases/tag/v0.1.0-rc.3
+- SHA256: 66e3c00e4e468a39a08b384ca96669774b80f081f4f3229bbf1eaa31d4d94935. CI 산출물 사용. RC1/RC2 변경 없음.
+- GitHub connector는 이 private repo에서404여서 기존 인증 gh로 PR/CI/후보를 처리했다.
+- 실제 Rocky의 DNF transaction·CPU/GPU 드라이버·자동 로그인·재부팅·화면 수용 미수행. 서버 키 검증 우회나 원격 설정 변경 없이 구현/자동검증 단계만 완료했다.
