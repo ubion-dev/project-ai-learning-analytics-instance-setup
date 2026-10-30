@@ -173,3 +173,56 @@ def test_private_user_rpc_connects_display_contract(monkeypatch,capsys):
     monkeypatch.setattr(display,'run_chrome',lambda:2)
     assert main(['_session'])==0
     assert main(['_chrome-run'])==2
+
+
+def test_prepare_job_uses_same_lock_and_pins_operation(store):
+    job = store.submit(Config(), Path('/release'), Path('/python'), operation='prepare')
+    assert job['operation'] == 'prepare'
+    assert job['unit'].startswith('ala-prepare-')
+    with pytest.raises(RuntimeError):
+        store.submit(Config(user='user'), Path('/release'), Path('/python'))
+    with pytest.raises(ValueError):
+        store.submit(Config(), Path('/release'), Path('/python'), operation='arbitrary')
+
+
+def test_prepare_worker_routes_to_prepare_and_retains_pending(store, monkeypatch):
+    import ala.prepare
+    class Preparation:
+        def __init__(self, config, **kwargs):
+            assert config.user == ''
+        def apply(self, on_stage):
+            on_stage('prepare.reboot', 'pending')
+            return Report([CheckResult('prepare.reboot', 'pending', next_action='재부팅 후 ala prepare --apply')])
+    monkeypatch.setattr(ala.prepare, 'Prepare', Preparation)
+    job = store.submit(Config(), Path('/release'), Path('/python'), operation='prepare')
+    assert run_worker(job['run_id'], store.paths, store.host) == 2
+    assert store.load(job['run_id'])['state'] == 'pending'
+
+
+def test_prepare_and_network_cli_dispatch_json(capsys):
+    class NewService(Service):
+        def request(self, action, payload=None):
+            self.calls.append((action, payload))
+            if action == 'prepare-submit':
+                return {'run_id': 'prepare-run', 'state': 'queued', 'operation': 'prepare'}
+            return Report([CheckResult('test', 'pending')]).to_dict()
+    service = NewService()
+    assert main(['prepare', '--json'], service=service) == 0
+    assert service.calls[-1][0] == 'prepare-plan'
+    json.loads(capsys.readouterr().out)
+    assert main(['prepare', '--apply', '--detach', '--json'], service=service) == 0
+    assert json.loads(capsys.readouterr().out)['operation'] == 'prepare'
+    assert main(['doctor', 'network', '--json'], service=service) == 2
+    assert service.calls[-1] == ('doctor-network', {'probe_url': None})
+    json.loads(capsys.readouterr().out)
+    assert main(['doctor', 'network', '--probe-url', 'https://user:secret@example.com', '--json'], service=service) == 1
+    assert 'secret' not in capsys.readouterr().out
+    assert service.calls[-1][0] == 'authenticate'
+
+
+def test_prepare_rpc_does_not_require_graphical_account(store, monkeypatch):
+    from ala.service import Operations
+    monkeypatch.delenv('SUDO_USER', raising=False)
+    result = Operations(paths=store.paths, host=store.host, release=Path('/release')).dispatch('prepare-submit', {})
+    assert result['operation'] == 'prepare'
+    assert Config.load(store.directory(result['run_id']) / 'config.json').user == ''

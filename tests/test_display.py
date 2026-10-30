@@ -23,6 +23,9 @@ class FakeHost:
         self.script_result={'exit_code':2, 'state':'pending', 'reason':'Chrome 미실행'}
         self.get_default='graphical.target'
         self.gdm_enabled='enabled'
+        self.locked='no'
+        self.gdm_status=Command(0,'LoadState=loaded\nActiveState=active\nSubState=running\nResult=success\n')
+        self.gdm_logs=Command(0,'')
     def run(self, argv, **kwargs):
         self.calls.append((argv,kwargs))
         if argv[:2]==['getent','passwd']:
@@ -30,7 +33,7 @@ class FakeHost:
         if argv[:2]==['loginctl','list-sessions']:
             return Command(0,''.join(f'{i+1} {os.getuid()} user seat0\n' for i in range(self.sessions)))
         if argv[:2]==['loginctl','show-session']:
-            return Command(0,f'User={os.getuid()}\nType=wayland\nClass=user\nRemote=no\nActive=yes\nState=active\n')
+            return Command(0,f'User={os.getuid()}\nType=wayland\nClass=user\nRemote=no\nActive=yes\nState=active\nLockedHint={self.locked}\n')
         if argv[:2]==['loginctl','show-user']:
             return Command(0,'/run/user/test\n') if self.runtime else Command(1,'','no runtime')
         if argv[0]=='runuser':
@@ -42,6 +45,8 @@ class FakeHost:
             return Command(0,json.dumps(self.script_result))
         if argv==['systemctl','is-enabled','gdm.service']:
             return Command(0,self.gdm_enabled+'\n')
+        if argv[:3]==['systemctl','show','gdm.service']:
+            return self.gdm_status
         if argv==['systemctl','get-default']:
             return Command(0,self.get_default+'\n')
         if argv[:3]==['systemctl','--user','show-environment']:
@@ -57,6 +62,8 @@ class FakeHost:
         if argv[:2]==['gsettings','get']:
             name=argv[2]+'.'+argv[3]
             return Command(0,self.settings[name]+'\n')
+        if argv[0]=='journalctl' and 'gdm.service' in argv:
+            return self.gdm_logs
         if argv[0]=='journalctl':
             return Command(0,'only ala logs\n')
         if argv[:2]==['systemctl','--user']:
@@ -358,3 +365,106 @@ def test_autostart_changes_are_backed_up_outside_user_profile(setup):
     display.apply_display(config,host,paths)
     assert any(p.name.startswith('ala-display.desktop.') for p in paths.backups.iterdir())
     assert not paths.at('/home/user/.local/state/ala/backups').exists()
+
+
+def test_desktop_only_first_ssh_setup_needs_no_url_or_gui_login(setup):
+    config,paths,host=setup
+    config=replace(config,url=None,autostart=False)
+    host.config=config;host.sessions=0;host.runtime=False
+    result=display.apply_display(config,host,paths)
+    states={r.id:r.state for r in result}
+    assert 'AutomaticLogin=user' in paths.at('/etc/gdm/custom.conf').read_text()
+    assert paths.at('/home/user/.config/gnome-initial-setup-done').read_text()=='yes\n'
+    assert not paths.at('/home/user/.config/autostart/ala-display.desktop').exists()
+    assert states['display.configuration']=='ok'
+    assert states['display.session']=='pending'
+    assert 'chrome.url' not in states
+    assert not any(argv[0]=='runuser' and argv[-1]=='check' for argv,_ in host.calls)
+    before={str(p):(p.read_bytes(),p.stat().st_mtime_ns) for p in paths.root.rglob('*') if p.is_file()}
+    display.apply_display(config,host,paths)
+    assert before=={str(p):(p.read_bytes(),p.stat().st_mtime_ns) for p in paths.root.rglob('*') if p.is_file()}
+
+
+def test_autostart_off_checks_desktop_without_requiring_chrome(setup):
+    config,paths,host=setup
+    config=replace(config,autostart=False);host.config=config
+    result=display.apply_display(config,host,paths)
+    states={r.id:r.state for r in result}
+    assert states['display.configuration']=='ok'
+    assert states['display.session']=='ok'
+    assert states['chrome.runtime']=='not_applicable'
+    assert states['display.visual_acceptance']=='not_applicable'
+    assert not any(argv[0]=='runuser' and argv[-1]=='check' for argv,_ in host.calls)
+    assert any(argv[0]=='runuser' and argv[-1]=='settings' for argv,_ in host.calls)
+
+
+def test_missing_url_prepares_desktop_but_keeps_only_browser_input_pending(setup):
+    config,paths,host=setup
+    config=replace(config,url=None);host.config=config
+    states={r.id:r.state for r in display.apply_display(config,host,paths)}
+    assert states['display.configuration']=='ok'
+    assert states['display.session']=='ok'
+    assert states['chrome.url']=='pending'
+    assert states['chrome.runtime']=='not_applicable'
+    assert not any(argv[0]=='runuser' and argv[-1]=='check' for argv,_ in host.calls)
+
+
+@pytest.mark.parametrize('locked,state',[('yes','pending'),('no','ok'),('','unknown')])
+def test_actual_locked_session_is_separate_from_policy(setup,locked,state):
+    config,paths,host=setup
+    host.locked=locked
+    results={r.id:r for r in display.apply_display(config,host,paths)}
+    assert results['display.configuration'].state=='ok'
+    assert results['display.session'].state=='ok'
+    assert results['display.session_lock'].state==state
+
+
+def test_failed_gdm_is_not_reported_as_just_missing_login(setup):
+    config,paths,host=setup
+    host.sessions=0
+    host.gdm_status=Command(0,'LoadState=loaded\nActiveState=failed\nResult=exit-code\n')
+    host.gdm_logs=Command(0,'No screens found; private-account token=do-not-export\n')
+    before=list(paths.root.rglob('*'))
+    results={r.id:r for r in display.inspect_display(config,host,paths)}
+    assert results['display.gdm_runtime'].state=='error'
+    assert results['display.gdm_diagnostics'].actual==['그래픽 초기화 오류 단서']
+    serialized=json.dumps([r.to_dict() for r in results.values()])
+    assert 'private-account' not in serialized and 'do-not-export' not in serialized
+    assert before==list(paths.root.rglob('*'))
+    journal=[(argv,kw) for argv,kw in host.calls if argv[0]=='journalctl'][0]
+    assert '-b' in journal[0] and journal[0][journal[0].index('-n')+1]=='80'
+    assert journal[1]['timeout']==10
+
+
+def test_gdm_query_permissions_are_unknown_not_healthy(setup):
+    config,paths,host=setup
+    host.sessions=0
+    host.gdm_status=Command(1,'','denied')
+    host.gdm_logs=Command(1,'','denied')
+    result={r.id:r for r in display.inspect_display(config,host,paths)}
+    assert result['display.gdm_runtime'].state=='unknown'
+    assert result['display.gdm_diagnostics'].state=='unknown'
+
+
+def test_current_desktop_ignores_old_gdm_errors(setup):
+    config,paths,host=setup
+    host.gdm_logs=Command(0,'No screens found\n')
+    result={r.id:r for r in display.inspect_display(config,host,paths)}
+    assert result['display.session'].state=='ok'
+    assert 'display.gdm_diagnostics' not in result
+    assert not any(argv[0]=='journalctl' for argv,_ in host.calls)
+
+
+def test_greeter_session_is_not_a_logged_in_desktop(setup):
+    config,paths,host=setup
+    original=host.run
+    def run(argv,**kwargs):
+        if argv[:2]==['loginctl','show-session']:
+            return Command(0,'User=999\nType=wayland\nClass=greeter\nRemote=no\nActive=yes\nState=active\n')
+        return original(argv,**kwargs)
+    host.run=run
+    results={r.id:r for r in display.inspect_display(config,host,paths)}
+    assert results['display.session'].state=='pending'
+    assert results['display.login_screen'].state=='pending'
+    assert 'greeter' in results['display.login_screen'].actual
+    assert not any(argv[0]=='runuser' and argv[-1]=='check' for argv,_ in host.calls)

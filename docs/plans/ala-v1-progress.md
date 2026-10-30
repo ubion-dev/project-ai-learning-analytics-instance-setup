@@ -2,12 +2,12 @@
 
 ## 현재 상태 — 재개할 때 여기부터
 
-- 최신 작업 ALA-08: 공식 장치 드라이버 자동 준비와 설치 중 커널/release 유지 구현·Python3.12 CI 검증·RC2 게시 완료. 실기기 수용은 미수행이다. 계획의 추가 지시를 먼저 읽는다.
-- ALA-00~06: 구현·모의/headless·임시 설치·Python3.12 CI 검증 및 RC 공개 완료. 실기기 수용은 별도다.
-- ALA-07: 실기기 수용 미수행. 사용자는 세팅 전 장비의 설치·테스트를 허용했다. 알려진 SSH 대상의 호스트키 확인과 실제 화면 관찰 경로가 남아 있다. 정식 v0.1.0으로 표시하지 않는다.
-- repo: ubion-dev/project-ai-learning-analytics-instance-setup (private). 기존 구현 PR #1은 main 659d97e에 병합됨을 원격 확인했다. ALA-08 개발 브랜치는 codex/ala-hardware-preparation이다.
-- 로컬: 현재 이 파일을 포함한 repo. 모든 명령은 이 프로젝트 root를 workdir로 명시한다.
-- 다음 행동: PR #2 검토와 SSH 대상 기기 키 확인 후 RC2로 docs/ACCEPTANCE.md의 CPU/GPU 수용을 수행한다. 유지보수 시간 승인을 반복 요청하지 않는다.
+- ALA-09~12 구현·최종 Python3.12 CI·RC3 게시 완료. 기준 main 773ebb5(PR #2 병합), 브랜치 codex/ala-initial-prepare.
+- doctor network 읽기 전용 계층 진단, prepare 최초 OS 업데이트/수동 재부팅 검증, 기존 GDM 자동 로그인·실제 세션 구분을 추가했다.
+- 기존 setup은 전체 OS 업데이트를 하지 않는다. prepare 완료후 upgrade 반복 없음. 모든 재부팅은 명시적 사용자 작업.
+- ALA-00~08/RC2 기존 구현·검증은 재사용한다. RC2를 덮어쓰지 않는다.
+- 실기기 수용 ALA-07 및 RC3 추가 수용 미수행. 접속 장비 식별/호스트키 확인과 실제 화면 관찰이 남아 있다. 유지보수 시간 허락을 다시 묻지 않는다.
+- 다음: Draft PR #3 검토 및 장비 식별/호스트키·화면 확인 경로 확보 후 CPU→GPU 실기기 수용. 실제 장비 수용 전 정식 v0.1.0으로 표시하지 않는다.
 
 ## 확정 결정
 
@@ -128,3 +128,42 @@ AGENTS.md → 계획 → 이 문서 → git status/diff/log를 읽고 현재 단
 - CI 산출물의 전체 manifest/현재 runtime 소스 일치를 확인하고 별도 RC2에 게시했다: https://github.com/ubion-dev/project-ai-learning-analytics-instance-setup/releases/tag/v0.1.0-rc.2
 - RC2 SHA256: 27c1c5083f37f7188164d1f5266e9b3d475a2c010f81a72b6c126661c2fcd3ab. 기존 RC1 자산은 변경하지 않았다.
 - 남은 조건은 ALA-07 실기기 수용과 이번 장치/커널 보존 수용이다. 실제 서버에 설정·설치·재부팅을 수행하지 않았다.
+
+
+## ALA-09~12 시작 (2026-10-29)
+사용자 승인 계획을 먼저 저장했다. main 773ebb5, PR #2 병합 확인. 브랜치 codex/ala-initial-prepare.
+현재 구현 전. network/prepare/display를 분리하고 공통 인터페이스는 계획의 추가 계약을 따른다.
+기존 RC2 검증은 재사용. 새 변경은 RC3로 검증. 실기기 접속 키/화면 관찰 미확인으로 실기기 수용 미수행.
+
+
+## ALA-09~12 구현·로컬 검증
+
+- 계획 먼저 저장/커밋 9031031. network/prepare/display 영역별 분담, root가 jobs/service/CLI/TUI/engine/문서 통합.
+- network: 현재 장치·modalias·모듈·펌웨어 RPM 무결성·현재 부팅 초기화·rfkill·NM 프로필/IP/route/DNS를 분리. 외부 probe 명시 옵션만 사용하고 host scope로 표시. inactive 프로필 autoconnect=no는 정보 상태.
+- prepare: operation='prepare' 고정 worker, 기존 single lock/record 재사용. 별도 root0600 prepare.json에 RPM 전후·트랜잭션/boot/예상 커널 기록. 공식 repo HTTPS/서명키 패키지, 외부 모듈/공간/실행작업 검사. 임시 plan metadata. 완료·같은boot·verifying 재시도에서 전체 업데이트 반복하지 않음.
+- display: configuration/session/lock/GDM 진단/visual acceptance 분리. URL 없거나 autostart off에서도 자동 로그인 준비. 실제 화면 수용은 자동 검사 범위 밖.
+- review 수정: 업데이트후 정책 drift를 완료로 숨기는 checkpoint 순서 수정, verifying의 TUI 재시도 허용, 공식 nmcli 필드 GENERAL.NM-MANAGED 검증 및 mock allowlist 강화.
+- 공식 Rocky10.2 rocky-repos/rocky-gpg-keys RPM에서 repo HTTPS/gpgcheck/키 경로/패키지 소유를 확인. 실제 DNF transaction 또는 실제 장비 검증을 수행한 것은 아님.
+- 로컬 전체 335 passed+40 subtests(123.11s) 이후 리뷰 회귀13개 추가. 최종 수집348개.
+- 변경범위 최종 prepare/network/TUI: 96 passed(10.96s). 앞선 engine/jobs/display/network:118 passed+3subtests. prepare44/network33/display35 개별통과.
+- 빌드: Python3.14 고정 wheelhouse로 dist/ala-0.1.0rc3.tar.gz 생성. diff --check/entry help/installer bash 문법 정상. 최종 Python3.12 CI 및 후보 manifest 확인이 남음.
+- 최종 수용은 docs/ACCEPTANCE.md의 RC3 항목을 CPU→GPU 순서로 수행. 새 원격 로그인·설치·재부팅은 이 작업에서 수행하지 않았다.
+
+
+## RC3 최종 검증 및 인계
+
+- 기능 commit: 4bc033b762e061555abad30b9e17ef0c0744e475. PR #3: https://github.com/ubion-dev/project-ai-learning-analytics-instance-setup/pull/3 (Draft, 자동 병합 안 함).
+- Python3.12 CI: https://github.com/ubion-dev/project-ai-learning-analytics-instance-setup/actions/runs/40890011688 — 348 passed + 40 subtests, 62.98s. Bash 문법/고정 wheel 후보 빌드/CLI smoke 성공.
+- 로컬 변경범위 최종96 tests 통과. 배포의51개 manifest hash 및 각 source 일치, CI archive와 local archive byte 일치, 문서 local links 정상.
+- RC3: https://github.com/ubion-dev/project-ai-learning-analytics-instance-setup/releases/tag/v0.1.0-rc.3
+- SHA256: 66e3c00e4e468a39a08b384ca96669774b80f081f4f3229bbf1eaa31d4d94935. CI 산출물 사용. RC1/RC2 변경 없음.
+- GitHub connector는 이 private repo에서404여서 기존 인증 gh로 PR/CI/후보를 처리했다.
+- 실제 Rocky의 DNF transaction·CPU/GPU 드라이버·자동 로그인·재부팅·화면 수용 미수행. 서버 키 검증 우회나 원격 설정 변경 없이 구현/자동검증 단계만 완료했다.
+
+## ALA-12 사용 안내 보완 (2026-10-30)
+
+- 사용자 요청으로 README를 Mac 다운로드·검사·SCP → Rocky 도구 설치 → 구성 저장 → 선택적 OS 준비 → 환경 적용 → 재부팅 확인 순서로 재구성했다.
+- 도구 설치/설정 저장/plan/apply의 차이, 자동 로그인·잠금화면 확인, TUI 메뉴, Chrome·Wi-Fi 진단, SSH 재접속 후 실행 기록 조회를 정리했다. 사용자·주소는 일반 예시만 사용한다.
+- 런타임·기존 RC3 자산은 변경하지 않는다. 현재 작업은 문서 보완이며 실제 장비 수용 완료를 뜻하지 않는다.
+- 검증: CLI argparse·Config·TUI 메뉴 및 INSTALL/PREPARATION과 대조. README 상대 링크 11개 존재, Bash 예시 11개 `bash -n`, `git diff --check` 통과. 예시 명령을 실제 서버에 실행하지 않았다. 코드 무변경이므로 기존 348개+40 subtests 결과를 재사용한다.
+- 기존 PR #3 OPEN 확인. 이번 문서 커밋은 같은 브랜치에 추가하며 다음 작업은 CPU→GPU 실기기 수용이다.

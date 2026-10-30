@@ -20,6 +20,7 @@ unit 조회 실패는 실제 작업 중단으로 단정하지 않습니다. 조�
 | `/etc/ala/config.json` | 기대 구성, root만 변경 |
 | `/opt/ala/releases/` | 버전별 독립 실행 코드와 전용 venv |
 | `/opt/ala/current` | 현재 설치 버전 |
+| `/var/lib/ala/prepare.json` | 최초 OS 준비 상태·RPM 변경·부팅 검증 기록 |
 | `/var/lib/ala/runs/` | 구성 스냅샷·부팅 ID·단계 결과·로그 |
 | `/var/lib/ala/backups/` | 새 설정 백업 |
 | `/var/lib/ala/hardware-reboot-required.json` | 장치 지원 패키지 설치 후 재부팅 대기 기록 |
@@ -71,3 +72,17 @@ PCI/USB 정보와 기존 드라이버 연결을 조사하며, 검증된 공식 �
 구체적인 지원 범위와 대기·차단 해석은 [드라이버 정책](DRIVERS.md)을 참고하세요.
 
 BIOS 전원 복구, 디스크 암호 입력, 앱 컨테이너 restart 정책과 DB 영속화는 별도입니다.
+
+
+## 초기 OS 준비와 바탕화면 자동 로그인
+
+`ala prepare --plan/--apply`는 최초 공식 OS 업데이트를 위한 별도 작업입니다. 자동 재부팅·자동 재개하지 않습니다.
+`ala status`의 preparation 결과와 `ala runs`에서 상태를 확인합니다. 완료 후 재실행은 OS 업데이트를 반복하지 않습니다.
+초기 준비 중 설치되는 패키지의 스크립트는 서비스를 재시작할 수 있으므로 운영 중 정기 업데이트용으로 사용하지 않습니다.
+단계별 설명은 [초기 준비](PREPARATION.md)를 따르세요.
+
+자동 로그인은 계정 비밀번호를 삭제하는 방식이 아닙니다. GDM에서 지정한 일반 사용자로 로그인합니다.
+`display.configuration`은 구성 준비, `display.session`과 `display.session_lock`은 현재 로컬 세션/잠금 힌트입니다.
+URL 미입력 또는 Chrome 자동 실행 off는 바탕화면 자동 로그인을 끄지 않습니다.
+`display.visual_acceptance`는 실제 화면 관찰이 자동 검사 범위 밖임을 표시합니다. 모든 설정이 맞아도 실제 화면 확인은 별도입니다.
+로그인 화면·잠금 화면·GDM 또는 그래픽 초기화 장애는 서로 다른 상태로 진단합니다. GDM을 강제 재시작하지 않습니다.

@@ -159,7 +159,7 @@ def _file_result(id, path, expected, uid):
                    '일치' if valid else '차이 있음', 'ala setup --apply' if not valid else '')
 
 
-def _graphical_sessions(host, uid):
+def _graphical_sessions(host, uid, *, greeters=None):
     listed = host.run(['loginctl', 'list-sessions', '--no-legend', '--no-pager'])
     if listed.returncode:
         return None, listed.stderr or '로그인 세션 조회 실패'
@@ -172,10 +172,13 @@ def _graphical_sessions(host, uid):
         if not re.fullmatch(r'[a-zA-Z0-9_-]+', session_id):
             continue
         result = host.run(['loginctl', 'show-session', session_id, '--property=User', '--property=Type',
-                           '--property=Class', '--property=Remote', '--property=Active', '--property=State'])
+                           '--property=Class', '--property=Remote', '--property=Active', '--property=State', '--property=LockedHint'])
         if result.returncode:
             return None, '로그인 세션 상세 조회 실패'
         value = _properties(result.stdout)
+        if (greeters is not None and value.get('Class') == 'greeter' and value.get('Active') == 'yes'
+                and value.get('Remote') == 'no' and value.get('Type') in {'x11', 'wayland'}):
+            greeters.append(session_id)
         if value.get('User') == str(uid) and value.get('Type') in {'x11', 'wayland'} and value.get('Class') in {'user', 'user-early'} and value.get('Remote') == 'no' and value.get('State') != 'closing':
             sessions.append((session_id, value))
     return sessions, ''
@@ -202,6 +205,55 @@ def _user_call(config, host, paths, action):
     if result.returncode and 'exit_code' not in value:
         value.update(exit_code=1, state='error')
     return value
+
+
+def _gdm_diagnostics(host):
+    """Summarize current-boot evidence without exporting raw authentication logs."""
+    status = host.run(['systemctl', 'show', 'gdm.service', '--property=LoadState',
+                       '--property=ActiveState', '--property=SubState', '--property=Result'])
+    values = _properties(status.stdout)
+    if status.returncode or not values.get('ActiveState'):
+        state, actual = 'unknown', 'GDM 실행 상태 조회 불가'
+    elif values.get('LoadState') == 'not-found':
+        state, actual = 'blocked', 'GDM 서비스 없음'
+    elif values['ActiveState'] == 'failed':
+        state, actual = 'error', 'GDM 서비스 실패'
+    elif values['ActiveState'] == 'active':
+        state, actual = 'pending', 'GDM 실행 중, 대상 사용자 바탕화면 세션 없음'
+    else:
+        state, actual = 'pending', 'GDM 서비스 비활성 또는 시작 중'
+    results = [_result('display.gdm_runtime', state, '활성 GDM과 사용자 그래픽 세션', actual,
+                       '재부팅 후 재검사; 계속되면 journalctl -b -u gdm.service 확인')]
+    logs = host.run(['journalctl', '-b', '-u', 'gdm.service', '-n', '80',
+                     '--no-pager', '--output=cat'], timeout=10)
+    if logs.returncode:
+        results.append(_result('display.gdm_diagnostics', 'unknown', '현재 부팅 GDM 로그',
+                               '로그 조회 불가', '관리자 권한과 journal 접근 권한 확인'))
+        return results
+    # Categories only: logs can contain account names or authentication metadata.
+    text = logs.stdout[-16384:].lower()
+    categories = []
+    for name, pattern in (
+        ('그래픽 초기화 오류 단서', r'no screens found|failed to (?:start|initialize).*(?:display|wayland|x server)|failed to open.*drm'),
+        ('로그인·세션 시작 오류 단서', r'authentication failure|pam.*(?:error|failed)|session.*(?:failed|error)'),
+    ):
+        if re.search(pattern, text):
+            categories.append(name)
+    results.append(_result('display.gdm_diagnostics', 'pending', '사용자 세션 시작',
+                           categories or ['최근 GDM 로그에서 분류 가능한 원인 미확인'],
+                           '현재 부팅 GDM 로그와 GPU 상태 확인; 로그 단서만으로 원인을 확정하지 않습니다.'))
+    return results
+
+
+def _configuration_readiness(results):
+    ids = {'display.gdm', 'display.autologin', 'display.gdm_enabled',
+           'display.default_target', 'display.initial_setup'}
+    relevant = [r for r in results if r.id in ids]
+    state = next((candidate for candidate in ('error', 'blocked', 'unknown', 'change_required', 'pending')
+                  if any(r.state == candidate for r in relevant)), 'ok')
+    return _result('display.configuration', state, '자동 로그인·그래픽 부팅 설정 준비',
+                   {r.id: r.state for r in relevant},
+                   '설정 준비와 실제 세션·화면 표시는 별도로 검사합니다.')
 
 
 def inspect_display(config: Config, host=None, paths=None):
@@ -238,6 +290,8 @@ def inspect_display(config: Config, host=None, paths=None):
                     value = host.run(argv)
                     state = 'unknown' if value.returncode in {124, 127} else 'ok' if value.stdout.strip() == expected and value.returncode == 0 else 'change_required'
                     results.append(_result(id, state, expected, value.stdout.strip() or value.stderr.strip(), 'ala setup --apply' if state != 'ok' else ''))
+        if config.display:
+            results.append(_configuration_readiness(results))
         if config.display and config.autostart:
             results.append(_file_result('chrome.autostart', autostart, desktop_text(), uid))
         elif autostart.exists() or autostart.is_symlink():
@@ -249,26 +303,46 @@ def inspect_display(config: Config, host=None, paths=None):
             return results + [_result('chrome.runtime', 'not_applicable', False, False)]
         if config.autostart and not config.url:
             results.append(_result('chrome.url', 'pending', '로그인 없는 DID URL', '입력 대기', 'ala config edit'))
-        sessions, reason = _graphical_sessions(host, uid)
+        greeters = []
+        sessions, reason = _graphical_sessions(host, uid, greeters=greeters)
         if sessions is None:
             results.append(_result('display.session', 'unknown', '그래픽 세션 하나', reason))
         elif len(sessions) > 1:
             results.append(_result('display.session', 'blocked', '그래픽 세션 하나', len(sessions), '중복 그래픽 세션을 정리하세요. 임의 선택하지 않습니다.'))
         elif not sessions or sessions[0][1].get('Active') != 'yes':
-            results.append(_result('display.session', 'pending', '활성 GNOME 세션', '없음/비활성', '다음 그래픽 로그인 또는 유지보수 재부팅 후 검사'))
+            results.append(_result('display.session', 'pending', '활성 로컬 그래픽 세션', '없음/비활성', '다음 부팅 후 자동 로그인 결과를 재검사하세요.'))
+            if greeters:
+                results.append(_result('display.login_screen', 'pending', '대상 사용자 바탕화면 세션',
+                                       '활성 로그인 화면(greeter) 세션 감지',
+                                       '자동 로그인 설정 적용 후 재부팅; 계속 로그인 화면이면 GDM 로그 확인',
+                                       '다른 seat의 로그인 화면일 수 있으므로 모니터 표시를 확정하지 않습니다.'))
+            results.extend(_gdm_diagnostics(host))
         else:
             results.append(_result('display.session', 'ok', '그래픽 세션 하나', sessions[0][0]))
-            runtime = _user_call(config, host, paths, 'check')
-            if isinstance(runtime.get('results'), list):
-                results.extend(CheckResult(**item) for item in runtime['results'])
+            locked = sessions[0][1].get('LockedHint')
+            results.append(_result('display.session_lock',
+                                   'pending' if locked == 'yes' else 'ok' if locked == 'no' else 'unknown',
+                                   '잠금 해제된 세션', locked or '잠금 상태 조회 불가',
+                                   '잠금 정책 적용 후 재부팅하여 자동 로그인 확인' if locked == 'yes' else '',
+                                   '잠금 힌트는 실제 화면 표시를 검증하지 않습니다.'))
+            if config.autostart and config.url:
+                runtime = _user_call(config, host, paths, 'check')
+                if isinstance(runtime.get('results'), list):
+                    results.extend(CheckResult(**item) for item in runtime['results'])
+                else:
+                    results.append(_result('chrome.runtime', runtime.get('state', 'unknown'), 'Chrome 실행 확인', runtime.get('reason', '응답 없음')))
             else:
-                results.append(_result('chrome.runtime', runtime.get('state', 'unknown'), 'Chrome 실행 확인', runtime.get('reason', '응답 없음')))
+                results.append(_result('chrome.runtime', 'not_applicable', '자동 시작 요구 없음',
+                                       '자동 시작 꺼짐' if not config.autostart else '주소 입력 대기'))
             settings = _user_call(config, host, paths, 'settings')
             for schema, key, expected in SETTINGS:
                 name = schema + '.' + key
                 actual = settings.get('settings', {}).get(name)
                 state = 'unknown' if actual is None else 'ok' if actual == expected else 'pending'
                 results.append(_result('display.live.' + key, state, expected, actual, 'GNOME 재로그인 후 재검사' if state != 'ok' else ''))
+        results.append(_result('display.visual_acceptance', 'not_applicable', '실제 화면 관찰', '자동 검사 범위 밖',
+                               '실기기 재부팅 후 바탕화면·DID 표시를 별도로 확인하고 수용 기록에 남기세요.',
+                               '설정·세션·프로세스 검사는 모니터의 실제 표시나 팝업 부재를 보증하지 않습니다.'))
     except (OSError, ValueError) as exc:
         results.append(_result('display.inspect', 'blocked' if isinstance(exc, ValueError) else 'unknown', '표시 구성 조회', str(exc)))
     return results

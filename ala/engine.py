@@ -441,6 +441,10 @@ class Engine:
         return ([self._package(name, "dev_tools") for name in ("neovim", "btop", "tmux")]
                 if self.config.dev_tools else [self._result("dev_tools", "not_applicable", False, False)])
 
+    def _network(self):
+        from .network import inspect_network
+        return inspect_network(host=self.host, paths=self.paths).results
+
     def _hardware(self, apply=False):
         from .hardware import apply_hardware, inspect_hardware
         return (apply_hardware if apply else inspect_hardware)(self.host, self.paths)
@@ -461,7 +465,7 @@ class Engine:
         results = [self._result("platform", "ok", "Rocky Linux 10 x86_64", "지원 환경")]
         _, account = self._account(self.config.user)
         results.append(account)
-        stages = [self._base, self._updates, self._hardware, self._shell, self._ssh, self._docker, self._gpu, self._dev_tools, self._display_policy, self._extra_display]
+        stages = [self._base, self._updates, self._hardware, self._network, self._shell, self._ssh, self._docker, self._gpu, self._dev_tools, self._display_policy, self._extra_display]
         for inspect in stages:
             try:
                 results.extend(inspect())
