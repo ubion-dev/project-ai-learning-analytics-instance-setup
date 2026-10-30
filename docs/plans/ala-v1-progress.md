@@ -159,3 +159,11 @@ AGENTS.md → 계획 → 이 문서 → git status/diff/log를 읽고 현재 단
 - SHA256: 66e3c00e4e468a39a08b384ca96669774b80f081f4f3229bbf1eaa31d4d94935. CI 산출물 사용. RC1/RC2 변경 없음.
 - GitHub connector는 이 private repo에서404여서 기존 인증 gh로 PR/CI/후보를 처리했다.
 - 실제 Rocky의 DNF transaction·CPU/GPU 드라이버·자동 로그인·재부팅·화면 수용 미수행. 서버 키 검증 우회나 원격 설정 변경 없이 구현/자동검증 단계만 완료했다.
+
+## ALA-12 사용 안내 보완 (2026-10-30)
+
+- 사용자 요청으로 README를 Mac 다운로드·검사·SCP → Rocky 도구 설치 → 구성 저장 → 선택적 OS 준비 → 환경 적용 → 재부팅 확인 순서로 재구성했다.
+- 도구 설치/설정 저장/plan/apply의 차이, 자동 로그인·잠금화면 확인, TUI 메뉴, Chrome·Wi-Fi 진단, SSH 재접속 후 실행 기록 조회를 정리했다. 사용자·주소는 일반 예시만 사용한다.
+- 런타임·기존 RC3 자산은 변경하지 않는다. 현재 작업은 문서 보완이며 실제 장비 수용 완료를 뜻하지 않는다.
+- 검증: CLI argparse·Config·TUI 메뉴 및 INSTALL/PREPARATION과 대조. README 상대 링크 11개 존재, Bash 예시 11개 `bash -n`, `git diff --check` 통과. 예시 명령을 실제 서버에 실행하지 않았다. 코드 무변경이므로 기존 348개+40 subtests 결과를 재사용한다.
+- 기존 PR #3 OPEN 확인. 이번 문서 커밋은 같은 브랜치에 추가하며 다음 작업은 CPU→GPU 실기기 수용이다.
