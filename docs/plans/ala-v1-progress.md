@@ -18,3 +18,13 @@
 - Gitleaks 공개 후보 소스·배포 파일 검사에서 탐지 없음. 배포 manifest 51개 해시와 내부 경로 제외 확인.
 - 버전 상수 외 기존 Python/Bash 실행 코드가 기준선과 동일함을 대조했다. README/INSTALL 상대 링크 10개와 Bash 예시 6개 문법 정상.
 - RC4 SHA256: a864fcb093c656092546d1f9428ead352ea019955eafb2b15bcd747dcedee618. 공개 CI·익명 다운로드 검증은 다음 단계다.
+
+## 공개 배포 검증 완료
+
+- PR #1: https://github.com/ubion-dev/project-ai-learning-analytics-instance-setup/pull/1 (자동 병합하지 않음).
+- 기능/배포 commit: 055c52d7fe3be1f8ff41601488c27559f1341e6d.
+- Python3.12 CI: https://github.com/ubion-dev/project-ai-learning-analytics-instance-setup/actions/runs/41310328567 — 348 passed + 40 subtests, 67.36초. Bash/고정 wheel/CLI smoke 통과.
+- 공개 RC4: https://github.com/ubion-dev/project-ai-learning-analytics-instance-setup/releases/tag/v0.1.0-rc.4
+- CI 산출물과 로컬 산출물 byte 일치. 인증 없이 curl로 두 자산 다운로드, SHA-256 OK, CI와 byte 일치, 배포 entry의 --version/--help 정상.
+- 공개 Git 이력은 새 기준선부터 시작하며 이전 내부 이력은 가져오지 않았다. 공개 저장소 visibility PUBLIC 확인.
+- 후속 조건: PR 검토·병합, 실제 CPU/GPU 수용. 자동 업데이트·서명 검증은 별도 구현 대상이다.
