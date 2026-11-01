@@ -1,0 +1,104 @@
+#!/usr/bin/env bash
+# Run Chrome on the logged-in desktop using the user's service environment, including over SSH.
+set -Eeuo pipefail
+die() { printf '%s\n' "$*" >&2; exit 1; }
+usage() {
+  cat <<'HELP'
+사용법 (화면에 로그인된 일반 사용자로, sudo 없이):
+  chrome-did start 'https://example.com'   사이트를 F11 전체화면으로 실행
+  chrome-did stop                          이 도구로 실행한 DID Chrome만 종료
+  chrome-did status                        서비스 실행 상태 확인
+  chrome-did logs                          현재 부팅의 최근 실행 기록 확인
+  chrome-did check ['https://example.com']  화면 환경·실행 옵션·선택 사이트 주소 검사
+
+번역·기본 브라우저·소개 안내 정책은 setup-base.sh에서 준비합니다.
+첫 실행·탭 복원 안내 차단 옵션을 자동으로 포함합니다.
+DID 전용 프로필을 사용하며, 일반 Chrome의 로그인 정보와 구분됩니다.
+GNOME 로그인과 화면 환경 등록이 필요합니다. 부팅 자동 실행을 등록하지 않습니다.
+HELP
+}
+action=${1:---help}
+case "$action" in
+  -h|--help) usage; exit 0 ;;
+  start|check)
+    if [[ $action == start ]]; then
+      [[ $# == 2 ]] || die "사용법: chrome-did start 'https://example.com'"
+    else
+      [[ $# == 1 || $# == 2 ]] || die "사용법: chrome-did check ['https://example.com']"
+    fi
+    url=${2:-}
+    if [[ -n $url || $# == 2 ]]; then
+      [[ $url == https://?* || $url == http://?* ]] && [[ ! $url =~ [[:space:][:cntrl:]] ]] || die 'http:// 또는 https:// 사이트 주소를 지정하세요.'
+    fi
+    ;;
+  stop|status|logs) [[ $# == 1 ]] || die '이 명령에는 추가 인자가 필요하지 않습니다.' ;;
+  *) die "알 수 없는 명령: $action. chrome-did --help를 확인하세요." ;;
+esac
+[[ $(id -u) != 0 ]] || die '화면에 로그인된 사용자로 sudo 없이 실행하세요.'
+unit=did-chrome.service
+case "$action" in
+  start)
+    command -v google-chrome-stable >/dev/null || die '먼저 sudo bash ./setup-base.sh를 실행하세요.'
+    if systemctl --user is-active --quiet "$unit"; then
+      echo '[유지] DID Chrome 실행 중. 주소 변경은 chrome-did stop 후 start로 진행하세요.'
+      exit 0
+    fi
+    manager_environment=$(systemctl --user show-environment) || die '사용자 서비스에 연결할 수 없습니다. 화면에 로그인된 계정으로 SSH 접속하세요.'
+    grep -Eq '^(DISPLAY|WAYLAND_DISPLAY)=.+' <<< "$manager_environment" || die '로그인된 화면 환경이 없습니다. GNOME 로그인·환경 등록 상태를 확인하세요. DISPLAY 값을 임의로 지정하지 않았습니다.'
+    chrome_args=(--start-fullscreen --no-first-run --no-default-browser-check --hide-crash-restore-bubble)
+    if ! grep -Eq '^DISPLAY=.+' <<< "$manager_environment"; then
+      chrome_args+=(--ozone-platform=wayland)
+    fi
+    profile="${XDG_CONFIG_HOME:-$HOME/.config}/chrome-did"
+    systemd-run --user --collect --unit="$unit" --expand-environment=no \
+      /usr/bin/google-chrome-stable --user-data-dir="$profile" "${chrome_args[@]}" "$url"
+    echo '실행 요청 완료. chrome-did status / chrome-did logs로 확인하세요.'
+    ;;
+  stop)
+    systemctl --user stop "$unit"
+    ;;
+  status) systemctl --user status "$unit" --no-pager --full ;;
+  logs) journalctl --user --boot -u "$unit" -n 50 --no-pager ;;
+  check)
+    manager_environment=$(systemctl --user show-environment) || die '[FAIL] 사용자 서비스에 연결할 수 없습니다.'
+    grep -Eq '^(DISPLAY|WAYLAND_DISPLAY)=.+' <<< "$manager_environment" || die '[FAIL] 사용자 서비스에 로그인된 화면 환경이 없습니다.'
+    echo '[OK] 사용자 서비스의 화면 환경'
+    if ! systemctl --user is-active --quiet "$unit"; then
+      if [[ -n $url ]]; then die '[FAIL] 기대한 사이트를 표시할 DID Chrome이 실행 중이 아닙니다.'; fi
+      echo '[대기] DID Chrome 미실행. 실행 후 chrome-did check로 다시 검사하세요.'
+      exit 2
+    fi
+    pid=$(systemctl --user show "$unit" --property=MainPID --value) || die '[FAIL] DID Chrome PID 조회 실패'
+    [[ $pid =~ ^[1-9][0-9]*$ ]] || die '[FAIL] DID Chrome의 유효한 PID가 없습니다.'
+    profile="${XDG_CONFIG_HOME:-$HOME/.config}/chrome-did"
+    python3 - "$pid" "$profile" "$url" <<'CHROME_CHECK'
+import os
+from pathlib import Path
+import sys
+
+pid, profile, expected_url = sys.argv[1:]
+process = Path('/proc') / pid
+try:
+    uid_line = next(line for line in (process / 'status').read_text().splitlines() if line.startswith('Uid:'))
+    if int(uid_line.split()[1]) != os.getuid():
+        raise ValueError('현재 사용자 소유의 Chrome 프로세스가 아닙니다.')
+    arguments = (process / 'cmdline').read_bytes().decode().rstrip('\0').split('\0')
+except (OSError, ValueError, StopIteration) as error:
+    print(f'[FAIL] Chrome 실행 인자 조회: {error}', file=sys.stderr)
+    sys.exit(1)
+checks = {
+    'F11 전체화면 시작 옵션': '--start-fullscreen' in arguments and '--kiosk' not in arguments,
+    '처음 실행 안내 차단': '--no-first-run' in arguments,
+    '기본 브라우저 안내 차단': '--no-default-browser-check' in arguments,
+    '탭 복원 안내 차단': '--hide-crash-restore-bubble' in arguments,
+    'DID 전용 프로필': '--user-data-dir=' + profile in arguments,
+}
+if expected_url:
+    checks['기대한 사이트의 시작 주소'] = expected_url in arguments
+for description, correct in checks.items():
+    print(f'[{"OK" if correct else "FAIL"}] {description}')
+print('검사 범위: 실행 인자. 실제 창의 전체화면 전환·현재 탭 URL·팝업 표시 상태는 확인하지 않습니다.')
+sys.exit(0 if all(checks.values()) else 1)
+CHROME_CHECK
+    ;;
+esac
