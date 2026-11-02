@@ -278,3 +278,13 @@
 - 상세 신호가 없는 네이티브 단계가 대기/차단으로 끝나더라도 정상인 개별 최종 검사는 현재 정상으로 유지한다. 신호·검사가 모두 없으면 확인 불가로 표시하며 단순히 신호가 없다는 이유로 미실행을 추정하지 않는다.
 - 실제로 방문하지 않은 부모 단계와 정상 유지로 건너뛴 단계의 미실행 구분은 유지했다. 네이티브 화면/하드웨어·미실행 회귀 3개를 추가했다.
 - 세부 모델·스트리밍·worker·TUI·진행 통합 64개 통과. 최초 CI 41425251970의 전체 436 passed + 42 subtests는 통과했고, 이 판정 보강을 포함한 최종 CI를 다시 확인한다.
+
+## ALA-21 RC12 후보 완료
+
+- 최종 구현 63e7325e4f048b03f515a962fe20b042c0920066. CI 41426462906: Python 3.12 전체 439 passed + 42 subtests (95.81초), 공개 이력 검사·Bash·고정 의존성·빌드·CLI smoke 통과.
+- 별도 읽기 검토에서 설치 명령/보안 조건/종료 코드 유지, 관측 오류 후 출력 소비, 구형 worker/Prepare 호환성을 확인했다.
+- CI RC12 설치 묶음의 체크섬·manifest 57개 파일 해시 검증, 인증 없는 공개 다운로드와 CI 파일 byte 일치 확인. SHA-256: 26f09035d9ac1c2646e7db573f403354386b4136b412f76d0ae1a660ca63c153.
+- PR #6을 최종 세부 진행 표시와 검증 결과로 갱신했다: https://github.com/ubion-dev/project-ai-learning-analytics-instance-setup/pull/6
+- 시험판: https://github.com/ubion-dev/project-ai-learning-analytics-instance-setup/releases/tag/v0.1.0-rc.12
+- 현재 설정 작업이 끝난 뒤 ala update --prerelease로 갱신하고 다시 실행한다. 이미 실행 중인 구버전 작업의 세부 신호를 새로 복원하지 않는다.
+- 실제 Rocky 수용은 미완료다. 이번 작업은 실제 장비를 변경하지 않았다. 후속은 PR 검토·병합과 장비에서 세부 진행/최종 상태의 가시성 확인이다.
