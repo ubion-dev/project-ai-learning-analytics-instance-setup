@@ -248,3 +248,11 @@
 - 모델 11개, UI/기본 콘솔/관리자 통합 총 31개 통과. 기존 UI 검증은 전체 보고서 문자열 대신 해당 행/상세를 확인하도록 바꾸어 미적용·불명확 상태 검증 의도를 유지했다.
 - 합성 데이터의 RC10 사진 패턴(kept 5개, Docker 시작/완료, GPU 시작)을 80×24/120×36으로 렌더링해 가시성을 확인했다. 실제 장비 변경은 하지 않았다.
 - PR #5 병합 확인으로 main cbb1292 기반 codex/setup-progress에 분리했다. 전체 CI와 RC11 후보 준비가 남아 있다.
+
+## ALA-20 RC11 후보 완료
+
+- 구현 bc52445. CI 41420766710: Python 3.12 전체 413 passed + 40 subtests (89.18초), 공개 이력 검사·Bash·고정 의존성·후보 빌드·CLI smoke 통과.
+- RC11 체크섬·manifest 56개 파일 검증, 인증 없는 공개 다운로드 byte 일치 확인.
+- PR #6: https://github.com/ubion-dev/project-ai-learning-analytics-instance-setup/pull/6
+- 시험판: https://github.com/ubion-dev/project-ai-learning-analytics-instance-setup/releases/tag/v0.1.0-rc.11
+- 실제 설정 작업 중에는 도구 갱신 잠금이 적용되므로 작업 종료 후 업데이트해야 한다. 실제 Rocky 화면 수용은 미완료이며 이번 변경은 설치 엔진/실제 장비를 수정하지 않는다.
