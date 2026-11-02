@@ -20,16 +20,11 @@ jobs:
       - uses: actions/setup-python@v7.1.0
         with:
           python-version: '3.12'
-      - name: Install pinned official secret scanner
-        run: |
-          curl --fail --location --silent --show-error --output "$RUNNER_TEMP/gitleaks.tar.gz" https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz
-          echo "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb  $RUNNER_TEMP/gitleaks.tar.gz" | sha256sum --check
-          mkdir -p "$RUNNER_TEMP/ala-tools"
-          tar -xzf "$RUNNER_TEMP/gitleaks.tar.gz" -C "$RUNNER_TEMP/ala-tools" gitleaks
-          echo "$RUNNER_TEMP/ala-tools" >> "$GITHUB_PATH"
+      - uses: ./.github/actions/install-gitleaks
       - name: Inspect complete public history without printing rejected values
         run: python scripts/check-public.py --history
   tests:
+    needs: public-data
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
@@ -37,6 +32,7 @@ jobs:
       - uses: actions/setup-python@v7.1.0
         with:
           python-version: '3.12'
+      - uses: ./.github/actions/install-gitleaks
       - name: Install locked development dependencies
         run: python -m pip install --require-hashes -r requirements-dev.lock
       - name: Bash syntax
