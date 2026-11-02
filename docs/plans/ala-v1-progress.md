@@ -224,3 +224,11 @@
 - 새 TUI 전용 7개, TUI/CLI 관리자 통합 43개 통과. root 담당 엔진/콘솔/공개 정책 등 52개 + 3 subtests 통과.
 - 합성 데이터로 80×24/120×36 설정·상태 화면을 렌더링했다. Podman 원인 다음에 실제 조치를 먼저 표시하고 상태 상세 영역을 늘렸다.
 - 전체 회귀와 RC10 후보 빌드 검증 예정. 실제 Rocky 수용·Podman 사용 여부 확인은 남아 있다.
+
+## ALA-19 RC10 후보 완료
+
+- 구현 3a340ad. CI 41415708436: Python 3.12 전체 401 passed + 40 subtests (73.20초), 공개 이력 검사·Bash·고정 의존성·후보 빌드·CLI smoke 통과.
+- RC10 체크섬과 manifest 55개 파일 검증, 인증 없는 공개 다운로드 byte 일치 확인.
+- 기존 PR #5를 최종 두 화면 TUI 범위로 갱신했다: https://github.com/ubion-dev/project-ai-learning-analytics-instance-setup/pull/5
+- 시험판: https://github.com/ubion-dev/project-ai-learning-analytics-instance-setup/releases/tag/v0.1.0-rc.10
+- 실제 Rocky의 TUI·sudo·화면 수용과 Podman 사용 여부 확인·정리는 남아 있다. 실제 서버 패키지는 이번 작업에서 변경하지 않았다.
