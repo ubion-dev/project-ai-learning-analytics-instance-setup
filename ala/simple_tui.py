@@ -11,6 +11,7 @@ from textual import events, on
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
+from textual.message import Message
 from textual.widgets import Button, ContentSwitcher, DataTable, Footer, Static, Tab, Tabs, TextArea
 
 from . import __version__
@@ -21,6 +22,21 @@ from .progress import progress_rows, STATE_LABELS, STATE_STYLES
 ACTIVE = {'queued', 'running'}
 JOB_LABELS = {'queued': '시작 대기', 'running': '실행 중', 'completed': '완료',
               'pending': '적용 대기', 'failed': '조치 필요', 'interrupted': '중단됨'}
+
+
+class SetupTable(DataTable):
+    class Resized(Message):
+        """The table's measured viewport has changed after screen layout."""
+
+    def on_resize(self, event: events.Resize):
+        self.post_message(self.Resized())
+
+
+class DetailArea(TextArea):
+    def load_text(self, text: str):
+        super().load_text(text)
+        # With no cursor highlight, unchanged document geometry need not repaint.
+        self.refresh()
 
 
 def value_text(value):
@@ -62,32 +78,59 @@ class SimpleApp(App[None]):
     BINDINGS = [Binding('q', 'quit', '종료'), Binding('s', 'status', '상태 확인'),
                 Binding('g', 'setup', '간편 설정'), Binding('r', 'refresh', '새로고침')]
     CSS = """
-    Screen { background: #10151c; color: #e9f0f7; }
-    #heading { height: 1; background: #17212d; padding: 0 2; color: #b5e9d9; }
-    #small-terminal { display: none; height: auto; max-height: 2; background: #493622; color: #ffe0af; padding: 0 2; }
-    #tabs { height: 3; }
-    #notice, #update-notice { height: auto; max-height: 2; padding: 0 2; color: #c1d2e2; }
+    Screen { background: #10151c; color: #e9f0f7; align-horizontal: center; }
+    #heading, #tabs, #notice, #update-notice, #small-terminal, #body { width: 100%; max-width: 132; }
+    #heading { height: 3; background: #17212d; padding: 1 3; color: #b5e9d9; }
+    #small-terminal { display: none; height: auto; max-height: 2; background: #493622; color: #ffe0af; padding: 0 3; }
+    #tabs { height: 3; padding: 0 3; }
+    #notice, #update-notice { height: auto; max-height: 2; padding: 0 3; color: #c1d2e2; }
     #update-notice { color: #83e3c4; }
-    #body { height: 1fr; align-horizontal: center; }
-    #pages { width: 100%; max-width: 100; height: 1fr; padding: 0 2; }
+    #body { height: 1fr; margin-top: 1; }
+    #pages { width: 100%; height: 1fr; padding: 0 3 1 3; }
     #setup, #status { height: 1fr; }
-    #config-summary { height: auto; max-height: 2; }
-    #setup-note { height: auto; max-height: 1; color: #aabdd0; }
-    .actions { height: 3; }
-    Button { background: #233344; color: #e9f0f7; border: tall #233344; }
+    #setup-toolbar { height: auto; margin-bottom: 1; }
+    #setup-context { width: 1fr; height: auto; }
+    #config-summary { height: auto; max-height: 3; text-style: bold; }
+    #setup-note { height: auto; max-height: 2; margin-top: 1; color: #aabdd0; }
+    .actions { height: 3; margin-bottom: 1; }
+    #setup-actions { width: 24; margin: 0 0 0 3; }
+    Button { height: 3; padding: 0 3; background: #233344; color: #e9f0f7; border: tall #233344; }
     Button.-primary { background: #83e3c4; color: #10251d; border: tall #83e3c4; text-style: bold; }
     Button:focus { border: tall #ccf7e8; }
     Button:disabled { background: #1c2835; border: tall #1c2835; color: #a4b5c6; }
     #setup-start { width: 24; }
-    #setup-progress { height: auto; max-height: 2; }
+    #setup-overview { height: auto; margin-bottom: 1; }
+    #setup-progress { height: auto; max-height: 2; margin-bottom: 1; text-style: bold; }
     #setup-summary { height: auto; max-height: 2; }
-    #setup-table { height: 1fr; min-height: 4; }
-    #setup-output { height: 5; min-height: 3; }
-    #status-summary { height: auto; max-height: 2; }
+    DataTable { background: #141d28; border: solid #34475d; border-title-color: #aabdd0; }
+    DataTable > .datatable--header { background: #233344; color: #e9f0f7; text-style: bold; }
+    DataTable > .datatable--cursor { background: #244859; }
+    DataTable:focus { border: solid #83e3c4; }
+    #setup-table { height: 1fr; min-height: 5; }
+    #setup-output { height: 7; min-height: 5; margin-top: 1; }
+    #status-summary { height: auto; max-height: 2; margin-bottom: 1; }
     #status-table { height: 1fr; min-height: 3; }
-    #status-detail { height: 7; min-height: 3; }
-    TextArea { background: #141d28; border: round #34475d; }
-    Footer { background: #17212d; color: #b5c8da; }
+    #status-detail { height: 9; min-height: 5; margin-top: 1; }
+    TextArea { background: #141d28; border: round #34475d; border-title-color: #aabdd0; padding: 0 2; }
+    TextArea:focus { border: round #83e3c4; }
+    Footer { width: 100%; background: #17212d; color: #b5c8da; }
+    Screen.compact #heading { height: 1; padding: 0 2; }
+    Screen.compact #tabs { padding: 0 1; }
+    Screen.compact #notice, Screen.compact #update-notice { padding: 0 2; }
+    Screen.compact #body { margin-top: 0; }
+    Screen.compact #pages { padding: 0 2; }
+    Screen.compact #config-summary { max-height: 2; }
+    Screen.compact #setup-note { margin-top: 0; max-height: 1; }
+    Screen.compact #setup-toolbar { margin-bottom: 0; }
+    Screen.compact #setup-actions { width: 22; margin-left: 2; }
+    Screen.compact #setup-start { width: 22; }
+    Screen.compact Button { padding: 0 2; }
+    Screen.compact #setup-overview, Screen.compact #setup-progress { margin-bottom: 0; }
+    Screen.compact #setup-table { min-height: 4; }
+    Screen.compact #setup-output { height: 5; margin-top: 0; }
+    Screen.compact #status-summary, Screen.compact .actions { margin-bottom: 0; }
+    Screen.compact #status-detail { height: 7; margin-top: 0; }
+    Screen.compact TextArea { padding: 0 1; }
     """
 
     def __init__(self, *, service, **kwargs):
@@ -105,6 +148,7 @@ class SimpleApp(App[None]):
         self._progress_rows = []
         self._last_followed_step = None
         self._expanded_steps = set()
+        self._table_layout = None
 
     def compose(self) -> ComposeResult:
         yield Static(f'ala {__version__} · 서버 환경 관리' + (' · 관리자' if os.geteuid() == 0 else ''), id='heading', markup=False)
@@ -115,27 +159,34 @@ class SimpleApp(App[None]):
         with Vertical(id='body'):
             with ContentSwitcher(initial='setup', id='pages'):
                 with Vertical(id='setup'):
-                    yield Static('현재 구성을 확인하고 있습니다.', id='config-summary', markup=False)
-                    yield Static('기존 설정을 재사용하고 필요한 항목만 보완합니다.', id='setup-note', markup=False)
-                    with Horizontal(classes='actions', id='setup-actions'):
-                        yield Button('간편 설정 실행', id='setup-start', variant='primary', disabled=True)
-                    yield Static('실행하면 SSH·화면을 닫아도 설정 작업은 계속됩니다.', id='setup-progress', markup=False)
-                    yield Static('현재 상태를 확인하고 있습니다.', id='setup-summary', markup=False)
-                    yield DataTable(id='setup-table', cursor_type='row', cursor_foreground_priority='renderable')
-                    yield TextArea('', id='setup-output', read_only=True)
+                    with Horizontal(id='setup-toolbar'):
+                        with Vertical(id='setup-context'):
+                            yield Static('현재 구성을 확인하고 있습니다.', id='config-summary', markup=False)
+                            yield Static('기존 설정을 재사용하고 필요한 항목만 보완합니다.', id='setup-note', markup=False)
+                        with Horizontal(classes='actions', id='setup-actions'):
+                            yield Button('간편 설정 실행', id='setup-start', variant='primary', disabled=True)
+                    with Vertical(id='setup-overview'):
+                        yield Static('실행하면 SSH·화면을 닫아도 설정 작업은 계속됩니다.', id='setup-progress', markup=False)
+                        yield Static('현재 상태를 확인하고 있습니다.', id='setup-summary', markup=False)
+                    yield SetupTable(id='setup-table', cursor_type='row', cursor_foreground_priority='renderable')
+                    yield DetailArea('', id='setup-output', read_only=True, show_cursor=False, highlight_cursor_line=False)
                 with Vertical(id='status'):
                     with Horizontal(classes='actions'):
                         yield Button('상태 다시 확인', id='status-refresh')
                     yield Static('아직 확인하지 않았습니다.', id='status-summary', markup=False)
                     yield DataTable(id='status-table', cursor_type='row')
-                    yield TextArea('', id='status-detail', read_only=True)
+                    yield DetailArea('', id='status-detail', read_only=True, show_cursor=False, highlight_cursor_line=False)
         yield Footer()
 
     def on_mount(self):
         self.query_one('#status-table', DataTable).add_columns('기능', '상태')
         self.query_one('#setup-table', DataTable).add_column('설정 항목', key='item', width=28)
         self.query_one('#setup-table', DataTable).add_column('현재 상태', key='state', width=14)
-        self.query_one('#setup-table', DataTable).add_column('세부 작업 · Enter 펼침', key='current', width=24)
+        self.query_one('#setup-table', DataTable).add_column('진행 중인 세부 작업', key='current', width=24)
+        self.query_one('#setup-table').border_title = '설정 항목 · Enter로 세부 보기'
+        self.query_one('#setup-output').border_title = '선택 항목 · 원인과 다음 조치'
+        self.query_one('#status-table').border_title = '기능별 검사 결과'
+        self.query_one('#status-detail').border_title = '선택 항목 · 원인과 다음 조치'
         self.render_setup_table()
         self._resize_warning()
         self.set_interval(1.5, self.poll_job)
@@ -150,6 +201,39 @@ class SimpleApp(App[None]):
     def _resize_warning(self, size=None):
         size = size or self.size
         self.query_one('#small-terminal').display = size.width < 80 or size.height < 24
+        self.screen.set_class(size.height < 32, 'compact')
+        self.call_after_refresh(self._fit_setup_table)
+
+    def _fit_setup_table(self):
+        """Use measured space without horizontal scrolling; keep the inspected row."""
+        table = self.query_one('#setup-table', DataTable)
+        if not table.size.width:
+            return
+        padding = 2 if self.size.width >= 100 else 1
+        available = max(40, table.content_size.width - 2 - 6 * padding)
+        current = max(18, min(32, available // 3))
+        widths = (max(8, available - 14 - current), 14, current)
+        row_height = 2 if self.size.height >= 40 else 1
+        layout = (widths, padding, row_height)
+        if layout == self._table_layout:
+            return
+        self._table_layout = layout
+        selected = (self._progress_rows[table.cursor_row]['id']
+                    if self._progress_rows and table.cursor_row < len(self._progress_rows) else None)
+        table.clear(columns=True)
+        table.cell_padding = padding
+        for label, key, width in zip(('설정 항목', '현재 상태', '진행 중인 세부 작업'),
+                                     ('item', 'state', 'current'), widths):
+            table.add_column(label, key=key, width=width)
+        self._progress_rows = []
+        self.render_setup_table()
+        ids = [row['id'] for row in self._progress_rows]
+        if selected in ids:
+            table.move_cursor(row=ids.index(selected), animate=False)
+
+    @on(SetupTable.Resized)
+    def setup_table_resized(self):
+        self.call_after_refresh(self._fit_setup_table)
 
     def notice(self, message):
         notice = self.query_one('#notice', Static)
@@ -229,6 +313,8 @@ class SimpleApp(App[None]):
         self.query_one('#pages', ContentSwitcher).current = section
         target = '#setup-start' if section == 'setup' else '#status-table'
         self.call_after_refresh(self.query_one(target).focus)
+        if section == 'setup':
+            self.call_after_refresh(self._fit_setup_table)
 
     @on(Button.Pressed, '#status-refresh')
     def refresh_pressed(self):
@@ -320,7 +406,8 @@ class SimpleApp(App[None]):
         if old_ids != ids:
             table.clear()
             for row in rows:
-                table.add_row(Text(row['label']), self.progress_cell(row), Text(row.get('current_step', '')), key=row['id'])
+                height = 1 if row.get('parent_id') else (2 if self.size.height >= 40 else 1)
+                table.add_row(Text(row['label']), self.progress_cell(row), Text(row.get('current_step', '')), key=row['id'], height=height)
             if selected in ids:
                 table.move_cursor(row=ids.index(selected), animate=False)
         else:
@@ -332,7 +419,13 @@ class SimpleApp(App[None]):
         for row in parents:
             label = STATE_LABELS.get(row['state'], row['state'])
             counts[label] = counts.get(label, 0) + 1
-        self.query_one('#setup-summary', Static).update(Text(' · '.join(f'{label} {count}' for label, count in counts.items())))
+        summary = Text()
+        for state in dict.fromkeys(row['state'] for row in parents):
+            label = STATE_LABELS.get(state, state)
+            if summary:
+                summary.append('   ')
+            summary.append(f'{label} {counts[label]}', style=STATE_STYLES.get(state, ''))
+        self.query_one('#setup-summary', Static).update(summary)
         running = next((row['id'] for row in rows if row.get('parent_id') and row['state'] == 'running'), None)
         running = running or next((row['id'] for row in rows if row['state'] in {'running', 'started'}), None)
         inspecting = self.focused is table or self.focused is self.query_one('#setup-output')
