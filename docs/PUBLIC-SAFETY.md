@@ -10,7 +10,7 @@
 
 공식 [Gitleaks](https://github.com/gitleaks/gitleaks)를 설치한다. CI는 고정 버전과 SHA-256을 검증한다.
 GitHub Settings → Emails에서 본인의 noreply 주소를 확인한 뒤 저장소의 `user.email`로 지정한다.
-다른 사람의 noreply 주소를 복사하지 않는다.
+다른 사람의 noreply 주소를 복사하지 않는다. GitHub가 병합 시 사용하는 noreply@github.com도 공개용 시스템 주소로 허용한다.
 
 ```bash
 bash scripts/install-git-hooks.sh

@@ -46,7 +46,7 @@ def findings(data):
             hits.add('non-loopback IP')
     for email in EMAIL.findall(text):
         domain = email.rsplit('@', 1)[1].lower()
-        if domain not in ('users.noreply.github.com', 'example.com', 'example.org', 'example.net'):
+        if email.lower() != 'noreply@github.com' and domain not in ('users.noreply.github.com', 'example.com', 'example.org', 'example.net'):
             hits.add('personal email')
     if re.search(r'/Users/[A-Za-z0-9_.-]+/|/home/(?!user/|\$|\{)[a-zA-Z][\w.-]+/', text):
         hits.add('personal home path')
@@ -73,7 +73,7 @@ def findings(data):
 
 def identity(value):
     # Commit identity must remain linked to a GitHub account without personal mail.
-    return bool(re.fullmatch(rb'[^<>\s]+@users\.noreply\.github\.com', value.strip()))
+    return value.strip() == b'noreply@github.com' or bool(re.fullmatch(rb'[^<>\s]+@users\.noreply\.github\.com', value.strip()))
 
 
 def secret_scan(blobs):

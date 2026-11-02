@@ -20,6 +20,8 @@ def test_addresses_and_email_are_not_confused_with_release_versions():
     personal = 'developer' + '@' + 'mail.invalid'
     assert 'personal email' in policy.findings(personal.encode())
     assert policy.identity(b'123+user@users.noreply.github.com')
+    assert policy.identity(b'noreply@github.com')
+    assert policy.findings(b'noreply@github.com') == []
     assert not policy.identity(personal.encode())
 
 
