@@ -19,9 +19,11 @@ class Operations:
         self.release = release or Path(__file__).resolve().parents[1]
 
     def config(self):
+        if self.paths.config.is_symlink():
+            raise PermissionError('구성 파일에 심볼릭 링크를 사용하지 않습니다.')
         if not self.paths.config.exists():
             user = os.environ.get('SUDO_USER', '')
-            return Config(user=user if user != 'root' else '')
+            return Config(user=user if user != 'root' else '', autostart=False)
         info = self.paths.config.lstat()
         if self.paths.config.is_symlink() or info.st_uid != os.geteuid() or info.st_mode & 0o022:
             raise PermissionError('구성 파일 소유자/쓰기 권한을 확인하세요.')
@@ -70,17 +72,15 @@ class Operations:
             return report
         if action == 'submit':
             def current_config():
-                if not self.paths.config.is_file():
-                    raise ValueError('먼저 ala config edit 또는 config import로 구성을 저장하세요.')
                 config = self.config()
                 if not config.user:
-                    raise ValueError('먼저 ala config edit에서 화면 사용자를 지정하세요.')
+                    raise ValueError('기존 일반 사용자로 SSH 접속한 뒤 ala를 실행하세요. root로 직접 접속했다면 먼저 화면 계정을 지정하세요.')
                 record = pwd.getpwnam(config.user)
                 if record.pw_uid == 0 or not Path(record.pw_dir).is_dir() or record.pw_shell.endswith(('nologin','false')):
                     raise ValueError('사용 가능한 일반 사용자가 아닙니다.')
                 return config
             return JobStore(self.paths, self.host).submit(current_config, self.release, self.release / '.venv/bin/python',
-                                                         expected_config=payload.get('expected_config'))
+                                                         expected_config=payload.get('expected_config'), persist_config=True)
         if action == 'runs-list':
             return {'runs': JobStore(self.paths, self.host).list()}
         if action == 'runs-show':
@@ -110,6 +110,23 @@ class Service:
     """CLI and TUI use this exact API; no localized log parsing."""
     def __init__(self, release=None):
         self.release = release or Path(__file__).resolve().parents[1]
+
+    def enter_admin(self, argv):
+        """Hand the real terminal to sudo before opening the management UI.
+
+        Noninteractive callers retain the fixed sudo -n RPC, so JSON pipelines
+        never wait for a password. Private graphical-session entrypoints bypass
+        this public CLI path entirely.
+        """
+        if os.geteuid() == 0 or not (sys.stdin.isatty() and sys.stdout.isatty()):
+            return
+        release = trusted_release(self.release)
+        command = ['sudo', '--', str(release / '.venv/bin/python'), '-I',
+                   str(release / 'entry.py'), *argv]
+        try:
+            os.execvp('sudo', command)
+        except FileNotFoundError:
+            raise RuntimeError('sudo 명령을 찾을 수 없습니다. sudo가 설치된 일반 관리자 계정으로 실행하세요.') from None
 
     def authenticate(self):
         if os.geteuid() != 0:

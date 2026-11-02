@@ -96,10 +96,11 @@ def test_source_tree_cannot_become_sudo_helper(tmp_path):
     with pytest.raises((PermissionError,FileNotFoundError)):
         trusted_release(tmp_path)
 
-def test_missing_saved_config_is_rejected_before_any_install(store):
+def test_missing_saved_config_without_general_user_is_rejected(store, monkeypatch):
     from ala.service import Operations
     operations=Operations(paths=store.paths,host=store.host)
-    with pytest.raises(ValueError,match='구성을 저장'):
+    monkeypatch.delenv('SUDO_USER', raising=False)
+    with pytest.raises(ValueError,match='일반 사용자'):
         operations.dispatch('submit',{})
     assert store.host.calls==[]
     assert not store.paths.runs.exists()
@@ -226,3 +227,39 @@ def test_prepare_rpc_does_not_require_graphical_account(store, monkeypatch):
     result = Operations(paths=store.paths, host=store.host, release=Path('/release')).dispatch('prepare-submit', {})
     assert result['operation'] == 'prepare'
     assert Config.load(store.directory(result['run_id']) / 'config.json').user == ''
+
+
+def test_first_setup_persists_defaults_once_under_job_lock(store, monkeypatch, tmp_path):
+    from types import SimpleNamespace
+    from ala.service import Operations
+    home = tmp_path / 'user-home'
+    home.mkdir()
+    monkeypatch.setenv('SUDO_USER', 'user')
+    monkeypatch.setattr('ala.service.pwd.getpwnam', lambda name: SimpleNamespace(pw_uid=1000, pw_dir=str(home), pw_shell='/bin/bash'))
+    operations = Operations(paths=store.paths, host=store.host, release=Path('/release'))
+    expected = operations.config().to_dict()
+    assert not store.paths.config.exists()
+    job = operations.dispatch('submit', {'expected_config': expected})
+    assert Config.load(store.paths.config).user == 'user'
+    assert Config.load(store.paths.config).autostart is False
+    before = store.paths.config.stat().st_mtime_ns
+    job.update(state='completed', exit_code=0)
+    store.save(job)
+    operations.dispatch('submit', {'expected_config': expected})
+    assert store.paths.config.stat().st_mtime_ns == before
+
+
+def test_unreviewed_or_busy_first_setup_does_not_write_config(store, monkeypatch, tmp_path):
+    from types import SimpleNamespace
+    from ala.service import Operations
+    monkeypatch.setenv('SUDO_USER', 'user')
+    monkeypatch.setattr('ala.service.pwd.getpwnam', lambda name: SimpleNamespace(pw_uid=1000, pw_dir=str(tmp_path), pw_shell='/bin/bash'))
+    operations = Operations(paths=store.paths, host=store.host, release=Path('/release'))
+    mismatch = dict(operations.config().to_dict(), dev_tools=True)
+    with pytest.raises(RuntimeError, match='구성이 변경'):
+        operations.dispatch('submit', {'expected_config': mismatch})
+    assert not store.paths.config.exists() and not store.paths.runs.exists()
+    store.submit(Config(user='user'), Path('/release'), Path('/python'))
+    with pytest.raises(RuntimeError, match='이미 진행'):
+        operations.dispatch('submit', {})
+    assert not store.paths.config.exists()

@@ -10,7 +10,7 @@ Rocky Linux 10 x86_64, GNOME/GDM, 기존 일반 sudo 사용자를 지원합니�
 Textual과 고정 의존성은 배포 묶음의 wheel로 전용 venv에 설치하며 시스템 Python 패키지를 덮어쓰지 않습니다.
 환경 설정 단계에는 Google·Docker·NVIDIA 등 필요한 패키지 저장소 접속이 필요합니다.
 
-`ala-0.1.0rc8.tar.gz`와 `.tar.gz.sha256`은 같은 릴리스에서 받습니다.
+`ala-0.1.0rc9.tar.gz`와 `.tar.gz.sha256`은 같은 릴리스에서 받습니다.
 SHA-256 검사는 파일 일치/손상 확인이며 배포자 서명을 대신하지 않습니다. 현재 배포는 GitHub HTTPS 경로를 신뢰하며 별도 서명 검증은 미구현입니다.
 검사가 실패하면 설치하지 않습니다. GitHub의 Source code 압축은 wheel과 manifest가 없는 개발 소스이므로 설치용 배포 파일과 다릅니다.
 
@@ -22,8 +22,8 @@ Rocky가 GitHub에 직접 접속하지 못하는 경우 사용합니다. Mac 터
 ```bash
 (
   set -e
-  VERSION='0.1.0rc8'
-  RELEASE='v0.1.0-rc.8'
+  VERSION='0.1.0rc9'
+  RELEASE='v0.1.0-rc.9'
   BASE_URL="https://github.com/ubion-dev/project-ai-learning-analytics-instance-setup/releases/download/${RELEASE}"
   mkdir -p "$HOME/Downloads/ala-$VERSION"
   cd "$HOME/Downloads/ala-$VERSION"
@@ -43,9 +43,9 @@ ssh user@서버IP
 (
   set -e
   cd ~
-  sha256sum -c ala-0.1.0rc8.tar.gz.sha256
-  tar -xzf ala-0.1.0rc8.tar.gz
-  cd ala-0.1.0rc8
+  sha256sum -c ala-0.1.0rc9.tar.gz.sha256
+  tar -xzf ala-0.1.0rc9.tar.gz
+  cd ala-0.1.0rc9
   sudo bash ./install.sh
   ala --version
 )
@@ -79,10 +79,10 @@ python3 -m venv .venv
 .venv/bin/python scripts/build-release.py
 ```
 
-`dist/ala-0.1.0rc8.tar.gz`와 `.sha256`을 생성합니다. 기존 wheel이 있으면 `--wheelhouse /경로/wheels`를 지정할 수 있으며 해시 검증은 유지됩니다.
+`dist/ala-0.1.0rc9.tar.gz`와 `.sha256`을 생성합니다. 기존 wheel이 있으면 `--wheelhouse /경로/wheels`를 지정할 수 있으며 해시 검증은 유지됩니다.
 빌더는 허용 목록의 코드·운영 문서·고정 wheel·파일별 manifest만 포함합니다. Git 이력, 테스트, 개발 가상환경과 작업 기록은 포함하지 않습니다.
 게시된 파일을 같은 버전으로 다시 만들거나 덮어쓰지 않습니다.
-후보 태그 `v0.1.0-rc.8`와 Python 버전 `0.1.0rc8`의 표기 차이에 주의하세요.
+후보 태그 `v0.1.0-rc.9`와 Python 버전 `0.1.0rc9`의 표기 차이에 주의하세요.
 
 릴리스는 자동 테스트와 실제 Rocky 수용을 구분합니다. 현재 후보의 실제 장비 설치·GNOME·GPU·재부팅은 미검증입니다.
 
@@ -95,3 +95,9 @@ python3 -m venv .venv
 다운로드는 공식 공개 저장소의 HTTPS 자산으로 제한하며 SHA-256과 파일별 manifest를 확인합니다. 체크섬은 손상 검증이며 별도 배포 서명 검증이 아닙니다. GitHub 저장소 및 배포 계정에 대한 신뢰가 필요합니다. API 공식 호스트 api.github.com을 공개 데이터 검사 허용 목록에 추가했습니다. 근거: https://docs.github.com/en/rest/releases/releases
 
 RC5 이하에는 이 명령이 없으므로 최초 한 번 수동 갱신해야 합니다. 기존에 실행 중인 ala 화면은 이전 코드이므로 갱신 완료 후 종료하고 다시 실행하세요.
+
+### 관리자 권한으로 실행
+
+SSH 터미널에서 `ala`를 실행하면 sudo가 직접 암호를 받고 root 관리 화면으로 전환합니다. 실행 중인 버전의 root 소유 설치 경로를 검증한 뒤 고정 경로로 실행하며, 원본 소스 디렉터리는 자동 승격하지 않습니다. 이미 `sudo /usr/local/bin/ala`로 시작했다면 재인증하지 않습니다.
+
+Chrome과 그래픽 세션의 사용자 작업은 지정한 일반 계정으로 실행합니다. `sudo` 실행자의 일반 계정 또는 저장된 화면 계정을 기본으로 사용합니다. 비대화형 CLI는 sudo -n RPC를 사용하며, 인증이 없으면 오류로 종료합니다. `--help`, `--version`, `update --check`는 승격하지 않습니다.
