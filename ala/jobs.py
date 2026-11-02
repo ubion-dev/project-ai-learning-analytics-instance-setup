@@ -95,7 +95,7 @@ class JobStore:
     def save(self, value):
         atomic_json(self.directory(value['run_id']) / 'result.json', value)
 
-    def submit(self, config, release: Path, python: Path, *, expected_config=None, operation="setup"):
+    def submit(self, config, release: Path, python: Path, *, expected_config=None, operation="setup", persist_config=False):
         if operation not in {"setup", "prepare"}:
             raise ValueError("허용되지 않은 설치 작업입니다.")
         with change_lock(self.paths):
@@ -104,6 +104,11 @@ class JobStore:
                 raise RuntimeError('검토 후 구성이 변경되었습니다. 변경 계획을 다시 확인하세요.')
             if any(r['state'] in {'queued', 'running'} for r in self.list()):
                 raise RuntimeError('설치 작업이 이미 진행 중입니다. ala status로 확인하세요.')
+            if persist_config and self.paths.config.is_symlink():
+                raise PermissionError('구성 파일에 심볼릭 링크를 사용하지 않습니다.')
+            if persist_config and not self.paths.config.exists():
+                protected_directory(self.paths.config.parent, 0o755)
+                atomic_json(self.paths.config, config.to_dict(), 0o644)
             protected_directory(self.paths.at('/var/lib/ala'))
             protected_directory(self.paths.runs)
             run_id = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ-') + uuid.uuid4().hex[:8]

@@ -20,6 +20,8 @@ def parser():
     p = Parser(prog='ala', description='AI 학습 분석실 DID 인스턴스 환경 관리')
     p.add_argument('--version', action='version', version=__version__)
     sub = p.add_subparsers(dest='command')
+    sub.add_parser('tui', help='간편 설정·상태 확인 화면')
+    sub.add_parser('console', help='텍스트 콘솔 (선택)')
     config = sub.add_parser('config', help='기대 구성').add_subparsers(dest='action', required=True)
     config.add_parser('edit')
     config.add_parser('show').add_argument('--json', action='store_true')
@@ -111,13 +113,24 @@ def main(argv=None, *, service=None):
         p.error('--detach는 --apply와 함께 사용하세요.')
     svc = service or Service()
     try:
-        if args.command is None or (args.command == 'chrome' and not args.action) or (args.command == 'config' and args.action == 'edit'):
+        if args.command is None or args.command in {'tui', 'console'} or (args.command == 'chrome' and not args.action) or (args.command == 'config' and args.action == 'edit'):
             if not sys.stdin.isatty() or not sys.stdout.isatty():
                 p.error('메뉴는 SSH 터미널에서 실행하세요. 비대화형 환경에는 하위 명령을 지정하세요.')
+            if service is None:
+                svc.enter_admin(argv)
+            if args.command == 'console':
+                from .console import run_console
+                return run_console(svc)
+            if args.command is None or args.command == 'tui':
+                from .simple_tui import SimpleApp
+                SimpleApp(service=svc).run()
+                return 0
             from .tui import AlaApp
             section = 'config' if args.command == 'config' else 'chrome' if args.command == 'chrome' else 'home'
             AlaApp(service=svc, initial_section=section).run()
             return 0
+        if service is None and not (args.command == 'update' and args.check):
+            svc.enter_admin(argv)
         if args.command == 'update':
             from .update import check
             if args.check:
@@ -168,11 +181,19 @@ def main(argv=None, *, service=None):
                 if job.get('query_warning'):
                     emit(job, as_json)
                     return 1
-            emit(job, as_json)
+            if as_json:
+                emit(job, True)
+            else:
+                from .console import show_job
+                show_job(job)
             return job.get('exit_code', 1)
         if args.command in {'check','status'}:
             result = svc.request('inspect' if args.command == 'check' else 'status')
-            emit(result, as_json)
+            if as_json:
+                emit(result, True)
+            else:
+                from .console import summarize
+                summarize(result)
             return result.get('exit_code', 1) if args.command == 'check' else 0
         if args.command == 'chrome':
             result = svc.request('chrome', {'action': args.action}); emit(result, as_json)

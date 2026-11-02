@@ -5,11 +5,32 @@ import getpass
 from rich.text import Text
 from textual.containers import Vertical, Horizontal, VerticalScroll
 from textual.widgets import Static, Button, Input, Label, Checkbox, ContentSwitcher, TextArea, OptionList, Collapsible
+from textual.widgets.option_list import Option
 
 from .config import Config
 
 HOME_MENU = (("wizard", "처음 설정하기"), ("check", "서버 상태 확인"),
              ("chrome", "화면 관리"), ("advanced", "고급 설정"))
+
+
+PAGE_TITLES = {'home': '작업 선택', 'wizard': '서버 환경 설정', 'check': '서버 상태 확인',
+               'chrome': '화면 관리', 'advanced': '고급 설정', 'dashboard': '상세 상태',
+               'config': '세부 구성', 'setup': '상세 설치·설정', 'runs': '실행 기록'}
+
+
+MENU_DESCRIPTIONS = {
+    'wizard': '계정과 화면을 선택하고 필요한 환경을 준비합니다',
+    'check': '설정·서비스와 적용 대기 항목을 확인합니다',
+    'chrome': 'DID 화면을 시작·중지하고 실행 상태를 확인합니다',
+    'advanced': '세부 옵션 · 초기 OS 준비 · 실행 기록',
+}
+
+
+def menu_prompt(key, title):
+    number = next(i for i, (name, _) in enumerate(HOME_MENU, 1) if name == key)
+    prompt = Text(f'{number:02}  {title}', style='bold')
+    prompt.append('\n    ' + MENU_DESCRIPTIONS[key], style='dim')
+    return prompt
 
 
 def item_name(identifier):
@@ -57,17 +78,19 @@ class GuidedSetup:
 
     def guided_panels(self):
         with Vertical(id='home', classes='panel'):
-            yield Static('서버 환경을 준비하세요', classes='home-title', markup=False)
-            yield Static('', id='update-notice', markup=False)
+            yield Static('무엇을 할까요?', classes='home-title', markup=False)
+            yield Static('↑/↓ 선택   Enter 실행   Tab 이동', classes='home-description', markup=False)
             yield Static('현재 상태를 확인하고 있습니다.', id='home-status', markup=False)
-            yield Static('왼쪽에서 할 일을 선택하고 Enter를 누르세요.\n\n처음에는 첫 메뉴만 따라가면 됩니다.\n① 계정 확인  ② 화면 선택  ③ 변경 확인\n\n이미 정상인 설치·설정은 유지합니다.\n초기 OS 업데이트와 상세 옵션은 고급 설정에 있습니다.', markup=False)
+            yield OptionList(*(Option(menu_prompt(key, title), id=key) for key, title in HOME_MENU), id='navigation')
+            yield Static('', id='update-notice', markup=False)
         with Vertical(id='wizard', classes='panel'):
             yield Static('처음 설정하기', id='wizard-title', classes='home-title', markup=False)
+            yield Static('', id='wizard-steps', markup=False)
             with ContentSwitcher(initial='wizard-account', id='wizard-pages'):
                 with VerticalScroll(id='wizard-account'):
                     yield Label('화면에 로그인할 기존 일반 계정')
                     yield Input(id='wizard-user', placeholder='user')
-                    yield Static('현재 접속 계정을 기본으로 사용합니다.\n재부팅 후 이 계정으로 바탕화면에 자동 로그인합니다.\n계정 암호와 SSH 인증은 바꾸지 않습니다.', markup=False)
+                    yield Static('재부팅 후 이 계정으로 바탕화면에 로그인합니다.\n이 서버에 이미 있는 일반 계정을 입력하세요.', classes='field-help', markup=False)
                 with VerticalScroll(id='wizard-display'):
                     yield Checkbox('DID 웹페이지를 전체화면으로 표시', id='wizard-web')
                     yield Label('체크 해제: 바탕화면만 표시')
@@ -81,11 +104,11 @@ class GuidedSetup:
                     yield Static('', id='review-changes', markup=False)
                     with Collapsible(title='전체 검사 내역 · 현재값과 다음 조치', collapsed=True, id='review-details'):
                         yield TextArea('', id='wizard-summary', read_only=True)
-                    yield Static('자동 재부팅하지 않습니다. 적용 후 재부팅이 필요할 수 있습니다.', id='review-footnote', markup=False)
+                    yield Static('설정 시작을 눌러야 적용됩니다. 재부팅은 직접 진행하세요.', id='review-footnote', markup=False)
                 with Vertical(id='wizard-running'):
                     yield Static('설정 작업을 시작합니다.', id='wizard-progress', markup=False)
                     yield TextArea('', id='wizard-result', read_only=True)
-            with Horizontal(classes='actions'):
+            with Horizontal(id='wizard-actions', classes='actions'):
                 yield Button('홈', id='wizard-back')
                 yield Button('다음', id='wizard-next', variant='primary')
         with VerticalScroll(id='advanced', classes='panel'):
@@ -109,10 +132,10 @@ class GuidedSetup:
                 else:
                     lines.append(f"{item_name(identifier)} · {row.get('actual', '상태 확인 필요')}")
                 lines.append(str(row.get('next_action') or '상세 내역에서 현재 상태를 확인하세요.'))
-            lines.append('해결 후 이전 → 변경 확인으로 다시 검사하세요.')
+            lines.append('정리 후 간편 설정을 다시 실행하세요.')
             status.update(Text('\n'.join(lines)))
         elif rows and self._last_plan:
-            status.update(Text('설정 준비 완료\n아래 변경을 확인하고 설정 시작을 누르세요.'))
+            status.update(Text('준비 완료 · 아래 변경을 확인하고 설정 시작을 누르세요.'))
         else:
             status.update(Text('검사를 완료하지 못했습니다. 이전으로 돌아가 다시 확인하세요.'))
         counts = {key: sum(r.get('state') == key for r in rows)
@@ -125,7 +148,7 @@ class GuidedSetup:
                 name = item_name(row.get('id'))
                 groups[name] = groups.get(name, 0) + 1
         self.query_one('#review-changes', Static).update(Text(
-            '변경 요약\n' + '\n'.join(f'{name}  ·  {count}개' for name, count in groups.items())
+            '변경 대상\n' + '  ·  '.join(groups)
             if groups else '기존 설치·설정을 유지합니다.'))
         self.query_one('#wizard-summary', TextArea).load_text(review_text(report))
 
@@ -133,36 +156,49 @@ class GuidedSetup:
         self.section = section
         self.query_one('#content', ContentSwitcher).current = section
         self.query_one('#toolbar').display = section not in {'home', 'wizard'}
+        self.query_one('#page-context', Static).update(Text(PAGE_TITLES.get(section, section)))
+        targets = {'home': '#navigation', 'check': '#check-table', 'chrome': '#chrome-start',
+                   'advanced': '#advanced-config', 'dashboard': '#dashboard-table',
+                   'config': '#config-user', 'setup': '#make-plan', 'runs': '#run-table'}
+        if section in targets:
+            self.call_after_refresh(self.query_one(targets[section]).focus)
         self.refresh_section()
 
     async def load_home(self):
         value = await self.api('status')
         if value is None:
-            self.query_one('#home-status', Static).update('확인하려면 왼쪽의 처음 설정하기를 선택하세요. 필요한 권한은 순서대로 안내합니다.')
+            self.query_one('#home-status', Static).update('환경 설정에서 시작하세요. 필요한 sudo 인증을 안내합니다.')
             self.notice('첫 메뉴에서 시작하세요. 설정 확인에 필요한 권한을 요청합니다.')
             return
+        self.query_one('#host-label', Static).update(Text(str(value.get('hostname', '서버'))))
         self.SUB_TITLE = str(value.get('hostname', '서버 환경 설정'))
         self.sub_title = self.SUB_TITLE
         configured = value.get('config_exists', bool(value.get('config', {}).get('user')))
         label = '현재 설정 점검·보완' if configured else '처음 설정하기'
-        self.query_one('#navigation', OptionList).replace_option_prompt('wizard', label)
+        self.query_one('#navigation', OptionList).replace_option_prompt('wizard', menu_prompt('wizard', label))
         rows = value.get('results', [])
         issues = sum(r.get('state') not in {'ok', 'not_applicable'} for r in rows)
         self.query_one('#home-status', Static).update(Text(
-            f"서버: {value.get('hostname', '-')}\n" +
-            (f'확인할 항목: {issues}개 · {label}에서 안내합니다.' if configured else '초기 설정이 필요합니다. 처음 설정하기를 선택하세요.')))
+            f'확인할 항목 {issues}개 · 환경 설정에서 점검할 수 있습니다.' if configured else '처음 설정하기에서 서버 환경을 준비하세요.'))
         active = next((r for r in value.get('runs', []) if r.get('state') in {'queued', 'running'}), None)
         if active:
             self._active_job = self._selected_job = active['run_id']
             self.render_job(active)
             self.query_one('#home-status', Static).update('설정 작업이 실행 중입니다. 첫 메뉴에서 진행 상황을 확인하세요.')
-        self.notice('↑/↓ 선택 · Enter 실행 · Tab 이동 · Esc 홈 · q 종료')
+        self.notice('')
 
     def wizard_page(self, stage):
         self._wizard_stage = stage
-        titles = {'account': '1 / 3 · 사용할 계정 확인', 'display': '2 / 3 · 화면 용도 선택',
-                  'review': '3 / 3 · 필요한 변경 확인', 'running': '설정 진행 상황'}
+        titles = {'account': '어떤 계정으로 사용할까요?', 'display': '화면을 어떻게 사용할까요?',
+                  'review': '설정 내용을 확인하세요', 'running': '설정 진행 상황'}
         self.query_one('#wizard-title', Static).update(titles[stage])
+        steps = Text()
+        current = {'account': 0, 'display': 1, 'review': 2, 'running': 3}[stage]
+        for index, name in enumerate(('계정', '화면', '변경 확인')):
+            if index:
+                steps.append('   ─   ', style='dim')
+            steps.append(f'{index + 1} {name}', style='bold #83e3c4' if index == current else 'dim' if index > current else '#c7d3df')
+        self.query_one('#wizard-steps', Static).update(steps)
         self.query_one('#wizard-pages', ContentSwitcher).current = 'wizard-' + stage
         next_button = self.query_one('#wizard-next', Button)
         next_button.label = {'account': '다음', 'display': '변경 확인', 'review': '설정 시작', 'running': '홈으로'}[stage]
@@ -197,7 +233,7 @@ class GuidedSetup:
         self.query_one('#wizard-web', Checkbox).value = bool(self._wizard_base.get('url') and self._wizard_base.get('autostart'))
         self.query_one('#wizard-url', Input).disabled = not self.query_one('#wizard-web', Checkbox).value
         self.wizard_page('account')
-        self.notice('기존 일반 계정을 확인하고 다음을 누르세요.')
+        self.notice('')
 
     async def wizard_advance(self):
         if self._wizard_busy:
@@ -237,12 +273,12 @@ class GuidedSetup:
                 self._wizard_base = dict(self._stored_config)
                 await self.make_plan()
                 self.query_one('#wizard-choice', Static).update(Text(
-                    f"계정: {config.user} · {'DID 전체화면' if web else '바탕화면만 표시'}\n선택을 저장했습니다. 설정 시작 전에는 설치하지 않습니다."))
+                    f"계정 {config.user}  ·  {'DID 전체화면' if web else '바탕화면만 표시'}  ·  선택 저장됨"))
                 report = self._last_plan or {'results': self._reports.get('plan', [])}
                 self.render_review(report)
                 self.wizard_page('review')
-                if self._plan_config is not None:
-                    self.notice('변경 내용을 읽고 설정 시작을 누르세요. 이전으로 돌아가 수정할 수 있습니다.')
+                if report.get('results') and (self._plan_config is not None or blocking_rows(report)):
+                    self.notice('')
             elif self._wizard_stage == 'review':
                 await self.submit_plan()
                 if self._active_job:
@@ -260,7 +296,7 @@ class GuidedSetup:
         stage = self._wizard_stage
         if stage in {'account', 'running'}:
             self.show_section('home')
-            self.query_one('#navigation', OptionList).focus()
+            self.call_after_refresh(self.query_one('#navigation', OptionList).focus)
         else:
             self.invalidate_plan()
             self.wizard_page('account' if stage == 'display' else 'display')

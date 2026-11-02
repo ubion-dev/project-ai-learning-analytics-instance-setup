@@ -268,7 +268,7 @@ def install():
                 finally:
                     if link.is_symlink():
                         link.unlink()
-            print(f'ala {version} 설치 완료. ala config edit → ala setup --plan → ala setup --apply')
+            print(f'ala {version} 설치 완료. ala에서 간편 설정 실행을 누르거나 ala check로 상태를 확인하세요.')
         except Exception:
             if created and (not current.is_symlink() or current.resolve() != release):
                 shutil.rmtree(release)

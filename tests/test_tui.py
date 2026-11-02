@@ -588,3 +588,72 @@ def test_review_prioritizes_blocker_separates_pending_and_exposes_details():
             assert 'docker.conflict.podman' in app.query_one('#wizard-summary', TextArea).text
             assert '적용 후 확인' in app.query_one('#wizard-summary', TextArea).text
     run(scenario())
+
+
+def test_focused_navigation_lives_only_on_home_and_tasks_receive_focus():
+    async def scenario():
+        service = FakeService()
+        app = AlaApp(service=service)
+        async with app.run_test(size=(80, 24)) as pilot:
+            await pilot.pause()
+            menu = app.query_one('#navigation', OptionList)
+            assert menu.parent.id == 'home'
+            assert app.focused is menu
+            assert menu.region.bottom <= 23
+            await pilot.press('down', 'enter')
+            await pilot.pause()
+            assert app.section == 'check'
+            assert menu.region.width == 0  # No persistent sidebar consuming the task screen.
+            assert app.focused is app.query_one('#check-table')
+            app.query_one('#go-home', Button).focus()
+            await pilot.press('enter')
+            await pilot.pause()
+            assert app.section == 'home' and app.focused is menu
+            await pilot.press('end', 'enter')
+            await pilot.pause()
+            assert app.section == 'advanced'
+            assert app.focused is app.query_one('#advanced-config')
+            await pilot.press('enter')
+            await pilot.pause()
+            assert app.section == 'config'
+            await pilot.press('escape')
+            await pilot.pause()
+            assert app.section == 'home' and app.focused is menu
+            assert not any(a in {'config-save', 'submit', 'prepare-submit'} for a, _ in service.calls)
+    run(scenario())
+
+
+def test_focused_wizard_resizes_with_fixed_actions_and_back_preserves_draft(monkeypatch):
+    from textual.widgets import Static
+    async def scenario():
+        for no_color in (True, False):
+            if no_color:
+                monkeypatch.setenv('NO_COLOR', '1')
+            else:
+                monkeypatch.delenv('NO_COLOR', raising=False)
+            app = AlaApp(service=FakeService())
+            async with app.run_test(size=(80, 24)) as pilot:
+                await open_wizard(app, pilot)
+                app.query_one('#wizard-user', Input).value = 'another-user'
+                await pilot.press('enter')
+                await pilot.pause()
+                assert app._wizard_stage == 'display'
+                app.query_one('#wizard-back', Button).focus()
+                await pilot.press('enter')
+                await pilot.pause()
+                assert app._wizard_stage == 'account'
+                assert app.query_one('#wizard-user', Input).value == 'another-user'
+                for size in ((120, 36), (60, 15), (80, 24)):
+                    await pilot.resize_terminal(*size)
+                    await pilot.pause()
+                    assert app.query_one('#small-terminal').display == (size[0] < 80 or size[1] < 24)
+                    if size[0] >= 80:
+                        action = app.query_one('#wizard-next', Button)
+                        assert action.region.bottom <= size[1] - 1
+                        assert action.region.width >= 16
+                assert '1 계정' in str(app.query_one('#wizard-steps', Static).render())
+                await pilot.press('escape')
+                await pilot.pause()
+                assert app.section == 'home'
+                assert app.focused is app.query_one('#navigation')
+    run(scenario())

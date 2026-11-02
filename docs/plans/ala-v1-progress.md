@@ -143,3 +143,92 @@
 - PR #4: https://github.com/ubion-dev/project-ai-learning-analytics-instance-setup/pull/4
 - 시험판: https://github.com/ubion-dev/project-ai-learning-analytics-instance-setup/releases/tag/v0.1.0-rc.7
 - RC6에서 ala update --prerelease 사용 가능. 기존 후보는 유지한다. 실제 장비의 Podman 사용 여부 확인·정리와 화면 수용은 남아 있다.
+
+## ALA-16 시작
+
+- 사용자가 단계별 집중형(가운데 메뉴, 한 화면에 한 작업)을 선택했다.
+- PR #4 병합 main 1587195 기준 codex/focused-tui. 이전 RC7 기능은 재구현하지 않고 탐색/레이아웃/포커스를 바꾼다.
+
+## ALA-16 구현·대상 검증
+
+- 작업 목록을 홈 가운데로 옮기고 단계별 화면에서 고정 사이드바를 제거했다. 한 줄 헤더·홈 이동·단계 진행 표시·하단 작업 버튼으로 정리했다.
+- 목록에는 작업별 설명을 붙이고, 이동한 화면의 입력/표/버튼으로 포커스를 옮긴다. 안내 중복을 줄여 80×24 정상 변경 확인에서 요약과 상세 진입점까지 보이도록 했다.
+- 기존 sudo/저장/계획/명시적 적용/작업 지속 계약은 재사용한다. 설치 엔진은 변경하지 않았다.
+- 기존 TUI·CLI/jobs 47개 통과, 추가 집중형 검증 포함 TUI 29개 통과. 홈 전용 목록/각 작업 포커스/상단 홈/뒤로/미저장 입력 보존/화면 크기 변경/무색 터미널을 확인했다.
+- 합성 데이터로 홈·계정·정상·차단 화면을 80×24와 120×36에서 실제 TUI SVG로 렌더링·확인했다. RC8 전체 회귀·배포 후보는 CI에서 확인한다. 실제 Rocky 화면 수용은 미완료다.
+
+## ALA-16 RC8 후보 완료
+
+- 구현 3c95499. CI 41407661268: Python 3.12 전체 380 passed + 40 subtests (57.37초). 공개 이력 검사·Bash·고정 의존성·후보 빌드·CLI smoke 통과.
+- RC8 체크섬과 manifest 53개 파일 검증, 인증 없는 공개 다운로드 byte 일치 확인.
+- PR #5: https://github.com/ubion-dev/project-ai-learning-analytics-instance-setup/pull/5
+- 시험판: https://github.com/ubion-dev/project-ai-learning-analytics-instance-setup/releases/tag/v0.1.0-rc.8
+- RC6 이상에서 ala update --prerelease로 설치 가능하다. 실제 장비 터미널의 가독성·조작 수용은 남아 있다. 실제 서버는 이번 작업에서 변경하지 않았다.
+
+## ALA-17 시작
+
+- 사용자가 관리자 권한 실행을 요청했다. 대화형 ala의 시작 시 sudo 인증 및 root 재실행으로 정리한다.
+- 현재 sudo /usr/local/bin/ala 직접 실행은 이미 가능함을 확인했다. 비대화형 RPC·일반 사용자 Chrome 계약을 유지한다.
+- RC8/PR #5 기준 aa381cd에서 codex/admin-entry. PR #5는 현재 OPEN이므로 후속 PR은 해당 브랜치를 기반으로 한다.
+- 디자인 구체화 질문은 대기 중이며 관리자 진입 경로를 먼저 구현한다.
+
+## ALA-18 범위 결정
+
+- 사용자 답변: Claude/Codex 같은 간결한 CLI를 기대했고, 간편 설정 한 번과 기대 상태 확인이 필요함. 기본 전체화면 디자인을 계속 바꾸는 방향을 중단한다.
+- ALA-17과 같은 브랜치에서 기본 진입을 단순화한다. 이전 Textual 기능은 상세 진입으로 보존하고 일반 설정에 추가 선택을 요구하지 않는다.
+
+## ALA-17/18 구현·대상 검증
+
+- 대화형 시작은 검증된 고정 릴리스로 sudo 재실행하고 root이면 재인증하지 않는다. help/version/update 확인·비TTY·사용자 Chrome 경로는 승격하지 않는다.
+- 기본 ala는 전체화면을 열지 않고 Enter 간편 설정 / s 상태 확인 / q 종료를 제공한다. Textual은 ala tui로만 명시적으로 연다.
+- 처음 명시적 적용에서만 sudo 일반 사용자 기본 구성을 저장한다. 기본 URL 미지정은 바탕화면 준비로 처리한다. 기존 구성/선택값은 유지한다. 검토 구성 변경·작업 중복 검사 후 공통 잠금 안에서만 최초 파일을 쓴다.
+- 기능별 상태 요약과 원인·조치를 제공하며 전체 JSON 및 기존 작업 기록을 유지한다. 새 버전 알림은 비동기 조회 후 입력 사이에 표시한다.
+- 관리자 진입/간편 콘솔/CLI jobs/표시 관련 65개, 이후 최초 저장/멱등성/중복 거부 및 기존 TUI 포함 62개 검증 통과. 전체 회귀 진행 중.
+- README는 설치 → 간편 설정/상태 확인 → 업데이트 순서로 정리하고 상세 옵션은 별도로 뒀다. 실제 Rocky sudo/기본 콘솔 수용은 미검증이다.
+
+## ALA-17/18 로컬 전체 검증
+
+- 전체 로컬 393 passed + 40 subtests (123.25초). 요약 안내 문구 보강 후 관리자 진입·간편 콘솔·CLI jobs 33개 재검증 통과.
+- 일반 계정 기본값 최초 저장/두 번째 적용 mtime 유지/검토 구성 변경 및 작업 중복 때 미저장/소스 승격 거부/일반 사용자 Chrome 회귀를 확인했다.
+- 준비된 간편 흐름은 번호·다단계 메뉴 없이 Enter로 시작하며, 자세한 기대값/현재값은 JSON으로 조회한다. 재부팅 대기는 재설치 안내와 구분했다.
+- RC9 후보와 검토 PR 준비. 실제 Rocky에서 sudo 인증과 간편 설정 실기기 수용은 미완료다.
+
+- PR #5가 미병합 상태이므로 후속 PR을 늘리지 않고 최종 간편 흐름으로 해당 PR의 구현·설명을 갱신한다. 관리자/간편 설정 커밋은 14cb8a9이며 기존 focused-tui 브랜치를 fast-forward한다.
+
+## ALA-17/18 RC9 후보 완료
+
+- 최종 구현 bacffd7. CI 41411915700: 전체 393 passed + 40 subtests (88.26초), 공개 이력 검사·Bash·고정 의존성·후보 빌드·CLI smoke 통과.
+- RC9 체크섬과 manifest 54개 파일 검증, 인증 없는 공개 다운로드 byte 일치 확인.
+- 기존 PR #5 제목·설명을 최종 간편 설정/관리자 진입 범위로 갱신했다: https://github.com/ubion-dev/project-ai-learning-analytics-instance-setup/pull/5
+- 시험판: https://github.com/ubion-dev/project-ai-learning-analytics-instance-setup/releases/tag/v0.1.0-rc.9
+- RC6 이상에서 sudo /usr/local/bin/ala update --prerelease로 설치 가능하다. 이후 ala 실행 시 관리자 인증과 Enter 간편 설정/s 상태 확인을 제공한다.
+- 실제 Rocky의 sudo 진입·간편 설정·화면 수용은 미완료다. 실제 서버는 이번 작업에서 변경하지 않았다.
+
+## ALA-19 시작
+
+- 사용자 정정에 따라 기본 TUI는 유지하되 간편 설정/상태 확인 두 화면으로 제한한다. 텍스트 콘솔 제거가 목적은 아니며 선택 명령으로 둔다.
+- 현재 codex/focused-tui / 32bf7f1에서 후속 작업. 이전 RC9 자산은 유지한다.
+- 두 화면 TUI와 Podman 안내 검토를 분담하고 CLI·문서·통합은 주담당이 진행한다. 실제 장비 변경은 하지 않는다.
+
+## ALA-19 Podman 판단 보강
+
+- 공식 Docker RHEL 절차의 사전 정리 대상이므로 차단은 유지한다. 설치 감지를 사용 중으로 단정하지 않는다. 일반 계정과 root 저장소를 각각 확인하고 미사용 확인 후 제거 예정 목록을 검토하도록 안내한다.
+- 실제 Engine.apply는 Docker 차단 뒤 이후 단계도 중단한다. 이전 OPERATIONS의 'Docker만 차단' 취지 설명을 정정했다. 엔진 동작은 변경하지 않는다.
+- Podman 공식 rootless 문서를 근거로 docs.podman.io를 공개 문서 호스트 허용 목록에 추가한다. 기본 흐름에 없는 '이전→변경 확인' 문구를 제거했다.
+
+## ALA-19 구현·대상 검증
+
+- 기본 ala / ala tui를 새 SimpleApp의 간편 설정·상태 확인 두 탭으로 연결했다. 다단계 wizard와 네 메뉴는 기본 경로에서 제거했고 텍스트 콘솔은 ala console로 선택한다.
+- 기존 config/submit/worker 계약으로 한 번 적용하며, 관리자 시작·단일 잠금·일반 사용자 Chrome·최초 구성 저장을 재사용한다. 상태 조회는 쓰기 작업이 없다.
+- 상태 조회 실패·빈 결과 때 이전 정상 표를 제거하고, 실행 중 작업을 재연결하며, 늦은 상태 응답이 새/완료 작업을 덮어쓰지 않도록 했다.
+- 새 TUI 전용 7개, TUI/CLI 관리자 통합 43개 통과. root 담당 엔진/콘솔/공개 정책 등 52개 + 3 subtests 통과.
+- 합성 데이터로 80×24/120×36 설정·상태 화면을 렌더링했다. Podman 원인 다음에 실제 조치를 먼저 표시하고 상태 상세 영역을 늘렸다.
+- 전체 회귀와 RC10 후보 빌드 검증 예정. 실제 Rocky 수용·Podman 사용 여부 확인은 남아 있다.
+
+## ALA-19 RC10 후보 완료
+
+- 구현 3a340ad. CI 41415708436: Python 3.12 전체 401 passed + 40 subtests (73.20초), 공개 이력 검사·Bash·고정 의존성·후보 빌드·CLI smoke 통과.
+- RC10 체크섬과 manifest 55개 파일 검증, 인증 없는 공개 다운로드 byte 일치 확인.
+- 기존 PR #5를 최종 두 화면 TUI 범위로 갱신했다: https://github.com/ubion-dev/project-ai-learning-analytics-instance-setup/pull/5
+- 시험판: https://github.com/ubion-dev/project-ai-learning-analytics-instance-setup/releases/tag/v0.1.0-rc.10
+- 실제 Rocky의 TUI·sudo·화면 수용과 Podman 사용 여부 확인·정리는 남아 있다. 실제 서버 패키지는 이번 작업에서 변경하지 않았다.
