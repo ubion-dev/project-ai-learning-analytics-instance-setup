@@ -71,8 +71,8 @@ def test_keyboard_navigation_and_report_details_share_structured_results():
         app = AlaApp(service=service)
         async with app.run_test(size=(80, 24)) as pilot:
             await pilot.pause()
-            assert app.section == "dashboard"
-            await pilot.press("down", "down", "down", "enter")
+            assert app.section == "home"
+            await pilot.press("down", "enter")
             await pilot.pause()
             assert app.section == "check"
             assert any(action == "inspect" for action, _ in service.calls)
@@ -287,8 +287,8 @@ def test_slow_status_does_not_block_keyboard_navigation():
             assert not service.status_gate.is_set()
             await pilot.press("down", "enter")
             await pilot.pause()
-            assert app.section == "config"
-            assert app.query_one("#config-user", Input).value == "user"
+            assert app.section == "check"
+            assert any(action == "inspect" for action, _ in service.calls)
     run(scenario())
 
 
@@ -314,15 +314,21 @@ def test_entire_install_path_is_reachable_with_keys_only():
         app = AlaApp(service=service)
         async with app.run_test(size=(80, 24)) as pilot:
             await pilot.pause()
-            await pilot.press("down", "down", "enter", "tab", "enter")
+            await pilot.press("enter")
             await pilot.pause()
-            assert app.section == "setup"
+            assert app.section == "wizard"
+            assert app._wizard_stage == "account"
+            await pilot.press("enter")
+            await pilot.pause()
+            assert app._wizard_stage == "display"
+            await pilot.press("tab", "enter")
+            await pilot.pause()
+            assert app._wizard_stage == "review"
             assert app._plan_config == service.config
-            await pilot.press("tab", "enter")
+            assert not any(action == "submit" for action, _ in service.calls)
+            await pilot.press("enter")
             await pilot.pause()
-            assert isinstance(app.screen, ApplyConfirmation)
-            await pilot.press("tab", "enter")
-            await pilot.pause()
+            assert app._wizard_stage == "running"
             assert sum(action == "submit" for action, _ in service.calls) == 1
     run(scenario())
 
@@ -401,4 +407,137 @@ def test_prepare_verification_retry_can_be_reviewed_and_applied():
             assert not app.query_one('#apply-plan', Button).disabled
             await confirm_with_keyboard(app, pilot)
             assert any(action == 'prepare-submit' for action, _ in service.calls)
+    run(scenario())
+
+
+def test_home_has_four_task_entries_and_no_technical_table():
+    async def scenario():
+        service = FakeService()
+        app = AlaApp(service=service)
+        async with app.run_test(size=(80, 24)) as pilot:
+            await pilot.pause()
+            assert app.query_one('#navigation', OptionList).option_count == 4
+            assert not app.query_one('#toolbar').display
+            assert app.section == 'home'
+            assert not any(a in {'config-save', 'submit', 'prepare-submit'} for a, _ in service.calls)
+    run(scenario())
+
+
+async def open_wizard(app, pilot):
+    await pilot.pause()
+    app.query_one('#navigation', OptionList).focus()
+    await pilot.press('home', 'enter')
+    await pilot.pause()
+    assert app._wizard_base is not None
+
+
+async def guided_review(app, pilot, desktop=False):
+    await open_wizard(app, pilot)
+    await app.wizard_advance()
+    if desktop:
+        app.query_one('#wizard-web', Checkbox).value = False
+    await pilot.pause()
+    await app.wizard_advance()
+    await pilot.pause()
+
+
+def test_guided_desktop_preserves_advanced_options_and_cancel_does_not_install():
+    async def scenario():
+        service = FakeService()
+        service.config.update(root_bash=True, dev_tools=True, timezone='UTC', ssh_zone='public')
+        app = AlaApp(service=service)
+        async with app.run_test(size=(80, 24)) as pilot:
+            await guided_review(app, pilot, desktop=True)
+            assert app._wizard_stage == 'review'
+            assert service.config['display'] and service.config['autologin']
+            assert not service.config['autostart']
+            assert service.config['url'] == 'https://example.com'
+            assert service.config['root_bash'] and service.config['dev_tools']
+            assert service.config['timezone'] == 'UTC'
+            assert service.config['ssh_zone'] == 'public'
+            await pilot.press('escape')
+            assert app.section == 'home'
+            assert not any(a in {'submit', 'prepare-submit'} for a, _ in service.calls)
+    run(scenario())
+
+
+def test_guided_did_requires_url_and_existing_general_account():
+    async def scenario():
+        service = FakeService()
+        app = AlaApp(service=service)
+        async with app.run_test() as pilot:
+            await open_wizard(app, pilot)
+            app.query_one('#wizard-user', Input).value = 'root'
+            await app.wizard_advance()
+            assert app._wizard_stage == 'account'
+            app.query_one('#wizard-user', Input).value = 'user'
+            await app.wizard_advance()
+            app.query_one('#wizard-url', Input).value = ''
+            await app.wizard_advance()
+            assert app._wizard_stage == 'display'
+            assert not any(a == 'config-save' for a, _ in service.calls)
+    run(scenario())
+
+
+def test_guided_plan_blocker_empty_result_and_stale_config_do_not_submit():
+    async def scenario():
+        for rows in ([], [CheckResult('platform', 'blocked', next_action='지원 OS 확인')]):
+            service = FakeService()
+            service.report = Report(rows).to_dict()
+            app = AlaApp(service=service)
+            async with app.run_test() as pilot:
+                await guided_review(app, pilot)
+                assert app.query_one('#wizard-next', Button).disabled
+                await app.wizard_advance()
+                assert not any(a == 'submit' for a, _ in service.calls)
+        service = FakeService()
+        app = AlaApp(service=service)
+        async with app.run_test() as pilot:
+            await guided_review(app, pilot)
+            service.config['url'] = 'https://other.example.com'
+            await app.wizard_advance()
+            assert not any(a == 'submit' for a, _ in service.calls)
+    run(scenario())
+
+
+def test_guided_auth_failure_retries_without_saving_or_installing():
+    async def scenario():
+        service = FakeService()
+        app = AlaApp(service=service)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            original = service.authenticate
+            def fail():
+                raise PermissionError('인증 실패')
+            service.authenticate = fail
+            await pilot.press('enter')
+            await pilot.pause()
+            assert app.query_one('#wizard-next', Button).disabled
+            assert not any(a == 'config-save' for a, _ in service.calls)
+            service.authenticate = original
+            await app.begin_wizard()
+            assert not app.query_one('#wizard-next', Button).disabled
+            assert app._wizard_stage == 'account'
+    run(scenario())
+
+
+def test_guided_progress_resumes_existing_job_and_shows_next_action():
+    async def scenario():
+        service = FakeService()
+        run_id = '20261029T000000Z-1234abcd'
+        service.jobs[run_id] = dict(run_id=run_id, state='running', stages=[])
+        app = AlaApp(service=service)
+        async with app.run_test(size=(80, 24)) as pilot:
+            await pilot.pause()
+            await pilot.press('enter')
+            await pilot.pause()
+            assert app._wizard_stage == 'running'
+            assert not any(a == 'config-save' for a, _ in service.calls)
+            service.jobs[run_id].update(state='pending', report=Report([
+                CheckResult('gpu.driver', 'pending', next_action='재부팅 후 ala check 실행')
+            ]).to_dict())
+            await app.poll_job()
+            assert '재부팅 후' in app.query_one('#wizard-result', TextArea).text
+            await pilot.press('q')
+        assert service.jobs[run_id]['state'] == 'pending'
     run(scenario())

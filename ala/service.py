@@ -60,7 +60,7 @@ class Operations:
             if action == 'status':
                 import socket
                 from .prepare import Prepare
-                report.update(hostname=socket.gethostname(), config=config.to_dict(), runs=JobStore(self.paths, self.host).list(),
+                report.update(hostname=socket.gethostname(), config=config.to_dict(), config_exists=self.paths.config.exists(), runs=JobStore(self.paths, self.host).list(),
                               preparation=Prepare(config, host=self.host, paths=self.paths).inspect().to_dict())
             return report
         if action == 'submit':
