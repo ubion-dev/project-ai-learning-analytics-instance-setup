@@ -14,11 +14,11 @@ from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen
-from textual.widgets import Button, Checkbox, ContentSwitcher, DataTable, Footer, Header, Input, Label, OptionList, Static, TextArea
-from textual.widgets.option_list import Option
+from textual.widgets import Button, Checkbox, ContentSwitcher, DataTable, Footer, Input, Label, OptionList, Static, TextArea
 
+from . import __version__
 from .config import Config
-from .guided import GuidedSetup, HOME_MENU, blocking_rows
+from .guided import GuidedSetup, HOME_MENU, PAGE_TITLES, blocking_rows
 
 
 SECTIONS = (
@@ -88,59 +88,75 @@ class AlaApp(GuidedSetup, App[None]):
     SUB_TITLE = "SSH 환경 관리"
     ENABLE_COMMAND_PALETTE = False
     CSS = """
-    Screen { min-width: 1; background: #101820; color: #e4edf5; }
-    Header { background: #182633; color: #d9e9f5; }
-    Footer { background: #182633; color: #a8bdce; }
-    Button { background: #253746; color: #e4edf5; border: tall #253746; }
-    Button.-primary { background: #256e87; border: tall #256e87; color: #ffffff; }
-    Button:focus { text-style: bold; border: tall #8cdbec; }
-    Button:disabled { background: #1b2935; border: tall #1b2935; color: #8293a1; }
-    Input { background: #182633; border: tall #344b5e; }
-    Input:focus { border: tall #8cdbec; }
-    OptionList { background: #182633; }
-    OptionList > .option-list--option-highlighted { background: #28566a; color: #ffffff; text-style: bold; }
-    TextArea { background: #141f2a; border: round #344b5e; }
-    Collapsible { background: #182633; border: none; margin: 0; padding: 0; }
-    #review-status { background: #193b36; color: #d4f5e4; border-left: thick #67c4a1; padding: 0 1; }
-    #review-status.has-blockers { background: #3a2e22; color: #ffdeb0; border-left: thick #e6ab60; }
-    #review-counts { color: #9dd5e5; text-style: bold; }
-    #review-changes { background: #182633; padding: 0 1; }
-    #review-footnote { color: #a2b4c4; }
-    #wizard-review { scrollbar-size: 1 1; }
-    #wizard-summary { height: 14; min-height: 6; }
-
-    #small-terminal { display: none; height: auto; background: $warning; color: $background; padding: 0 1; }
-    #toolbar { height: 3; }
+    Screen { background: #10151c; color: #ecf1f7; }
+    #app-header { height: 1; background: #171f2a; padding: 0 2; align-vertical: middle; }
+    #brand { width: 5; height: 1; color: #83e3c4; text-style: bold; }
+    #app-name { width: 1fr; height: 1; color: #ced9e5; }
+    #host-label { width: auto; max-width: 26; height: 1; margin-right: 2; color: #a6b6c8; }
+    #app-version { width: auto; height: 1; color: #a6b6c8; margin-right: 2; }
+    #go-home { min-width: 8; width: 8; height: 1; border: none; padding: 0; margin: 0; }
+    #go-home:focus { background: #284e56; color: #ffffff; }
+    Footer { background: #171f2a; color: #b6c8da; }
+    #small-terminal { display: none; height: auto; background: #493622; color: #ffe0af; padding: 0 2; }
+    #notice { display: none; height: auto; max-height: 2; background: #10151c; color: #c0cfdf; padding: 0 2; }
+    #toolbar { height: 3; padding-left: 2; }
     #toolbar Button { min-width: 10; margin-right: 1; }
-    #notice { height: auto; max-height: 2; padding: 0 1; color: #b7c8d8; background: #182633; }
-    #body { height: 1fr; }
-    #navigation { width: 24; min-width: 20; height: 1fr; border-right: solid #344b5e; padding: 1 0; }
-    #content { width: 1fr; padding: 1 2 0 2; max-width: 120; }
+    #body { height: 1fr; align-horizontal: center; }
+    #workspace { width: 100%; max-width: 96; height: 1fr; padding: 0 2; }
+    #content { width: 100%; max-width: 96; height: 1fr; padding: 0; }
+    #page-context { height: 1; margin: 0 0 1 0; color: #99adc3; }
     .panel { height: 1fr; overflow-y: auto; }
-    .actions { height: auto; min-height: 3; }
+    #home { align-horizontal: center; padding-top: 1; }
+    .home-title { height: auto; text-style: bold; margin-bottom: 1; }
+    .home-description { height: auto; color: #c0cfdf; }
+    #home-status { height: auto; color: #a8bbd0; margin-bottom: 1; }
+    #navigation { width: 100%; height: 10; min-height: 8; background: #171f2a; border: round #33465c; padding: 0 1; }
+    OptionList > .option-list--option-highlighted { background: #284e56; color: #ffffff; text-style: none; }
+    OptionList:focus > .option-list--option-highlighted { background: #284e56; color: #ffffff; }
+    #update-notice { height: auto; max-height: 2; color: #83e3c4; }
+    #wizard { overflow: hidden hidden; }
+    #wizard-title { margin-bottom: 0; }
+    #wizard-steps { height: 1; margin-bottom: 1; }
+    #wizard-pages { height: 1fr; }
+    #wizard-pages Static, #wizard-pages Label { height: auto; }
+    .field-help { color: #b8c8d9; }
+    #wizard-user, #wizard-url { margin: 1 0; }
+    #wizard-review { scrollbar-size: 1 1; }
+    #wizard-choice { margin-bottom: 1; color: #b8c8d9; }
+    #review-status { background: #19372f; color: #d1f4e7; border-left: thick #83e3c4; padding: 0 1; margin-bottom: 1; }
+    #review-status.has-blockers { background: #392d20; color: #ffe0b3; border-left: thick #efb46d; }
+    #review-counts { color: #b6dce8; margin-bottom: 1; }
+    #review-changes { background: #171f2a; padding: 0 1; margin-bottom: 1; }
+    #review-footnote { color: #a8bbd0; }
+    #wizard-summary { height: 12; min-height: 6; }
+    #wizard-result { height: 1fr; min-height: 3; }
+    #wizard-progress { margin-bottom: 1; }
+    .actions { height: 3; min-height: 3; }
     .actions Button { margin-right: 1; min-width: 9; }
+    #wizard-actions { margin-top: 1; align-horizontal: right; }
+    #wizard-next { width: 20; min-width: 20; margin-right: 0; }
+    #wizard-back { width: 12; min-width: 12; }
+    Button { background: #202e3e; color: #e5edf6; border: tall #202e3e; }
+    Button.-primary { background: #83e3c4; border: tall #83e3c4; color: #0f241e; text-style: bold; }
+    Button:focus { border: tall #c6f7e7; text-style: bold; }
+    Button:disabled { background: #1c2632; border: tall #1c2632; color: #a8b7c8; opacity: 100%; text-opacity: 100%; }
+    Input { background: #171f2a; border: tall #33465c; }
+    Input:focus { border: tall #83e3c4; }
+    Checkbox { height: 3; }
+    TextArea { background: #141d28; border: round #33465c; }
+    Collapsible { background: #171f2a; border: none; padding: 0; margin: 0 0 1 0; }
     .summary { height: auto; max-height: 4; }
     .report-table { height: 1fr; min-height: 4; }
-    .details { height: 5; min-height: 3; border: solid $primary; }
+    .details { height: 5; min-height: 3; border: round #33465c; }
     #config-form { height: 1fr; }
     #config-form Label { height: 1; }
     #config-form Input { margin-bottom: 1; }
-    #config-form Checkbox { height: 3; }
     #config-note { height: auto; }
     #job-summary { height: auto; max-height: 4; }
     #setup-log { height: 5; min-height: 3; }
     #chrome-output, #run-output { height: 1fr; min-height: 4; }
     #run-table { height: 6; min-height: 3; }
-    .home-title { height: auto; margin-bottom: 1; text-style: bold; }
-    #home Static { height: auto; margin-bottom: 1; }
-    #wizard-pages { height: 1fr; }
-    #wizard-pages Static { height: auto; margin-bottom: 1; }
-    #wizard-pages Label { height: auto; }
-    #wizard-result { height: 1fr; min-height: 3; }
     #advanced Button { width: 100%; margin-bottom: 1; }
-    #wizard-user, #wizard-url { margin-bottom: 1; }
-    #wizard-next { width: 20; min-width: 20; }
-    #wizard-back { width: 12; min-width: 12; }
     """
     BINDINGS = [
         Binding("q", "leave", "종료"), Binding("escape", "navigation", "홈"),
@@ -165,67 +181,73 @@ class AlaApp(GuidedSetup, App[None]):
         self._submitting = False
 
     def compose(self) -> ComposeResult:
-        yield Header(show_clock=False)
+        with Horizontal(id="app-header"):
+            yield Static("ala", id="brand", markup=False)
+            yield Static("서버 환경 관리", id="app-name", markup=False)
+            yield Static("", id="host-label", markup=False)
+            yield Static(__version__, id="app-version", markup=False)
+            yield Button("홈", id="go-home")
         yield Static("화면이 작습니다. 80×24 이상으로 늘리거나 CLI 하위 명령을 사용하세요.", id="small-terminal", markup=False)
         with Horizontal(id="toolbar"):
             yield Button("권한 인증", id="authenticate")
             yield Button("새로고침", id="refresh")
-        yield Static("읽기 전용 상태 조회 중입니다. 필요하면 'a'로 sudo 권한을 인증하세요.", id="notice", markup=False)
-        with Horizontal(id="body"):
-            yield OptionList(*(Option(title, id=key) for key, title in HOME_MENU), id="navigation")
-            with ContentSwitcher(initial=self.section, id="content"):
-                yield from self.guided_panels()
-                with Vertical(id="dashboard", classes="panel"):
-                    yield Static("상태 요약", id="dashboard-summary", classes="summary", markup=False)
-                    yield DataTable(id="dashboard-table", classes="report-table", cursor_type="row")
-                    yield TextArea("", id="dashboard-detail", classes="details", read_only=True)
-                with Vertical(id="config", classes="panel"):
-                    with VerticalScroll(id="config-form", disabled=True):
-                        yield Label("화면 사용자 (기존 일반 계정)")
-                        yield Input(id="config-user", placeholder="user")
-                        yield Label("DID URL (로그인 없는 http/https, 미정이면 비움)")
-                        yield Input(id="config-url", placeholder="https://example.com")
-                        yield Label("시간대")
-                        yield Input("Asia/Seoul", id="config-timezone")
-                        yield Label("SSH 방화벽 zone (비우면 감지)")
-                        yield Input(id="config-ssh_zone")
-                        for key, title in BOOL_FIELDS:
-                            yield Checkbox(title, id=f"config-{key}")
-                        yield Static("표시용 새 Chrome 프로필만 키링 비사용으로 실행합니다.\n이 프로필에 계정 암호·인증정보를 저장하지 마세요.", id="config-note", markup=False)
-                    with Horizontal(classes="actions"):
-                        yield Button("구성 저장", id="save-config", variant="primary", disabled=True)
-                        yield Button("다시 읽기", id="reload-config")
-                with Vertical(id="setup", classes="panel"):
-                    with Horizontal(classes="actions"):
-                        yield Button("환경 설정 계획", id="make-plan", variant="primary")
-                        yield Button("계획 적용", id="apply-plan", variant="warning", disabled=True)
-                        yield Button("초기 OS 계획", id="prepare-plan")
-                    yield Static("변경 계획을 먼저 확인하세요.", id="plan-summary", classes="summary", markup=False)
-                    yield DataTable(id="plan-table", classes="report-table", cursor_type="row")
-                    yield TextArea("", id="plan-detail", classes="details", read_only=True)
-                    yield Static("설치 실행 기록이 없습니다.", id="job-summary", markup=False)
-                    yield TextArea("", id="setup-log", read_only=True)
-                with Vertical(id="check", classes="panel"):
-                    with Horizontal(classes="actions"):
-                        yield Button("Wi-Fi 진단", id="network-check")
-                    yield Static("설정·서비스를 변경하지 않고 검사합니다.", id="check-summary", classes="summary", markup=False)
-                    yield DataTable(id="check-table", classes="report-table", cursor_type="row")
-                    yield TextArea("", id="check-detail", classes="details", read_only=True)
-                with Vertical(id="chrome", classes="panel"):
-                    with Horizontal(classes="actions"):
-                        yield Button("시작", id="chrome-start")
-                        yield Button("중지", id="chrome-stop")
-                        yield Button("재시작", id="chrome-restart")
-                    with Horizontal(classes="actions"):
-                        yield Button("상태", id="chrome-status")
-                        yield Button("로그", id="chrome-logs")
-                        yield Button("검사", id="chrome-check")
-                    yield Static("중지는 현재 실행만 종료합니다. 다음 로그인·부팅에서는 자동 시작합니다.", classes="summary", markup=False)
-                    yield TextArea("", id="chrome-output", read_only=True)
-                with Vertical(id="runs", classes="panel"):
-                    yield Static("실행을 선택하고 Enter로 결과·로그를 확인하세요.", classes="summary", markup=False)
-                    yield DataTable(id="run-table", cursor_type="row")
-                    yield TextArea("", id="run-output", read_only=True)
+        yield Static("", id="notice", markup=False)
+        with Vertical(id="body"):
+            with Vertical(id="workspace"):
+                yield Static(PAGE_TITLES[self.section], id="page-context", markup=False)
+                with ContentSwitcher(initial=self.section, id="content"):
+                    yield from self.guided_panels()
+                    with Vertical(id="dashboard", classes="panel"):
+                        yield Static("상태 요약", id="dashboard-summary", classes="summary", markup=False)
+                        yield DataTable(id="dashboard-table", classes="report-table", cursor_type="row")
+                        yield TextArea("", id="dashboard-detail", classes="details", read_only=True)
+                    with Vertical(id="config", classes="panel"):
+                        with VerticalScroll(id="config-form", disabled=True):
+                            yield Label("화면 사용자 (기존 일반 계정)")
+                            yield Input(id="config-user", placeholder="user")
+                            yield Label("DID URL (로그인 없는 http/https, 미정이면 비움)")
+                            yield Input(id="config-url", placeholder="https://example.com")
+                            yield Label("시간대")
+                            yield Input("Asia/Seoul", id="config-timezone")
+                            yield Label("SSH 방화벽 zone (비우면 감지)")
+                            yield Input(id="config-ssh_zone")
+                            for key, title in BOOL_FIELDS:
+                                yield Checkbox(title, id=f"config-{key}")
+                            yield Static("표시용 새 Chrome 프로필만 키링 비사용으로 실행합니다.\n이 프로필에 계정 암호·인증정보를 저장하지 마세요.", id="config-note", markup=False)
+                        with Horizontal(classes="actions"):
+                            yield Button("구성 저장", id="save-config", variant="primary", disabled=True)
+                            yield Button("다시 읽기", id="reload-config")
+                    with Vertical(id="setup", classes="panel"):
+                        with Horizontal(classes="actions"):
+                            yield Button("환경 설정 계획", id="make-plan", variant="primary")
+                            yield Button("계획 적용", id="apply-plan", variant="warning", disabled=True)
+                            yield Button("초기 OS 계획", id="prepare-plan")
+                        yield Static("변경 계획을 먼저 확인하세요.", id="plan-summary", classes="summary", markup=False)
+                        yield DataTable(id="plan-table", classes="report-table", cursor_type="row")
+                        yield TextArea("", id="plan-detail", classes="details", read_only=True)
+                        yield Static("설치 실행 기록이 없습니다.", id="job-summary", markup=False)
+                        yield TextArea("", id="setup-log", read_only=True)
+                    with Vertical(id="check", classes="panel"):
+                        with Horizontal(classes="actions"):
+                            yield Button("Wi-Fi 진단", id="network-check")
+                        yield Static("설정·서비스를 변경하지 않고 검사합니다.", id="check-summary", classes="summary", markup=False)
+                        yield DataTable(id="check-table", classes="report-table", cursor_type="row")
+                        yield TextArea("", id="check-detail", classes="details", read_only=True)
+                    with Vertical(id="chrome", classes="panel"):
+                        with Horizontal(classes="actions"):
+                            yield Button("시작", id="chrome-start")
+                            yield Button("중지", id="chrome-stop")
+                            yield Button("재시작", id="chrome-restart")
+                        with Horizontal(classes="actions"):
+                            yield Button("상태", id="chrome-status")
+                            yield Button("로그", id="chrome-logs")
+                            yield Button("검사", id="chrome-check")
+                        yield Static("중지는 현재 실행만 종료합니다. 다음 로그인·부팅에서는 자동 시작합니다.", classes="summary", markup=False)
+                        yield TextArea("", id="chrome-output", read_only=True)
+                    with Vertical(id="runs", classes="panel"):
+                        yield Static("실행을 선택하고 Enter로 결과·로그를 확인하세요.", classes="summary", markup=False)
+                        yield DataTable(id="run-table", cursor_type="row")
+                        yield TextArea("", id="run-output", read_only=True)
         yield Footer()
 
     def on_mount(self):
@@ -235,7 +257,13 @@ class AlaApp(GuidedSetup, App[None]):
         navigation = self.query_one("#navigation", OptionList)
         navigation.highlighted = next((i for i, (key, _) in enumerate(HOME_MENU) if key == self.section), 0)
         self.query_one("#toolbar").display = self.section not in {"home", "wizard"}
-        navigation.focus()
+        if self.section == "home":
+            navigation.focus()
+        else:
+            targets = {"config": "#config-user", "chrome": "#chrome-start", "setup": "#make-plan",
+                       "check": "#check-table", "dashboard": "#dashboard-table", "runs": "#run-table", "advanced": "#advanced-config"}
+            if self.section in targets:
+                self.call_after_refresh(self.query_one(targets[self.section]).focus)
         self._resize_warning()
         self.set_interval(1.5, self.poll_job)
         self.refresh_section()
@@ -267,7 +295,9 @@ class AlaApp(GuidedSetup, App[None]):
         return True
 
     def notice(self, message: str):
-        self.query_one("#notice", Static).update(Text(message))
+        notice = self.query_one("#notice", Static)
+        notice.update(Text(message))
+        notice.display = bool(message)
 
     def invalidate_plan(self):
         self._plan_config = None
@@ -295,6 +325,7 @@ class AlaApp(GuidedSetup, App[None]):
             value = await self.api("status")
             if value is None:
                 return
+            self.query_one("#host-label", Static).update(Text(str(value.get("hostname", "서버"))))
             self.SUB_TITLE = str(value.get("hostname", "SSH 환경 관리"))
             if value.get("preparation", {}).get("results"):
                 value = dict(value, results=value.get("results", []) + value["preparation"]["results"])
@@ -332,7 +363,7 @@ class AlaApp(GuidedSetup, App[None]):
 
     def action_navigation(self):
         self.show_section("home")
-        self.query_one("#navigation", OptionList).focus()
+        self.call_after_refresh(self.query_one("#navigation", OptionList).focus)
 
     def action_leave(self):
         self.exit()
@@ -368,7 +399,9 @@ class AlaApp(GuidedSetup, App[None]):
     @on(Button.Pressed)
     def button_pressed(self, event: Button.Pressed):
         key = event.button.id
-        if key == "wizard-next":
+        if key == "go-home":
+            self.action_navigation()
+        elif key == "wizard-next":
             self.run_worker(self.wizard_advance(), group="wizard", exit_on_error=False)
         elif key == "wizard-back":
             self.wizard_back()
