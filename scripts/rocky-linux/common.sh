@@ -4,6 +4,17 @@ set -Eeuo pipefail
 ROCKY_SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 trap 'printf "실패: %s:%s. 자동 재부팅하지 않습니다.\n" "${BASH_SOURCE[0]:-shell}" "$LINENO" >&2' ERR
 die() { printf '%s\n' "$*" >&2; exit 1; }
+# Machine-readable progress is opt-in; ordinary script output stays unchanged.
+ala_substep() {
+  [[ ${ALA_REPORT_PROGRESS:-0} == 1 ]] || return 0
+  [[ $# == 2 && $1 =~ ^[a-z0-9_]+$ ]] || die '잘못된 세부 진행 식별자입니다.'
+  case "$2" in
+    started|completed|pending|kept|failed) ;;
+    *) die '잘못된 세부 진행 상태입니다.' ;;
+  esac
+  printf '__ALA_SUBSTEP__\t%s\t%s\n' "$1" "$2"
+}
+
 require_rocky() {
   [[ $EUID == 0 ]] || die 'sudo bash로 실행하세요.'
   [[ -r /etc/os-release ]] || die 'Rocky Linux 10에서 실행하세요.'

@@ -104,6 +104,7 @@ class SimpleApp(App[None]):
         self._display_job = None
         self._progress_rows = []
         self._last_followed_step = None
+        self._expanded_steps = set()
 
     def compose(self) -> ComposeResult:
         yield Static(f'ala {__version__} · 서버 환경 관리' + (' · 관리자' if os.geteuid() == 0 else ''), id='heading', markup=False)
@@ -132,8 +133,9 @@ class SimpleApp(App[None]):
 
     def on_mount(self):
         self.query_one('#status-table', DataTable).add_columns('기능', '상태')
-        self.query_one('#setup-table', DataTable).add_column('설정 항목', key='item')
-        self.query_one('#setup-table', DataTable).add_column('현재 상태', key='state')
+        self.query_one('#setup-table', DataTable).add_column('설정 항목', key='item', width=28)
+        self.query_one('#setup-table', DataTable).add_column('현재 상태', key='state', width=14)
+        self.query_one('#setup-table', DataTable).add_column('세부 작업 · Enter 펼침', key='current', width=24)
         self.render_setup_table()
         self._resize_warning()
         self.set_interval(1.5, self.poll_job)
@@ -299,7 +301,17 @@ class SimpleApp(App[None]):
         self.render_setup_table()
 
     def render_setup_table(self):
-        rows = progress_rows(report=self._setup_report, job=self._display_job)
+        parents = progress_rows(report=self._setup_report, job=self._display_job)
+        rows = []
+        for parent in parents:
+            row = dict(parent)
+            children = row.get('children', [])
+            expanded = row['id'] in self._expanded_steps
+            row['label'] = ('▾ ' if expanded else '▸ ') + row['label'] if children else row['label']
+            rows.append(row)
+            if expanded:
+                for child in children:
+                    rows.append(dict(child, label='  ' + child['label'], parent_id=parent['id']))
         table = self.query_one('#setup-table', DataTable)
         old_ids = [row['id'] for row in self._progress_rows]
         ids = [row['id'] for row in rows]
@@ -308,18 +320,21 @@ class SimpleApp(App[None]):
         if old_ids != ids:
             table.clear()
             for row in rows:
-                table.add_row(Text(row['label']), self.progress_cell(row), key=row['id'])
+                table.add_row(Text(row['label']), self.progress_cell(row), Text(row.get('current_step', '')), key=row['id'])
             if selected in ids:
                 table.move_cursor(row=ids.index(selected), animate=False)
         else:
             for row in rows:
+                table.update_cell(row['id'], 'item', Text(row['label']))
                 table.update_cell(row['id'], 'state', self.progress_cell(row))
+                table.update_cell(row['id'], 'current', Text(row.get('current_step', '')))
         counts = {}
-        for row in rows:
+        for row in parents:
             label = STATE_LABELS.get(row['state'], row['state'])
             counts[label] = counts.get(label, 0) + 1
         self.query_one('#setup-summary', Static).update(Text(' · '.join(f'{label} {count}' for label, count in counts.items())))
-        running = next((row['id'] for row in rows if row['state'] in {'running', 'started'}), None)
+        running = next((row['id'] for row in rows if row.get('parent_id') and row['state'] == 'running'), None)
+        running = running or next((row['id'] for row in rows if row['state'] in {'running', 'started'}), None)
         inspecting = self.focused is table or self.focused is self.query_one('#setup-output')
         if running and running != self._last_followed_step:
             if not inspecting:
@@ -327,6 +342,17 @@ class SimpleApp(App[None]):
             self._last_followed_step = running
         if rows:
             self.show_setup_row(min(table.cursor_row, len(rows) - 1))
+
+    @on(DataTable.RowSelected, '#setup-table')
+    def toggle_step_details(self, event):
+        identifier = event.row_key.value
+        row = next((row for row in self._progress_rows if row['id'] == identifier), None)
+        if row and row.get('children'):
+            if identifier in self._expanded_steps:
+                self._expanded_steps.remove(identifier)
+            else:
+                self._expanded_steps.add(identifier)
+            self.render_setup_table()
 
     @staticmethod
     def progress_cell(row):

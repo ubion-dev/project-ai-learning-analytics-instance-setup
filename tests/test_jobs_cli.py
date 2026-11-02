@@ -263,3 +263,22 @@ def test_unreviewed_or_busy_first_setup_does_not_write_config(store, monkeypatch
     with pytest.raises(RuntimeError, match='이미 진행'):
         operations.dispatch('submit', {})
     assert not store.paths.config.exists()
+
+
+def test_worker_keeps_additive_substep_records_and_old_stage_contract(store):
+    class DetailedEngine:
+        supports_substeps = True
+        def __init__(self, *a, **kw): pass
+        def apply(self, on_stage, on_substep):
+            on_stage('base', 'started')
+            on_substep('base', 'timezone', 'started')
+            on_substep('base', 'timezone', 'completed')
+            on_stage('base', 'completed')
+            return Report([CheckResult('time.timezone','ok')])
+    job = store.submit(Config(user='user'), Path('/release'), Path('/python'))
+    assert run_worker(job['run_id'], paths=store.paths, host=store.host, engine_factory=DetailedEngine) == 0
+    result = store.load(job['run_id'])
+    assert [s['state'] for s in result['stages']] == ['started','completed']
+    assert [(s['stage'],s['id'],s['state']) for s in result['substeps']] == [
+        ('base','timezone','started'), ('base','timezone','completed')]
+    assert all(s['time'] for s in result['substeps'])

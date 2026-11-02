@@ -119,3 +119,22 @@ raise AssertionError((name, args))
         self.assertNotEqual(result.returncode, 0)
         self.assertNotIn('google-chrome-stable', json.loads(self.packages.read_text()))
         self.assertFalse(any(json.loads(line)[0] == 'dnf' for line in self.log.read_text().splitlines()))
+
+
+    def test_opt_in_progress_follows_real_base_operations(self):
+        result = self.apply(ALA_REPORT_PROGRESS='1')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        markers = [line.split('\t')[1:] for line in result.stdout.splitlines()
+                   if line.startswith('__ALA_SUBSTEP__\t')]
+        expected = []
+        for step in ('packages', 'chrome', 'chrome_policy', 'chrome_launcher', 'timezone', 'time_sync'):
+            expected += [[step, 'started'], [step, 'completed']]
+        self.assertEqual(markers, expected)
+
+    def test_failed_base_operation_never_reports_it_completed(self):
+        result = self.apply(ALA_REPORT_PROGRESS='1', IMPORT_FAIL='yes')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('__ALA_SUBSTEP__\tchrome\tstarted', result.stdout)
+        self.assertNotIn('__ALA_SUBSTEP__\tchrome\tcompleted', result.stdout)
+        self.assertNotIn('__ALA_SUBSTEP__\tchrome_policy\tstarted', result.stdout)
+        self.assertNotIn('google-chrome-stable', json.loads(self.packages.read_text()))

@@ -51,6 +51,7 @@ def _template(script, label):
 
 
 class Engine:
+    supports_substeps = True
     def __init__(self, config: Config, host=None, paths=None):
         self.config = config
         self.host = host if host is not None else Host()
@@ -481,10 +482,27 @@ class Engine:
     def plan(self) -> Report:
         return self.inspect()
 
-    def apply(self, on_stage=None) -> Report:
+    def apply(self, on_stage=None, on_substep=None) -> Report:
         def event(stage, state):
             if on_stage:
                 on_stage(stage, state)
+
+        def run_module(stage, command):
+            from .substeps import step_ids
+            allowed = step_ids(stage)
+            def output(line):
+                if len(line) > 256:
+                    return
+                fields = line.rstrip('\r\n').split('\t')
+                if (len(fields) == 3 and fields[0] == '__ALA_SUBSTEP__'
+                        and fields[1] in allowed
+                        and fields[2] in {'started', 'completed', 'pending', 'kept', 'failed'}
+                        and on_substep is not None):
+                    on_substep(stage, fields[1], fields[2])
+            reported = getattr(self.host, 'execute_reported', None)
+            if reported is not None:
+                return reported(command, env=dict(os.environ, ALA_REPORT_PROGRESS='1'), on_line=output)
+            return self.host.execute(command)
 
         error = platform_error(self.paths)
         if error:
@@ -535,7 +553,7 @@ class Engine:
                         continue
                     code = 10 if any(r.state == "pending" for r in outcome) else 0
                 else:
-                    code = self.host.execute(["bash", str(SCRIPTS / script), *args])
+                    code = run_module(stage, ["bash", str(SCRIPTS / script), *args])
                 if stage in {"gpu", "hardware"} and code == 10:
                     event(stage, "pending")
                 elif code != 0:
@@ -549,7 +567,7 @@ class Engine:
             if stage == "gpu" and any(r.id == "gpu.driver" and r.state == "ok" for r in after):
                 if any(r.state == "change_required" for r in after if r.id.startswith("gpu.runtime") or r.id.startswith("gpu.package")):
                     event("gpu_container", "started")
-                    code = self.host.execute(["bash", str(SCRIPTS / "setup-nvidia-container.sh")])
+                    code = run_module("gpu_container", ["bash", str(SCRIPTS / "setup-nvidia-container.sh")])
                     if code != 0:
                         return Report(self.inspect().results + [self._result("gpu_container.apply", "error", 0, code)])
                     event("gpu_container", "completed")

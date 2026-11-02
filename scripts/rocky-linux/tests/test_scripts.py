@@ -67,6 +67,25 @@ class ScriptTests(unittest.TestCase):
                     self.assertNotEqual(bad_result.returncode, 99)
                     self.assertNotIn(b'unexpected-package-install', bad_result.stderr)
 
+    def test_substep_markers_are_opt_in_and_validate_protocol_fields(self):
+        env = dict(os.environ)
+        env.pop('ALA_REPORT_PROGRESS', None)
+        command = ['bash', '-c', 'source "$1"; ala_substep packages started; echo ordinary-output',
+                   '_', str(SCRIPTS / 'common.sh')]
+        quiet = subprocess.run(command, env=env, capture_output=True, text=True)
+        self.assertEqual(quiet.returncode, 0, quiet.stderr)
+        self.assertEqual(quiet.stdout, 'ordinary-output\n')
+        enabled = subprocess.run(command, env=dict(env, ALA_REPORT_PROGRESS='1'), capture_output=True, text=True)
+        self.assertEqual(enabled.returncode, 0, enabled.stderr)
+        self.assertEqual(enabled.stdout, '__ALA_SUBSTEP__\tpackages\tstarted\nordinary-output\n')
+        for name, state in [('packages;bad', 'started'), ('packages', 'unexpected')]:
+            with self.subTest(name=name, state=state):
+                invalid = subprocess.run(['bash', '-c', 'source "$1"; ala_substep "$2" "$3"',
+                                          '_', str(SCRIPTS / 'common.sh'), name, state],
+                                         env=dict(env, ALA_REPORT_PROGRESS='1'), capture_output=True, text=True)
+                self.assertNotEqual(invalid.returncode, 0)
+                self.assertNotIn('__ALA_SUBSTEP__', invalid.stdout)
+
 
 class BootstrapTests(unittest.TestCase):
     def setUp(self):

@@ -234,3 +234,32 @@ def test_setup_progress_is_one_colored_row_per_stage_and_preserves_manual_select
             assert table.get_cell('gpu', 'state').plain == '◷ 적용 대기'
             assert table.get_cell('gpu', 'state').style == 'yellow'
     asyncio.run(scenario())
+
+
+def test_enter_expands_subtasks_and_live_column_uses_explicit_event():
+    async def scenario():
+        service = FakeService()
+        service.report = Report([CheckResult('base.package.git', 'ok'),
+                                 CheckResult('time.timezone', 'change_required')]).to_dict()
+        service.jobs['test-run'] = {'run_id':'test-run', 'state':'running',
+            'stages':[{'id':'base','state':'started'}],
+            'substeps':[{'stage':'base','id':'packages','state':'completed'},
+                        {'stage':'base','id':'timezone','state':'started'}]}
+        app = SimpleApp(service=service)
+        async with app.run_test(size=(80,24)) as pilot:
+            await pilot.pause()
+            table = app.query_one('#setup-table', DataTable)
+            assert '시간대' in table.get_cell('base', 'current').plain
+            before = table.row_count
+            table.focus()
+            table.move_cursor(row=0)
+            await pilot.press('enter')
+            await pilot.pause()
+            assert table.row_count > before
+            assert table.get_cell('base.packages', 'state').plain == '✓ 완료'
+            assert table.get_cell('base.timezone', 'state').plain == '● 진행 중'
+            await pilot.press('enter')
+            await pilot.pause()
+            assert table.row_count == before
+            assert not any(a == 'submit' for a,_ in service.calls)
+    asyncio.run(scenario())

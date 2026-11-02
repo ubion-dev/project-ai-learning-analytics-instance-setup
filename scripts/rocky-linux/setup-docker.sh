@@ -11,6 +11,7 @@ while (($#)); do
   esac
 done
 require_rocky
+ala_substep conflicts started
 # Do not silently uninstall a working Podman/container runtime environment.
 conflicts=()
 for package in podman podman-docker runc docker docker-common docker-engine; do
@@ -27,9 +28,15 @@ if ((${#conflicts[@]})); then
   printf '사용하지 않는 패키지임을 확인한 경우: sudo dnf remove %s\n' "${conflicts[*]}" >&2
   die '패키지를 자동 삭제하지 않았습니다. 제거 목록을 확인해 충돌을 해결한 뒤 같은 설치 명령을 다시 실행하세요.'
 fi
+ala_substep conflicts completed
+ala_substep repository started
 install_missing_packages curl ca-certificates dnf-plugins-core python3
 add_repo https://download.docker.com/linux/rhel/docker-ce.repo /etc/yum.repos.d/docker-ce.repo
+ala_substep repository completed
+ala_substep packages started
 install_missing_packages docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+ala_substep packages completed
+ala_substep logging started
 mkdir -p /etc/docker
 candidate=$(mktemp /etc/docker/.daemon.json.XXXXXX)
 trap 'rm -f "$candidate"' EXIT
@@ -49,6 +56,8 @@ PY
 dockerd --validate --config-file="$candidate"
 install_json_if_changed "$candidate" /etc/docker/daemon.json
 changed=$FILE_CHANGED
+ala_substep logging completed
+ala_substep services started
 for service in docker containerd; do
   if [[ $(systemctl is-enabled "$service" 2>/dev/null || true) != enabled ]]; then systemctl enable "$service"; fi
 done
@@ -59,9 +68,12 @@ else
   systemctl start docker
 fi
 ensure_service containerd
+ala_substep services completed
+ala_substep verify started
 systemctl is-active --quiet docker
 docker info >/dev/null
 docker compose version
+ala_substep verify completed
 echo 'Docker 설치/실행 확인 완료. 기존 컨테이너는 새 로그 설정으로 자동 변경되지 않습니다.'
 echo 'docker 그룹에 사용자를 자동 추가하지 않습니다. sudo docker로 사용하세요.'
 echo '컨테이너 부팅 복구에는 Compose restart 정책이 별도로 필요합니다.'

@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 import os
+import sys
 import subprocess
 import tempfile
 
@@ -43,6 +44,28 @@ class Host:
 
     def execute(self, argv, *, env=None) -> int:
         return subprocess.run(list(argv), env=env, check=False).returncode
+
+    def execute_reported(self, argv, *, env=None, on_line=None) -> int:
+        """Stream a module's output to the worker log and an optional observer."""
+        observer_error = None
+        with subprocess.Popen(list(argv), env=env, stdout=subprocess.PIPE,
+                              stderr=subprocess.STDOUT, text=True, errors='replace', bufsize=1) as process:
+            for line in process.stdout:
+                try:
+                    sys.stdout.write(line)
+                    sys.stdout.flush()
+                except OSError as exc:
+                    observer_error = observer_error or exc
+                if on_line is not None and observer_error is None:
+                    try:
+                        on_line(line)
+                    except Exception as exc:
+                        # Drain to completion: a record error must not kill an RPM transaction.
+                        observer_error = exc
+            code = process.wait()
+        if observer_error is not None:
+            raise observer_error
+        return code
 
 def atomic_json(path: Path, value, mode=0o600):
     import json

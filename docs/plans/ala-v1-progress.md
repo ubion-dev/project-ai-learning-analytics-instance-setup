@@ -256,3 +256,19 @@
 - PR #6: https://github.com/ubion-dev/project-ai-learning-analytics-instance-setup/pull/6
 - 시험판: https://github.com/ubion-dev/project-ai-learning-analytics-instance-setup/releases/tag/v0.1.0-rc.11
 - 실제 설정 작업 중에는 도구 갱신 잠금이 적용되므로 작업 종료 후 업데이트해야 한다. 실제 Rocky 화면 수용은 미완료이며 이번 변경은 설치 엔진/실제 장비를 수정하지 않는다.
+
+## ALA-21 시작
+
+- codex/setup-progress / 86021a4에서 큰 기능 내부 세부 구성/현재 작업 표시를 추가한다. 이전 RC11 자산은 유지한다.
+- 카탈로그/자식 상태 투영과 Shell 구조화 마커를 분담했고 출력 스트리밍·worker 부가 기록·TUI는 주담당이 진행한다.
+- 실제 진행 근거가 없는 세부 항목에 진행 중/완료를 추측하지 않는 계약을 확정했다.
+
+## ALA-21 구현·대상 검증
+
+- 기본 환경/업데이트 정책/Bash/SSH/Docker/GPU/컨테이너/선택 도구/화면의 세부 구성 카탈로그를 실제 검사 ID와 연결했다. Enter로 자식 행을 펼치고 현재 세부 작업 열에서 실제 started 신호를 확인한다.
+- Shell 구조화 마커는 opt-in이며 기존 명령 앞뒤에서만 보고한다. Host는 출력과 마커를 실시간으로 전달하고 모듈 종료 코드를 유지한다. 허용 ID/state만 worker의 additive substeps에 저장한다.
+- 진행 관측 저장이 실패해도 자식 출력을 끝까지 읽은 뒤 오류로 보고해 RPM 프로세스를 중간에 죽이지 않는다. 별도 상세 신호가 없는 작업은 구성 항목과 검사 결과만 표시한다.
+- 카탈로그/순수 모델 25개, 기존 Shell 모의 회귀 90개+34 subtests, 새 Shell 검사 포함 대상 35개+29 subtests 통과. 출력 스트리밍·worker·TUI·카탈로그·진행 통합 61개 통과.
+- 즉시 callback/비정상 종료 코드/관측 실패 시 drain/허용 마커 필터/기존 단계 호환/Enter 펼침·접기·상태 조회 무변경을 검증했다.
+- 80×24/120×36에서 기본 환경의 시간대 설정 진행을 합성 데이터로 렌더링·확인했다. 원래 설치 정책과 실제 장비는 변경하지 않았다.
+- 기존 PR #6이 OPEN이므로 최종 세부 진행 범위로 이어 반영한다. RC12 전체 CI·배포 파일 검증이 남아 있다.

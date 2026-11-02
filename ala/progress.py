@@ -5,6 +5,7 @@ import json
 from collections import OrderedDict
 
 from .model import redact
+from .substeps import child_rows
 
 STAGES = (
     ('base', '기본 패키지·Chrome'), ('update', '자동 업데이트 차단'),
@@ -165,6 +166,8 @@ def progress_rows(report=None, job=None):
         if job and job.get('query_warning') and state == 'running':
             state = 'unknown'
         label = _LABELS.get(identifier, _DIAGNOSTICS.get(identifier, identifier + ' 진단' if diagnostic else identifier))
+        children, current_step = child_rows(identifier, report=report, job=job, parent_state=state)
         rows.append({'id': identifier, 'label': label, 'state': state,
-                     'detail': _detail(items, state, event, job, diagnostic=diagnostic)})
+                     'detail': _detail(items, state, event, job, diagnostic=diagnostic),
+                     'children': children, 'current_step': current_step})
     return rows

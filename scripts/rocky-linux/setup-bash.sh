@@ -21,7 +21,9 @@ require_rocky
 [[ -n $target_user ]] || { echo '--user로 대상 계정을 지정하세요.' >&2; exit 2; }
 getent passwd "$target_user" >/dev/null || { echo '존재하지 않는 사용자입니다.' >&2; exit 1; }
 
+ala_substep packages started
 install_missing_packages bash git bash-completion
+ala_substep packages completed
 
 configure_user() {
   local account=$1 account_home current_shell
@@ -130,7 +132,13 @@ USER_SETUP
   esac
 }
 
+ala_substep user_shell started
 configure_user "$target_user"
-if $with_root && [[ $target_user != root ]]; then configure_user root; fi
+ala_substep user_shell completed
+if $with_root && [[ $target_user != root ]]; then
+  ala_substep root_shell started
+  configure_user root
+  ala_substep root_shell completed
+fi
 printf '\n완료: SSH로 다시 접속하세요. 재부팅은 필요 없습니다.\n'
 printf 'root에도 적용했다면 sudo -i로 확인하세요. root SSH 설정은 변경하지 않습니다.\n'

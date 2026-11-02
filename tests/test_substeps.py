@@ -1,0 +1,147 @@
+from copy import deepcopy
+
+from ala.progress import progress_rows
+from ala.substeps import STAGE_TASKS, child_rows, step_ids
+
+
+def checks(*items, **extra):
+    return dict(results=[{'id': identifier, 'state': state, 'actual': state} for identifier, state in items], **extra)
+
+
+def children(stage, **kwargs):
+    rows, current = child_rows(stage, **kwargs)
+    return {row['id'].split('.', 1)[1]: row for row in rows}, current
+
+
+def test_catalog_is_known_safe_and_every_install_stage_has_details():
+    assert len(STAGE_TASKS) == 11
+    for parent, tasks in STAGE_TASKS.items():
+        assert tasks and len(step_ids(parent)) == len(tasks)
+        assert all(task['label'] and task['checks'] is not None for task in tasks)
+        assert all(identifier.replace('_', '').isalnum() for identifier in step_ids(parent))
+    rows = progress_rows()
+    assert all(row['children'] and not row['current_step'] for row in rows)
+    assert all(child['state'] == 'unknown' for row in rows for child in row['children'])
+
+
+def test_report_only_explains_actual_settings_without_guessing_running_step():
+    rows, current = children('base', report=checks(('base.package.git', 'ok'),
+        ('base.package.google-chrome-stable', 'change_required'), ('base.chrome.version', 'pending'),
+        ('base.timezone', 'ok'), ('base.service.chronyd.active', 'ok')))
+    assert rows['packages']['state'] == 'ok'
+    assert rows['chrome']['state'] == 'change_required'
+    assert rows['timezone']['state'] == rows['time_sync']['state'] == 'ok'
+    assert rows['chrome_policy']['state'] == 'unknown'
+    assert current == ''
+
+
+def test_explicit_signal_selects_only_the_actual_latest_running_child():
+    report = checks(('base.package.git', 'change_required'))
+    job = {'state': 'running', 'stages': [{'id': 'base', 'state': 'started'}], 'substeps': [
+        {'stage': 'base', 'id': 'packages', 'state': 'started'},
+        {'stage': 'base', 'id': 'packages', 'state': 'completed'},
+        {'stage': 'base', 'id': 'chrome', 'state': 'started'},
+    ]}
+    original = deepcopy(job)
+    parent = next(row for row in progress_rows(report=report, job=job) if row['id'] == 'base')
+    rows = {row['id']: row for row in parent['children']}
+    assert rows['base.packages']['state'] == 'completed'
+    assert rows['base.chrome']['state'] == 'running'
+    assert parent['current_step'] == 'Chrome 설치·실행 확인'
+    assert rows['base.timezone']['state'] == 'waiting'
+    assert job == original
+
+
+def test_old_jobs_do_not_invent_detail_progress_from_parent():
+    job = {'state': 'running', 'stages': [{'id': 'base', 'state': 'started'}]}
+    rows, current = children('base', report=checks(('base.timezone', 'change_required')), job=job, parent_state='running')
+    assert not current
+    assert rows['timezone']['state'] == 'waiting'
+    assert all(row['state'] != 'running' for row in rows.values())
+    assert '추정하지 않습니다' in rows['timezone']['detail']
+
+
+def test_finished_child_never_leaves_a_stale_other_child_running():
+    rows, current = children('base', job={'state': 'running', 'substeps': [
+        {'stage': 'base', 'id': 'packages', 'state': 'started'},
+        {'stage': 'base', 'id': 'chrome', 'state': 'completed'},
+    ]}, parent_state='running')
+    assert current == ''
+    assert rows['packages']['state'] == 'unknown'
+    assert rows['chrome']['state'] == 'completed'
+
+
+def test_final_real_check_overrides_completion_and_parent_failure_marks_open_step():
+    job = {'state': 'failed', 'substeps': [{'stage': 'base', 'id': 'timezone', 'state': 'completed'},
+                                        {'stage': 'base', 'id': 'time_sync', 'state': 'started'}],
+           'report': checks(('base.timezone', 'change_required'), ('base.service.chronyd.active', 'ok'))}
+    rows, current = children('base', job=job, parent_state='error')
+    assert rows['timezone']['state'] == 'change_required'
+    assert rows['time_sync']['state'] == 'error'
+    assert not current
+
+
+def test_reboot_wait_overrides_driver_completion():
+    rows, current = children('gpu', job={'state': 'pending', 'substeps': [
+        {'stage': 'gpu', 'id': 'driver', 'state': 'completed'}],
+        'report': checks(('gpu.driver', 'pending'))}, parent_state='pending')
+    assert rows['driver']['state'] == 'pending'
+    assert current == ''
+
+
+def test_missing_and_empty_final_reports_never_reuse_old_green_values():
+    for report in (None, {}):
+        job = {'state': 'failed', 'substeps': [{'stage': 'base', 'id': 'chrome', 'state': 'completed'}]}
+        if report is not None:
+            job['report'] = report
+        rows, current = children('base', report=checks(('base.chrome.version', 'ok')), job=job, parent_state='unknown')
+        assert rows['chrome']['state'] == 'unknown'
+        assert not current
+
+
+def test_disabled_scope_and_optional_root_theme_are_not_applicable():
+    rows, _ = children('gpu', report=checks(), parent_state='not_applicable')
+    assert all(row['state'] == 'not_applicable' for row in rows.values())
+    rows, _ = children('shell', report=checks(config={'root_bash': False}))
+    assert rows['root_shell']['state'] == 'not_applicable'
+    assert rows['user_shell']['state'] == 'unknown'
+
+
+def test_warning_and_interruption_are_not_live_progress():
+    event = [{'stage': 'base', 'id': 'timezone', 'state': 'started'}]
+    rows, current = children('base', job={'state': 'running', 'substeps': event, 'query_warning': 'query failed'}, parent_state='unknown')
+    assert rows['timezone']['state'] == 'unknown' and current == ''
+    rows, current = children('base', job={'state': 'interrupted', 'substeps': event}, parent_state='interrupted')
+    assert rows['timezone']['state'] == 'interrupted' and current == ''
+
+
+def test_unknown_marker_and_wrong_parent_are_ignored():
+    rows, current = children('base', job={'state': 'running', 'substeps': [
+        {'stage': 'base', 'id': 'arbitrary', 'state': 'started'},
+        {'stage': 'docker', 'id': 'packages', 'state': 'started'},
+    ]}, parent_state='running')
+    assert current == ''
+    assert all(row['state'] == 'waiting' for row in rows.values())
+
+
+def test_normal_final_checks_remain_current_normal_for_kept_modules():
+    rows, _ = children('base', job={'state': 'completed', 'report': checks(('base.timezone', 'ok'))}, parent_state='kept')
+    assert rows['timezone']['state'] == 'ok'
+    assert rows['chrome']['state'] == 'not_run'
+
+
+def test_login_config_and_session_conditions_are_separate():
+    rows, _ = children('chrome', report=checks(('display.autologin', 'ok'), ('display.gdm_enabled', 'ok'),
+        ('display.gdm_runtime', 'pending'), ('display.session', 'pending'), ('chrome.forbidden', 'error')))
+    assert rows['autologin']['state'] == 'ok'
+    assert rows['session']['state'] == 'pending'
+    assert rows['policy']['state'] == 'error'
+
+
+def test_display_masks_and_hardware_firmware_match_real_inspector_ids():
+    rows, _ = children('display', report=checks(('display.mask.sleep.target', 'ok'), ('display.logind.runtime', 'pending')))
+    assert rows['system_sleep']['state'] == 'pending'
+    rows, _ = children('hardware', report=checks(('hardware.package.iwlwifi-firmware', 'change_required'),
+        ('hardware.package.kernel-modules-test', 'ok'), ('hardware.device.pci.mock-device', 'blocked')))
+    assert rows['firmware']['state'] == 'change_required'
+    assert rows['modules']['state'] == 'blocked'
