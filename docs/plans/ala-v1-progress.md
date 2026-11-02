@@ -156,3 +156,11 @@
 - 기존 sudo/저장/계획/명시적 적용/작업 지속 계약은 재사용한다. 설치 엔진은 변경하지 않았다.
 - 기존 TUI·CLI/jobs 47개 통과, 추가 집중형 검증 포함 TUI 29개 통과. 홈 전용 목록/각 작업 포커스/상단 홈/뒤로/미저장 입력 보존/화면 크기 변경/무색 터미널을 확인했다.
 - 합성 데이터로 홈·계정·정상·차단 화면을 80×24와 120×36에서 실제 TUI SVG로 렌더링·확인했다. RC8 전체 회귀·배포 후보는 CI에서 확인한다. 실제 Rocky 화면 수용은 미완료다.
+
+## ALA-16 RC8 후보 완료
+
+- 구현 3c95499. CI 41407661268: Python 3.12 전체 380 passed + 40 subtests (57.37초). 공개 이력 검사·Bash·고정 의존성·후보 빌드·CLI smoke 통과.
+- RC8 체크섬과 manifest 53개 파일 검증, 인증 없는 공개 다운로드 byte 일치 확인.
+- PR #5: https://github.com/ubion-dev/project-ai-learning-analytics-instance-setup/pull/5
+- 시험판: https://github.com/ubion-dev/project-ai-learning-analytics-instance-setup/releases/tag/v0.1.0-rc.8
+- RC6 이상에서 ala update --prerelease로 설치 가능하다. 실제 장비 터미널의 가독성·조작 수용은 남아 있다. 실제 서버는 이번 작업에서 변경하지 않았다.
