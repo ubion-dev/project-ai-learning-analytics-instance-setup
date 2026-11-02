@@ -96,7 +96,7 @@ def simple_setup(service, console, *, sleep=time.sleep):
             if marker in seen:
                 continue
             seen.add(marker)
-            state = {'started': '진행 중', 'completed': '완료', 'failed': '실패',
+            state = {'started': '진행 중', 'completed': '완료', 'kept': '정상 유지', 'failed': '실패',
                      'blocked': '조치 필요', 'pending': '적용 대기'}.get(stage.get('state'), stage.get('state'))
             console.print(Text(f"  {group_name(stage.get('id'))} · {state}"))
         if job.get('query_warning'):

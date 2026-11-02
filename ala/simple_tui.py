@@ -16,6 +16,7 @@ from textual.widgets import Button, ContentSwitcher, DataTable, Footer, Static, 
 from . import __version__
 from .console import LABELS, PRIORITY, group_name
 from .model import redact
+from .progress import progress_rows, STATE_LABELS, STATE_STYLES
 
 ACTIVE = {'queued', 'running'}
 JOB_LABELS = {'queued': '시작 대기', 'running': '실행 중', 'completed': '완료',
@@ -70,16 +71,18 @@ class SimpleApp(App[None]):
     #body { height: 1fr; align-horizontal: center; }
     #pages { width: 100%; max-width: 100; height: 1fr; padding: 0 2; }
     #setup, #status { height: 1fr; }
-    #config-summary { height: auto; max-height: 3; margin-bottom: 1; }
-    #setup-note { height: auto; max-height: 2; color: #aabdd0; }
+    #config-summary { height: auto; max-height: 2; }
+    #setup-note { height: auto; max-height: 1; color: #aabdd0; }
     .actions { height: 3; }
     Button { background: #233344; color: #e9f0f7; border: tall #233344; }
     Button.-primary { background: #83e3c4; color: #10251d; border: tall #83e3c4; text-style: bold; }
     Button:focus { border: tall #ccf7e8; }
     Button:disabled { background: #1c2835; border: tall #1c2835; color: #a4b5c6; }
     #setup-start { width: 24; }
-    #setup-progress { height: auto; max-height: 3; margin-top: 1; }
-    #setup-output { height: 1fr; min-height: 3; }
+    #setup-progress { height: auto; max-height: 2; }
+    #setup-summary { height: auto; max-height: 2; }
+    #setup-table { height: 1fr; min-height: 4; }
+    #setup-output { height: 5; min-height: 3; }
     #status-summary { height: auto; max-height: 2; }
     #status-table { height: 1fr; min-height: 3; }
     #status-detail { height: 7; min-height: 3; }
@@ -97,6 +100,10 @@ class SimpleApp(App[None]):
         self._loading = False
         self._status_known = False
         self._groups = {}
+        self._setup_report = None
+        self._display_job = None
+        self._progress_rows = []
+        self._last_followed_step = None
 
     def compose(self) -> ComposeResult:
         yield Static(f'ala {__version__} · 서버 환경 관리' + (' · 관리자' if os.geteuid() == 0 else ''), id='heading', markup=False)
@@ -109,9 +116,11 @@ class SimpleApp(App[None]):
                 with Vertical(id='setup'):
                     yield Static('현재 구성을 확인하고 있습니다.', id='config-summary', markup=False)
                     yield Static('기존 설정을 재사용하고 필요한 항목만 보완합니다.', id='setup-note', markup=False)
-                    with Horizontal(classes='actions'):
+                    with Horizontal(classes='actions', id='setup-actions'):
                         yield Button('간편 설정 실행', id='setup-start', variant='primary', disabled=True)
                     yield Static('실행하면 SSH·화면을 닫아도 설정 작업은 계속됩니다.', id='setup-progress', markup=False)
+                    yield Static('현재 상태를 확인하고 있습니다.', id='setup-summary', markup=False)
+                    yield DataTable(id='setup-table', cursor_type='row', cursor_foreground_priority='renderable')
                     yield TextArea('', id='setup-output', read_only=True)
                 with Vertical(id='status'):
                     with Horizontal(classes='actions'):
@@ -123,6 +132,9 @@ class SimpleApp(App[None]):
 
     def on_mount(self):
         self.query_one('#status-table', DataTable).add_columns('기능', '상태')
+        self.query_one('#setup-table', DataTable).add_column('설정 항목', key='item')
+        self.query_one('#setup-table', DataTable).add_column('현재 상태', key='state')
+        self.render_setup_table()
         self._resize_warning()
         self.set_interval(1.5, self.poll_job)
         self.run_worker(self.load_state(), group='load', exclusive=True, exit_on_error=False)
@@ -150,6 +162,8 @@ class SimpleApp(App[None]):
             return None
 
     def update_button(self):
+        self.query_one('#setup-actions').display = not bool(self._active_job)
+        self.query_one('#setup-note').display = not bool(self._active_job)
         self.query_one('#setup-start', Button).disabled = bool(
             self._loading or self._submitting or self._active_job or not self._status_known
             or not self._config or not self._config.get('user'))
@@ -170,14 +184,19 @@ class SimpleApp(App[None]):
                 self._config = deepcopy(config['config'])
                 user = self._config.get('user') or '일반 계정 지정 필요'
                 mode = self._config.get('url') if self._config.get('autostart') and self._config.get('url') else '바탕화면만 표시'
-                self.query_one('#config-summary', Static).update(Text(f'화면 계정: {user}\n표시: {mode}'))
+                self.query_one('#config-summary', Static).update(Text(f'계정: {user} · 표시: {mode}'))
             self._status_known = bool(report and (report.get('results') or report.get('preparation', {}).get('results')))
             if report is None:
+                self._setup_report = None
+                if not self._active_job:
+                    self._display_job = None
+                    self.render_setup_table()
                 self._groups = {}
                 self.query_one('#status-table', DataTable).clear()
                 self.query_one('#status-summary', Static).update('상태 조회 실패 · 정상으로 판단할 수 없습니다.')
                 self.query_one('#status-detail', TextArea).load_text('현재 조회가 실패했습니다. 상태 다시 확인으로 재시도하세요.')
             if report is not None:
+                self._setup_report = deepcopy(report)
                 self.render_status(report)
                 active = next((job for job in report.get('runs', []) if job.get('state') in ACTIVE), None)
                 if active and not self._active_job and tracked_at_start is None:
@@ -192,10 +211,9 @@ class SimpleApp(App[None]):
                 else:
                     self.notice('')
                 if not self._active_job and tracked_at_start is None:
-                    rows = report.get('results', []) + report.get('preparation', {}).get('results', [])
-                    self.query_one('#setup-output', TextArea).load_text(
-                        '적용 범위: 기본 패키지 · SSH · Docker · GPU 자동 감지 · 화면\n\n현재 확인된 상태\n' + result_detail(rows))
-                    self.query_one('#setup-progress', Static).update('아직 적용하지 않았습니다. 간편 설정 실행 버튼을 눌러 시작하세요.')
+                    self._display_job = None
+                    self.render_setup_table()
+                    self.query_one('#setup-progress', Static).update('현재 설정 상태입니다. 필요한 항목만 적용합니다.')
         finally:
             self._loading = False
             self.query_one('#status-refresh', Button).disabled = False
@@ -275,18 +293,59 @@ class SimpleApp(App[None]):
     def render_job(self, job):
         state = JOB_LABELS.get(job.get('state'), '확인 필요')
         self.query_one('#setup-progress', Static).update(Text(f"설정 {state} · 실행 ID {job.get('run_id', '-') }"))
-        lines = []
-        for stage in job.get('stages', []):
-            label = {'started': '진행 중', 'completed': '완료', 'blocked': '조치 필요', 'failed': '실패', 'pending': '적용 대기'}.get(stage.get('state'), stage.get('state', '확인 필요'))
-            lines.append(f"{group_name(stage.get('id'))} · {label}")
-        if job.get('reason'):
-            lines.extend(['', value_text(job['reason'])])
-        report = job.get('report') or {}
-        if report.get('results'):
-            lines.extend(['', result_detail(report['results'])])
-        elif job.get('state') in ACTIVE:
-            lines.extend(['', 'SSH·이 화면을 종료해도 설정 작업은 계속됩니다.'])
-        self.query_one('#setup-output', TextArea).load_text('\n'.join(lines))
+        if not self._display_job or self._display_job.get('run_id') != job.get('run_id'):
+            self._last_followed_step = None
+        self._display_job = deepcopy(job)
+        self.render_setup_table()
+
+    def render_setup_table(self):
+        rows = progress_rows(report=self._setup_report, job=self._display_job)
+        table = self.query_one('#setup-table', DataTable)
+        old_ids = [row['id'] for row in self._progress_rows]
+        ids = [row['id'] for row in rows]
+        selected = old_ids[table.cursor_row] if old_ids and table.cursor_row < len(old_ids) else None
+        self._progress_rows = rows
+        if old_ids != ids:
+            table.clear()
+            for row in rows:
+                table.add_row(Text(row['label']), self.progress_cell(row), key=row['id'])
+            if selected in ids:
+                table.move_cursor(row=ids.index(selected), animate=False)
+        else:
+            for row in rows:
+                table.update_cell(row['id'], 'state', self.progress_cell(row))
+        counts = {}
+        for row in rows:
+            label = STATE_LABELS.get(row['state'], row['state'])
+            counts[label] = counts.get(label, 0) + 1
+        self.query_one('#setup-summary', Static).update(Text(' · '.join(f'{label} {count}' for label, count in counts.items())))
+        running = next((row['id'] for row in rows if row['state'] in {'running', 'started'}), None)
+        inspecting = self.focused is table or self.focused is self.query_one('#setup-output')
+        if running and running != self._last_followed_step:
+            if not inspecting:
+                table.move_cursor(row=ids.index(running), animate=False)
+            self._last_followed_step = running
+        if rows:
+            self.show_setup_row(min(table.cursor_row, len(rows) - 1))
+
+    @staticmethod
+    def progress_cell(row):
+        return Text(STATE_LABELS.get(row['state'], row['state']), style=STATE_STYLES.get(row['state'], 'yellow'))
+
+    def show_setup_row(self, index):
+        if not 0 <= index < len(self._progress_rows):
+            return
+        row = self._progress_rows[index]
+        detail = row['label'] + '\n' + row.get('detail', '')
+        output = self.query_one('#setup-output', TextArea)
+        if output.text != detail:
+            output.load_text(detail)
+
+    @on(DataTable.RowHighlighted, '#setup-table')
+    def setup_row_highlighted(self, event):
+        keys = [row['id'] for row in self._progress_rows]
+        if event.row_key.value in keys:
+            self.show_setup_row(keys.index(event.row_key.value))
 
     def render_status(self, report):
         rows = report.get('results', []) + report.get('preparation', {}).get('results', [])
