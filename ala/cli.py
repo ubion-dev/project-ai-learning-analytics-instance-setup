@@ -31,6 +31,10 @@ def parser():
         mode.add_argument('--apply', action='store_true')
         setup.add_argument('--detach', action='store_true')
         setup.add_argument('--json', action='store_true')
+    update = sub.add_parser('update', help='ala 새 버전 확인·갱신')
+    update.add_argument('--check', action='store_true', help='설치 없이 확인')
+    update.add_argument('--prerelease', action='store_true', help='시험판 포함')
+    update.add_argument('--json', action='store_true')
     doctor = sub.add_parser('doctor', help='읽기 전용 진단').add_subparsers(dest='action', required=True)
     network = doctor.add_parser('network', help='Wi-Fi·네트워크 계층 진단')
     network.add_argument('--probe-url', help='명시한 HTTP/HTTPS 주소만 통신 확인')
@@ -68,10 +72,19 @@ def emit(value, as_json=False):
 def main(argv=None, *, service=None):
     argv = list(sys.argv[1:] if argv is None else argv)
     # Not part of the public command grammar. Root-owned installed entry only.
-    if argv and argv[0] in {'_privileged','_worker','_session','_chrome-run','_chrome-user'}:
+    if argv and argv[0] in {'_privileged','_worker','_session','_chrome-run','_chrome-user','_update-worker'}:
         try:
             if argv[0] == '_privileged' and len(argv) == 2:
                 print(json.dumps(privileged(argv[1]), ensure_ascii=False))
+                return 0
+            if argv[0] == '_update-worker' and len(argv) == 2:
+                from .jobs import trusted_release
+                from .system import platform_error
+                from .update import install_release
+                if os.geteuid() != 0 or platform_error():
+                    raise PermissionError('Rocky Linux root 작업입니다.')
+                trusted_release(Path(__file__).resolve().parents[1])
+                install_release(argv[1])
                 return 0
             if argv[0] == '_worker' and len(argv) == 2:
                 from .jobs import trusted_release, run_worker
@@ -105,6 +118,25 @@ def main(argv=None, *, service=None):
             section = 'config' if args.command == 'config' else 'chrome' if args.command == 'chrome' else 'home'
             AlaApp(service=svc, initial_section=section).run()
             return 0
+        if args.command == 'update':
+            from .update import check
+            if args.check:
+                result = check(args.prerelease)
+            else:
+                svc.authenticate()
+                result = svc.request('update-submit', {'prerelease': args.prerelease})
+            if args.json:
+                emit(result, True)
+            elif result.get('started'):
+                print(f"ala {result['latest']} 갱신 시작. SSH 종료 후에도 계속됩니다.")
+                print(result['next_action'])
+            elif result.get('error'):
+                print(result['error'], file=sys.stderr)
+            elif result['available']:
+                print(f"업데이트 가능: {result['current']} → {result['latest']}. ala update" + (' --prerelease' if args.prerelease else ''))
+            else:
+                print('선택한 채널에 더 새로운 설치 가능한 릴리스가 없습니다.')
+            return result.get('exit_code', 0)
         svc.authenticate()
         as_json = getattr(args, 'json', False)
         if args.command == 'config':

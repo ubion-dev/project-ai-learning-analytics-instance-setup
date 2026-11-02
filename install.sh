@@ -196,6 +196,16 @@ def install():
             fail('current가 심볼릭 링크가 아닙니다. 기존 경로를 확인하세요.')
         if current.is_symlink() and not current.resolve().is_relative_to(releases):
             fail('current가 ala releases 밖을 가리킵니다.')
+        if os.environ.get('ALA_UPDATE_ONLY') == '1' and current.is_symlink():
+            def version_key(value):
+                match = re.fullmatch(r'(\d+)\.(\d+)\.(\d+)(?:rc(\d+))?', value)
+                if not match:
+                    fail('현재/대상 버전 형식을 확인하세요.')
+                a, b, c, rc = match.groups()
+                return int(a), int(b), int(c), rc is None, int(rc or 0)
+            installed_version = (current / 'VERSION').read_text().strip()
+            if version_key(version) <= version_key(installed_version):
+                fail('이미 같거나 더 새로운 버전이 설치되어 있습니다.')
         launcher = ROOT / 'usr/local/bin/ala'
         secure_directory(launcher.parent)
         if launcher.exists() and (launcher.is_symlink() or '# ala managed launcher v1' not in launcher.read_text()):

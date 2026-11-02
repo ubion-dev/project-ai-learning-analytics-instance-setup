@@ -3,7 +3,7 @@
 Rocky Linux 서버의 기본 환경·Docker·GPU 드라이버·Chrome DID 화면을 설치하고 검사하는 CLI/TUI입니다.
 
 - 대상: **Rocky Linux 10 x86_64 + GNOME/GDM + 기존 sudo 사용자**
-- 현재 배포 후보: **0.1.0rc5**. 실제 장비의 설치·GPU·화면·재부팅 수용은 아직 완료하지 않았습니다.
+- 현재 배포 후보: **0.1.0rc6**. 실제 장비의 설치·GPU·화면·재부팅 수용은 아직 완료하지 않았습니다.
 - **공개 릴리스에서 바로 다운로드합니다. Git·GitHub 로그인·토큰·Mac 파일 전송은 필요 없습니다.**
 
 ## 1. 설치 — Rocky 터미널
@@ -14,8 +14,8 @@ SSH로 서버에 접속한 일반 사용자 터미널에서 실행합니다. `cu
 ```bash
 (
   set -e
-  VERSION='0.1.0rc5'
-  RELEASE='v0.1.0-rc.5'
+  VERSION='0.1.0rc6'
+  RELEASE='v0.1.0-rc.6'
   BASE_URL="https://github.com/ubion-dev/project-ai-learning-analytics-instance-setup/releases/download/${RELEASE}"
   mkdir -p "$HOME/ala-downloads/$VERSION"
   cd "$HOME/ala-downloads/$VERSION"
@@ -33,7 +33,7 @@ SSH로 서버에 접속한 일반 사용자 터미널에서 실행합니다. `cu
 )
 ```
 
-`0.1.0rc5`가 나오면 도구 설치 완료입니다. **서버 설정은 다음 단계에서 별도로 적용합니다.**
+`0.1.0rc6`가 나오면 도구 설치 완료입니다. **서버 설정은 다음 단계에서 별도로 적용합니다.**
 GitHub의 `Source code` 압축이나 `scripts/rocky-linux` 폴더만으로는 ala를 설치할 수 없습니다.
 서버가 GitHub에 접속할 수 없으면 [Mac에서 받아 SCP로 전달](docs/INSTALL.md#mac에서-받아-scp로-전달)할 수 있습니다.
 
@@ -78,7 +78,7 @@ ala check             # 검사만
 설치 준비가 실패하면 기존 버전을 유지합니다. 같은 버전의 다른 파일은 덮어쓰지 않습니다.
 
 CLI 갱신만으로 환경 설정이나 재부팅을 실행하지 않습니다. 새 설정을 반영하려면 `ala setup --plan`으로 확인하고 적용하세요.
-**`ala update` 명령·주기적 자동 업데이트·서명 검증·중앙 상태 보고는 아직 구현되지 않았습니다.**
+**주기적 자동 업데이트·서명 검증·중앙 상태 보고는 아직 구현되지 않았습니다.**
 현재는 버전을 지정한 수동 다운로드·설치 방식입니다. [버전 갱신 상세](docs/INSTALL.md#버전-갱신)
 
 ## 자주 쓰는 명령
@@ -106,3 +106,18 @@ Chrome `stop`은 현재 실행만 중지합니다. 다음 부팅에도 끄려면
 학교별 실제 구성·장비 주소·계정·토큰·운영 로그를 공개 이슈나 저장소에 올리지 마세요.
 
 개발 기여 전에는 [공개 데이터 보호 규칙과 Git 훅 설치](docs/PUBLIC-SAFETY.md)를 확인하세요.
+
+### ala 자체 업데이트
+
+이 기능이 포함된 버전부터 `ala` 첫 화면에서 정식 새 버전을 안내합니다. 확인 실패가 서버 관리를 막지는 않습니다. RC5 이하에서는 아래 명령이 없으므로 먼저 설치 절차로 새 버전을 한 번 설치하세요.
+
+```bash
+ala update --check              # 정식 버전 확인만
+ala update                     # 정식 버전 다운로드·검증·갱신 시작
+ala update --check --prerelease # 시험판까지 확인
+ala update --prerelease        # 시험판 포함 갱신
+sudo journalctl -u ala-update -f
+ala --version
+```
+
+GitHub 로그인은 필요 없습니다. 갱신은 sudo 인증 후 systemd에서 계속되며 SSH를 종료해도 유지됩니다. 로그에서 설치 완료를 확인한 뒤 ala를 다시 실행하세요. 구성과 실행 기록은 유지하며 OS 업데이트·재부팅·Chrome 재시작은 하지 않습니다. 자동 적용 타이머는 없습니다. 정식판이 아직 없으면 기본 채널에서는 새 버전 없음으로 표시합니다.

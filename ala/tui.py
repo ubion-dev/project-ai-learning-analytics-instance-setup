@@ -219,6 +219,19 @@ class AlaApp(GuidedSetup, App[None]):
         self._resize_warning()
         self.set_interval(1.5, self.poll_job)
         self.refresh_section()
+        if not self.is_headless:
+            self.run_worker(self.check_update(), group="update", exit_on_error=False)
+
+    async def check_update(self):
+        import asyncio
+        from .update import check
+        result = await asyncio.to_thread(check)
+        message = ""
+        if result.get("available"):
+            message = f"새 버전 {result['latest']} · 종료 후 ala update로 갱신"
+        elif result.get("error"):
+            message = "업데이트 확인 불가 · 환경 관리는 계속 사용할 수 있습니다."
+        self.query_one("#update-notice", Static).update(message)
 
     def on_resize(self, event: events.Resize):
         if self.is_mounted:

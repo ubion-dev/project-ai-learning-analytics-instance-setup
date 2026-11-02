@@ -12,7 +12,7 @@ import tempfile
 from urllib.parse import urlsplit
 
 PUBLIC_HOSTS = {
-    'github.com', 'raw.githubusercontent.com', 'dl.rockylinux.org',
+    'github.com', 'api.github.com', 'docs.github.com', 'raw.githubusercontent.com', 'dl.rockylinux.org',
     'mirrors.rockylinux.org', 'dl.google.com', 'www.google.com',
     'support.google.com', 'www.chromium.org', 'chromium.googlesource.com',
     'download.docker.com', 'docs.docker.com', 'nvidia.github.io',
