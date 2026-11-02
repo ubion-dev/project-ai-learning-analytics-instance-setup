@@ -122,3 +122,24 @@
 - 시험판: https://github.com/ubion-dev/project-ai-learning-analytics-instance-setup/releases/tag/v0.1.0-rc.6
 - RC5 이하 최초 수동 갱신 필요. 이후 정식 기본/시험판 명시 선택으로 자체 갱신한다. 자동 적용 타이머는 없다.
 - 실제 Rocky 갱신·SSH 종료 후 지속·재접속 수용은 남아 있다. 이번 작업은 실제 서버를 변경하지 않았다.
+
+## ALA-15 시작
+
+- PR #3 병합 main b869bb9 기반. 사용자가 Podman 차단과 낮은 가독성을 보고했다.
+- Docker RHEL 공식 안내에서 podman 사전 제거 대상 확인. 검사 우회 대신 원인/다음 행동 노출 및 시각 계층을 개선한다. 실제 장비 패키지는 변경하지 않는다.
+
+## ALA-15 구현·대상 검증
+
+- 공통 화면 색상/여백/포커스 대비, 차단 상태 카드, 변경 요약, 접는 상세 내역으로 개선했다. 실제값과 항목 ID를 상세에서 유지한다.
+- 설치 차단과 적용 후 대기를 분리하고 계획 허용 판정을 UI 상태 카드와 공유한다. Podman 자동 제거는 추가하지 않는다.
+- TUI·엔진 59 passed + 3 subtests. Podman 차단 1개와 재부팅 대기가 섞이지 않음, 80×24 하단 버튼 가시성, 키보드 상세 펼침을 검증했다.
+- 합성 데이터로 80×24/120×36 실제 TUI SVG를 렌더링하고 색상/무색 환경을 확인했다. 실제 장비 화면은 미검증이다.
+- RC7 후보 준비. 전체 회귀·빌드는 CI에서 확인한다.
+
+## ALA-15 RC7 후보 완료
+
+- 구현 d4ce013, CI 41405610840: 전체 378 passed + 40 subtests (53.37초). 공개 이력 검사·빌드·CLI smoke 통과.
+- RC7 체크섬과 manifest 53개 파일 검증, 인증 없는 공개 다운로드 byte 일치 확인.
+- PR #4: https://github.com/ubion-dev/project-ai-learning-analytics-instance-setup/pull/4
+- 시험판: https://github.com/ubion-dev/project-ai-learning-analytics-instance-setup/releases/tag/v0.1.0-rc.7
+- RC6에서 ala update --prerelease 사용 가능. 기존 후보는 유지한다. 실제 장비의 Podman 사용 여부 확인·정리와 화면 수용은 남아 있다.

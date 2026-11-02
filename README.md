@@ -3,7 +3,7 @@
 Rocky Linux 서버의 기본 환경·Docker·GPU 드라이버·Chrome DID 화면을 설치하고 검사하는 CLI/TUI입니다.
 
 - 대상: **Rocky Linux 10 x86_64 + GNOME/GDM + 기존 sudo 사용자**
-- 현재 배포 후보: **0.1.0rc6**. 실제 장비의 설치·GPU·화면·재부팅 수용은 아직 완료하지 않았습니다.
+- 현재 배포 후보: **0.1.0rc7**. 실제 장비의 설치·GPU·화면·재부팅 수용은 아직 완료하지 않았습니다.
 - **공개 릴리스에서 바로 다운로드합니다. Git·GitHub 로그인·토큰·Mac 파일 전송은 필요 없습니다.**
 
 ## 1. 설치 — Rocky 터미널
@@ -14,8 +14,8 @@ SSH로 서버에 접속한 일반 사용자 터미널에서 실행합니다. `cu
 ```bash
 (
   set -e
-  VERSION='0.1.0rc6'
-  RELEASE='v0.1.0-rc.6'
+  VERSION='0.1.0rc7'
+  RELEASE='v0.1.0-rc.7'
   BASE_URL="https://github.com/ubion-dev/project-ai-learning-analytics-instance-setup/releases/download/${RELEASE}"
   mkdir -p "$HOME/ala-downloads/$VERSION"
   cd "$HOME/ala-downloads/$VERSION"
@@ -33,7 +33,7 @@ SSH로 서버에 접속한 일반 사용자 터미널에서 실행합니다. `cu
 )
 ```
 
-`0.1.0rc6`가 나오면 도구 설치 완료입니다. **서버 설정은 다음 단계에서 별도로 적용합니다.**
+`0.1.0rc7`가 나오면 도구 설치 완료입니다. **서버 설정은 다음 단계에서 별도로 적용합니다.**
 GitHub의 `Source code` 압축이나 `scripts/rocky-linux` 폴더만으로는 ala를 설치할 수 없습니다.
 서버가 GitHub에 접속할 수 없으면 [Mac에서 받아 SCP로 전달](docs/INSTALL.md#mac에서-받아-scp로-전달)할 수 있습니다.
 
@@ -121,3 +121,11 @@ ala --version
 ```
 
 GitHub 로그인은 필요 없습니다. 갱신은 sudo 인증 후 systemd에서 계속되며 SSH를 종료해도 유지됩니다. 로그에서 설치 완료를 확인한 뒤 ala를 다시 실행하세요. 구성과 실행 기록은 유지하며 OS 업데이트·재부팅·Chrome 재시작은 하지 않습니다. 자동 적용 타이머는 없습니다. 정식판이 아직 없으면 기본 채널에서는 새 버전 없음으로 표시합니다.
+
+### 설치가 차단된 경우
+
+변경 확인 화면의 주황색 카드에 설치 전 해결할 원인과 다음 조치가 표시됩니다. 적용 후 재부팅 확인은 별도의 대기 항목이며 설치 차단과 다릅니다. 상세 현재값과 항목 ID는 ‘전체 검사 내역’을 Tab으로 선택하고 Enter로 펼쳐 확인하세요.
+
+Podman은 Docker 공식 RHEL 설치 안내의 사전 정리 대상입니다. ala는 자동 삭제하지 않습니다. `podman ps -a`, `podman volume ls`와 각각의 sudo 실행 결과를 확인하세요. 다른 사용자도 Podman을 사용했다면 해당 계정의 저장소도 별도로 확인해야 합니다. 사용 중인 데이터가 있으면 이전 계획을 먼저 세우고, 사용하지 않음이 확인되면 `sudo dnf remove podman`의 제거 예정 패키지를 검토한 뒤 진행하세요. 제거 후 처음 설정 동선을 다시 실행하면 재검사합니다.
+
+근거: https://docs.docker.com/engine/install/rhel/

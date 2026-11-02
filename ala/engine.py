@@ -338,7 +338,7 @@ class Engine:
         for name in CONFLICT_PACKAGES:
             conflict = self._run(["rpm", "-q", name])
             if conflict.returncode == 0:
-                results.append(self._result("docker.conflict." + name, "blocked", "충돌 패키지 없음", name, "기존 컨테이너/볼륨 사용 여부 확인 후 충돌을 직접 해결하세요."))
+                results.append(self._result("docker.conflict." + name, "blocked", "충돌 패키지 없음", name, "podman ps -a / podman volume ls와 sudo 실행 결과를 확인하세요. 사용 중이면 이전 계획이 필요하며 자동 삭제하지 않습니다." if name.startswith("podman") else "기존 컨테이너/볼륨 사용 여부 확인 후 충돌을 직접 해결하세요."))
             elif conflict.returncode not in (0, 1):
                 results.append(self._result("docker.conflict." + name, "unknown", "패키지 조회", conflict.stderr))
         for service in ("docker", "containerd"):

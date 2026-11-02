@@ -4,7 +4,7 @@ from __future__ import annotations
 import getpass
 from rich.text import Text
 from textual.containers import Vertical, Horizontal, VerticalScroll
-from textual.widgets import Static, Button, Input, Label, Checkbox, ContentSwitcher, TextArea, OptionList
+from textual.widgets import Static, Button, Input, Label, Checkbox, ContentSwitcher, TextArea, OptionList, Collapsible
 
 from .config import Config
 
@@ -22,37 +22,30 @@ def item_name(identifier):
     return groups.get(str(identifier).split('.')[0], str(identifier))
 
 
+def blocking_rows(report):
+    return [r for r in report.get('results', [])
+            if r.get('state') in {'blocked', 'unknown', 'error'}
+            and not str(r.get('id', '')).startswith(('network.', 'hardware.'))]
+
+
 def review_text(report):
-    rows = report.get("results", [])
+    """Full detail, with stable identifiers and actual values for diagnosis."""
     lines = []
-    changed = {}
-    for r in rows:
-        if r.get('state') == 'change_required':
-            changed.setdefault(item_name(r.get('id')), []).append(r)
-    if changed:
-        lines.append('설치·설정할 항목')
-        for name, items in changed.items():
-            packages = [str(r['id']).split('.package.', 1)[1] for r in items if '.package.' in str(r.get('id'))]
-            lines.append(f"• {name}: {len(items)}개 항목")
-            if packages:
-                lines.append('  패키지: ' + ', '.join(packages))
+    for heading, states in (
+        ('설치 전 해결 필요', {'blocked', 'unknown', 'error'}),
+        ('설치·설정할 항목', {'change_required'}),
+        ('적용 후 확인 · 설치를 막지 않음', {'pending'}),
+    ):
+        rows = [r for r in report.get('results', []) if r.get('state') in states]
+        if not rows:
+            continue
+        lines.append(heading)
+        for r in rows:
+            lines.append(f"• {r.get('id')} [{r.get('state')}]\n  현재: {r.get('actual', '확인 필요')}")
+            if r.get('next_action'):
+                lines.append('  다음: ' + str(r['next_action']))
         lines.append('')
-    waiting = []
-    for r in rows:
-        if r.get('state') in {'pending', 'blocked', 'unknown', 'error'}:
-            action = r.get('next_action') or r.get('detail') or '현재 상태 확인'
-            line = f"• {item_name(r.get('id'))}: {action}"
-            if line not in waiting:
-                waiting.append(line)
-    if waiting:
-        lines.extend(['추가 확인 / 적용 대기', *waiting, ''])
-    unchanged = sum(r.get('state') == 'ok' for r in rows)
-    irrelevant = sum(r.get('state') == 'not_applicable' for r in rows)
-    lines.append(f"이미 정상: {unchanged}개 유지 · 해당 없음: {irrelevant}개")
-    if not rows:
-        lines.append('검사 결과가 없습니다. 다시 확인하세요.')
-    lines.append('자동 재부팅하지 않습니다. 적용 후 재부팅이 필요할 수 있습니다.')
-    return '\n'.join(lines)
+    return '\n'.join(lines) or '변경할 항목이 없습니다.'
 
 
 class GuidedSetup:
@@ -81,9 +74,14 @@ class GuidedSetup:
                     yield Label('로그인 없이 열리는 DID 주소')
                     yield Input(id='wizard-url', placeholder='https://example.com')
                     yield Static('주소가 없으면 바탕화면부터 준비하세요.\n잠금·유휴 화면 꺼짐을 방지합니다. 상세 옵션은 고급 설정에 있습니다.', markup=False)
-                with Vertical(id='wizard-review'):
+                with VerticalScroll(id='wizard-review'):
                     yield Static('선택한 구성을 저장했습니다. 아직 설치·설정은 시작하지 않았습니다.', id='wizard-choice', markup=False)
-                    yield TextArea('', id='wizard-summary', read_only=True)
+                    yield Static('', id='review-status', markup=False)
+                    yield Static('', id='review-counts', markup=False)
+                    yield Static('', id='review-changes', markup=False)
+                    with Collapsible(title='전체 검사 내역 · 현재값과 다음 조치', collapsed=True, id='review-details'):
+                        yield TextArea('', id='wizard-summary', read_only=True)
+                    yield Static('자동 재부팅하지 않습니다. 적용 후 재부팅이 필요할 수 있습니다.', id='review-footnote', markup=False)
                 with Vertical(id='wizard-running'):
                     yield Static('설정 작업을 시작합니다.', id='wizard-progress', markup=False)
                     yield TextArea('', id='wizard-result', read_only=True)
@@ -96,6 +94,40 @@ class GuidedSetup:
             yield Button('초기 OS 업데이트·상세 적용', id='advanced-setup')
             yield Button('실행 기록·로그', id='advanced-runs')
             yield Button('상세 상태', id='advanced-dashboard')
+
+    def render_review(self, report):
+        rows = report.get('results', [])
+        blockers = blocking_rows(report)
+        status = self.query_one('#review-status', Static)
+        status.set_class(bool(blockers), 'has-blockers')
+        if blockers:
+            lines = [f'설치 전 해결 필요 · {len(blockers)}개']
+            for row in blockers:
+                identifier = str(row.get('id', ''))
+                if identifier.startswith('docker.conflict.'):
+                    lines.append(f"{identifier.rsplit('.', 1)[-1]} 설치됨 · Docker 준비와 충돌")
+                else:
+                    lines.append(f"{item_name(identifier)} · {row.get('actual', '상태 확인 필요')}")
+                lines.append(str(row.get('next_action') or '상세 내역에서 현재 상태를 확인하세요.'))
+            lines.append('해결 후 이전 → 변경 확인으로 다시 검사하세요.')
+            status.update(Text('\n'.join(lines)))
+        elif rows and self._last_plan:
+            status.update(Text('설정 준비 완료\n아래 변경을 확인하고 설정 시작을 누르세요.'))
+        else:
+            status.update(Text('검사를 완료하지 못했습니다. 이전으로 돌아가 다시 확인하세요.'))
+        counts = {key: sum(r.get('state') == key for r in rows)
+                  for key in ('change_required', 'ok', 'pending', 'not_applicable')}
+        self.query_one('#review-counts', Static).update(Text(
+            f"변경 {counts['change_required']}   ·   정상 유지 {counts['ok']}   ·   적용 대기 {counts['pending']}"))
+        groups = {}
+        for row in rows:
+            if row.get('state') == 'change_required':
+                name = item_name(row.get('id'))
+                groups[name] = groups.get(name, 0) + 1
+        self.query_one('#review-changes', Static).update(Text(
+            '변경 요약\n' + '\n'.join(f'{name}  ·  {count}개' for name, count in groups.items())
+            if groups else '기존 설치·설정을 유지합니다.'))
+        self.query_one('#wizard-summary', TextArea).load_text(review_text(report))
 
     def show_section(self, section):
         self.section = section
@@ -207,7 +239,7 @@ class GuidedSetup:
                 self.query_one('#wizard-choice', Static).update(Text(
                     f"계정: {config.user} · {'DID 전체화면' if web else '바탕화면만 표시'}\n선택을 저장했습니다. 설정 시작 전에는 설치하지 않습니다."))
                 report = self._last_plan or {'results': self._reports.get('plan', [])}
-                self.query_one('#wizard-summary', TextArea).load_text(review_text(report))
+                self.render_review(report)
                 self.wizard_page('review')
                 if self._plan_config is not None:
                     self.notice('변경 내용을 읽고 설정 시작을 누르세요. 이전으로 돌아가 수정할 수 있습니다.')
