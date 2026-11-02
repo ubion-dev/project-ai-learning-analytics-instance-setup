@@ -10,7 +10,7 @@ Rocky Linux 10 x86_64, GNOME/GDM, 기존 일반 sudo 사용자를 지원합니�
 Textual과 고정 의존성은 배포 묶음의 wheel로 전용 venv에 설치하며 시스템 Python 패키지를 덮어쓰지 않습니다.
 환경 설정 단계에는 Google·Docker·NVIDIA 등 필요한 패키지 저장소 접속이 필요합니다.
 
-`ala-0.1.0rc5.tar.gz`와 `.tar.gz.sha256`은 같은 릴리스에서 받습니다.
+`ala-0.1.0rc6.tar.gz`와 `.tar.gz.sha256`은 같은 릴리스에서 받습니다.
 SHA-256 검사는 파일 일치/손상 확인이며 배포자 서명을 대신하지 않습니다. 현재 배포는 GitHub HTTPS 경로를 신뢰하며 별도 서명 검증은 미구현입니다.
 검사가 실패하면 설치하지 않습니다. GitHub의 Source code 압축은 wheel과 manifest가 없는 개발 소스이므로 설치용 배포 파일과 다릅니다.
 
@@ -22,8 +22,8 @@ Rocky가 GitHub에 직접 접속하지 못하는 경우 사용합니다. Mac 터
 ```bash
 (
   set -e
-  VERSION='0.1.0rc5'
-  RELEASE='v0.1.0-rc.5'
+  VERSION='0.1.0rc6'
+  RELEASE='v0.1.0-rc.6'
   BASE_URL="https://github.com/ubion-dev/project-ai-learning-analytics-instance-setup/releases/download/${RELEASE}"
   mkdir -p "$HOME/Downloads/ala-$VERSION"
   cd "$HOME/Downloads/ala-$VERSION"
@@ -43,9 +43,9 @@ ssh user@서버IP
 (
   set -e
   cd ~
-  sha256sum -c ala-0.1.0rc5.tar.gz.sha256
-  tar -xzf ala-0.1.0rc5.tar.gz
-  cd ala-0.1.0rc5
+  sha256sum -c ala-0.1.0rc6.tar.gz.sha256
+  tar -xzf ala-0.1.0rc6.tar.gz
+  cd ala-0.1.0rc6
   sudo bash ./install.sh
   ala --version
 )
@@ -67,7 +67,7 @@ SSH 호스트 키 변경 경고가 나오면 대상 장비·키를 확인합니�
 
 기존 버전으로 돌릴 때는 그 버전의 원래 배포 파일을 설치합니다. CLI를 되돌려도 이미 변경한 OS 설정·패키지까지 복원하지는 않습니다.
 공개 배포 이전 버전의 파일은 공개 릴리스에 포함하지 않습니다.
-현재 `ala update`, 배포 서명 검증, 자동 확인 타이머는 미구현입니다. 공개 전환이 자동 갱신을 활성화하지 않습니다.
+배포 서명 검증과 자동 확인 타이머는 미구현입니다. 자체 갱신은 아래의 명시적 명령으로 실행합니다.
 
 ## 개발자용 배포 빌드
 
@@ -79,9 +79,19 @@ python3 -m venv .venv
 .venv/bin/python scripts/build-release.py
 ```
 
-`dist/ala-0.1.0rc5.tar.gz`와 `.sha256`을 생성합니다. 기존 wheel이 있으면 `--wheelhouse /경로/wheels`를 지정할 수 있으며 해시 검증은 유지됩니다.
+`dist/ala-0.1.0rc6.tar.gz`와 `.sha256`을 생성합니다. 기존 wheel이 있으면 `--wheelhouse /경로/wheels`를 지정할 수 있으며 해시 검증은 유지됩니다.
 빌더는 허용 목록의 코드·운영 문서·고정 wheel·파일별 manifest만 포함합니다. Git 이력, 테스트, 개발 가상환경과 작업 기록은 포함하지 않습니다.
 게시된 파일을 같은 버전으로 다시 만들거나 덮어쓰지 않습니다.
-후보 태그 `v0.1.0-rc.5`와 Python 버전 `0.1.0rc5`의 표기 차이에 주의하세요.
+후보 태그 `v0.1.0-rc.6`와 Python 버전 `0.1.0rc6`의 표기 차이에 주의하세요.
 
 릴리스는 자동 테스트와 실제 Rocky 수용을 구분합니다. 현재 후보의 실제 장비 설치·GNOME·GPU·재부팅은 미검증입니다.
+
+### 자체 갱신 기능 도입 이후
+
+`ala update --check`는 권한 요청 없이 공개 릴리스를 확인합니다. `--json`으로 구조화된 결과를 받을 수 있습니다. `ala update`는 정식판만, `ala update --prerelease`는 시험판도 포함합니다. 이미 설치한 버전 이하로는 내려가지 않습니다. 조회는 최근 릴리스 100개 중 완전한 설치 자산이 있는 버전을 비교합니다.
+
+`sudo journalctl -u ala-update -f`에서 결과를 확인하세요. 실패하면 기존 current가 유지되며, 다음 실행에서 다시 조회할 수 있습니다. 진행 중 갱신은 중복 시작을 거부하고 최종 설치는 기존 공통 잠금을 사용합니다. 전원 차단된 갱신은 자동 재개하지 않습니다.
+
+다운로드는 공식 공개 저장소의 HTTPS 자산으로 제한하며 SHA-256과 파일별 manifest를 확인합니다. 체크섬은 손상 검증이며 별도 배포 서명 검증이 아닙니다. GitHub 저장소 및 배포 계정에 대한 신뢰가 필요합니다. API 공식 호스트 api.github.com을 공개 데이터 검사 허용 목록에 추가했습니다. 근거: https://docs.github.com/en/rest/releases/releases
+
+RC5 이하에는 이 명령이 없으므로 최초 한 번 수동 갱신해야 합니다. 기존에 실행 중인 ala 화면은 이전 코드이므로 갱신 완료 후 종료하고 다시 실행하세요.

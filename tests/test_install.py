@@ -291,3 +291,14 @@ def test_same_version_changed_payload_is_not_overwritten(installation):
     result = installation.install(bundle)
     assert result.returncode == 1 and '같은 버전에 다른 내용' in result.stderr
     assert (installation.current.resolve() / 'entry.py').read_text() == 'print("0.1.0rc1")\n'
+
+
+def test_self_update_cannot_downgrade_or_repeat(installation):
+    newer, _ = installation.bundle('0.1.0rc2')
+    assert installation.install(newer).returncode == 0
+    previous = installation.current.resolve()
+    older, _ = installation.bundle('0.1.0rc1')
+    for candidate in (older, newer):
+        result = installation.install(candidate, ALA_UPDATE_ONLY='1')
+        assert result.returncode == 1
+        assert installation.current.resolve() == previous

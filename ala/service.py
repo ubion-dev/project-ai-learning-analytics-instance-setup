@@ -28,6 +28,11 @@ class Operations:
         return Config.load(self.paths.config)
 
     def dispatch(self, action, payload):
+        if action == 'update-submit':
+            from .update import submit
+            if type(payload.get('prerelease', False)) is not bool:
+                raise ValueError('시험판 선택은 boolean이어야 합니다.')
+            return submit(self.release, payload.get('prerelease', False))
         if action == 'config-show':
             return {'config': self.config().to_dict(), 'exists': self.paths.config.exists()}
         if action == 'config-save':

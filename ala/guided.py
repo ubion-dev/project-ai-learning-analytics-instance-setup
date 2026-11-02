@@ -65,6 +65,7 @@ class GuidedSetup:
     def guided_panels(self):
         with Vertical(id='home', classes='panel'):
             yield Static('서버 환경을 준비하세요', classes='home-title', markup=False)
+            yield Static('', id='update-notice', markup=False)
             yield Static('현재 상태를 확인하고 있습니다.', id='home-status', markup=False)
             yield Static('왼쪽에서 할 일을 선택하고 Enter를 누르세요.\n\n처음에는 첫 메뉴만 따라가면 됩니다.\n① 계정 확인  ② 화면 선택  ③ 변경 확인\n\n이미 정상인 설치·설정은 유지합니다.\n초기 OS 업데이트와 상세 옵션은 고급 설정에 있습니다.', markup=False)
         with Vertical(id='wizard', classes='panel'):

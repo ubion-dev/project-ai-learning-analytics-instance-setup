@@ -541,3 +541,18 @@ def test_guided_progress_resumes_existing_job_and_shows_next_action():
             await pilot.press('q')
         assert service.jobs[run_id]['state'] == 'pending'
     run(scenario())
+
+
+def test_update_banner_and_offline_state(monkeypatch):
+    from ala import update
+    from textual.widgets import Static
+    async def scenario():
+        app = AlaApp(service=FakeService())
+        async with app.run_test(size=(80, 24)):
+            monkeypatch.setattr(update, 'check', lambda: {'available': True, 'latest': '2.0.0'})
+            await app.check_update()
+            assert 'ala update' in str(app.query_one('#update-notice', Static).render())
+            monkeypatch.setattr(update, 'check', lambda: {'available': False, 'error': 'offline'})
+            await app.check_update()
+            assert '계속' in str(app.query_one('#update-notice', Static).render())
+    run(scenario())
