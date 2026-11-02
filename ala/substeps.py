@@ -155,7 +155,14 @@ def child_rows(stage, *, report=None, job=None, parent_state='unknown'):
             elif actual in {'error', 'blocked', 'change_required', 'pending'}:
                 state = actual
             elif not event:
-                state = actual if parent_state in {'ok', 'kept', 'completed'} and items else 'not_run'
+                if parent_state in {'waiting', 'not_run'}:
+                    state = 'not_run'
+                elif items:
+                    # Native stages may have no substep markers: a final check
+                    # proves current state, not whether this task executed.
+                    state = actual
+                else:
+                    state = 'not_run' if parent_state == 'kept' else 'unknown'
             elif event_state == 'started':
                 state = ('interrupted' if job.get('state') == 'interrupted' else
                          'error' if parent_state in {'error', 'blocked'} else 'unknown')

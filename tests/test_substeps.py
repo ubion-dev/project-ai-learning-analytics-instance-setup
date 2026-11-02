@@ -145,3 +145,36 @@ def test_display_masks_and_hardware_firmware_match_real_inspector_ids():
         ('hardware.package.kernel-modules-test', 'ok'), ('hardware.device.pci.mock-device', 'blocked')))
     assert rows['firmware']['state'] == 'change_required'
     assert rows['modules']['state'] == 'blocked'
+
+
+def test_native_pending_stage_without_substep_signals_keeps_verified_current_state():
+    job = {'state': 'pending', 'stages': [{'id': 'chrome', 'state': 'started'},
+                                        {'id': 'chrome', 'state': 'pending'}],
+           'report': checks(('display.autologin', 'ok'), ('display.gdm_enabled', 'ok'),
+                            ('display.session', 'pending'))}
+    rows, current = children('chrome', job=job, parent_state='pending')
+    assert rows['autologin']['state'] == 'ok'
+    assert rows['session']['state'] == 'pending'
+    assert rows['profile']['state'] == 'unknown'
+    assert rows['service']['state'] == 'unknown'
+    assert not current
+    assert all(row['state'] not in {'running', 'completed', 'kept'} for row in rows.values())
+
+
+def test_native_hardware_error_does_not_hide_an_individually_verified_final_check():
+    job = {'state': 'failed', 'report': checks(('hardware.kernel', 'ok'),
+                                             ('hardware.device.pci.mock-device', 'blocked'))}
+    rows, current = children('hardware', job=job, parent_state='blocked')
+    assert rows['detection']['state'] == 'ok'
+    assert rows['modules']['state'] == 'blocked'
+    assert rows['firmware']['state'] == 'unknown'
+    assert not current
+
+
+def test_unvisited_parent_still_marks_markerless_healthy_child_unrun():
+    job = {'state': 'failed', 'report': checks(('display.autologin', 'ok'))}
+    for parent_state in ('waiting', 'not_run'):
+        rows, current = children('chrome', job=job, parent_state=parent_state)
+        assert rows['autologin']['state'] == 'not_run'
+        assert rows['profile']['state'] == 'not_run'
+        assert not current
