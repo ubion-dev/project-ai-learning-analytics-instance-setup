@@ -17,24 +17,28 @@
 
 | 이전 커밋 | 공개 이력의 커밋 |
 |---|---|
-| `0a1c87f3baf1a6446a8837aa4d01f261f48a80f7` | [2959b9f](https://github.com/ubion-dev/project-ai-learning-analytics-instance-setup/commit/2959b9fc25d1e83cc61c0dc60f9623e8e1a87681) |
-| `2c8fa6ff4b35fa63c75240ccd744eae1d6f0458f` | [ce49f40](https://github.com/ubion-dev/project-ai-learning-analytics-instance-setup/commit/ce49f405015ed424152d91060dfeae4e70e17f9e) |
-| `41c870f603a7bab249a7a827893630ffc5a97f36` | [a755b63](https://github.com/ubion-dev/project-ai-learning-analytics-instance-setup/commit/a755b6324dd88bc7e99b5661f3d8705ac8195487) |
-| `4bc033b762e061555abad30b9e17ef0c0744e475` | [459ed26](https://github.com/ubion-dev/project-ai-learning-analytics-instance-setup/commit/459ed264496e8f620c2b6ec16a94537fbfb2d774) |
-| `4d3a62a74a0cc6d5c33bc248fe223fbb4a4788fe` | [ea680d0](https://github.com/ubion-dev/project-ai-learning-analytics-instance-setup/commit/ea680d04e2ae7c32be8f05db2c21121ef6db30dc) |
-| `52f453a020944721724083fd81013336648db00b` | [4eeaf10](https://github.com/ubion-dev/project-ai-learning-analytics-instance-setup/commit/4eeaf10c6b8804a1505ef32389b3bc527adcbe71) |
-| `659d97e222f12ad16b279c4b6af2a8c44a1291a3` | [de0d317](https://github.com/ubion-dev/project-ai-learning-analytics-instance-setup/commit/de0d3176bc784bf0060da1471b8b301de540e097) |
-| `668278019f011c26f2e20a3d038edc75c126380e` | [7805759](https://github.com/ubion-dev/project-ai-learning-analytics-instance-setup/commit/78057598e892941b1304c4354bbe298af7d0251c) |
-| `773ebb540f64268f392f88c3fb5eda1ee0ee9dae` | [6ca7361](https://github.com/ubion-dev/project-ai-learning-analytics-instance-setup/commit/6ca7361b4f73120499a5c8653fa32afa5cd7d5bb) |
-| `80998a8626faebd60d0061b47bb3578c4b644037` | [9c24c43](https://github.com/ubion-dev/project-ai-learning-analytics-instance-setup/commit/9c24c439bdb4f8ca5d3eca358aa3e0b33a6a80a3) |
-| `81a5f347ba0732b1393e865afcf0a0ec7fa648bc` | [1e879c4](https://github.com/ubion-dev/project-ai-learning-analytics-instance-setup/commit/1e879c42059ee52a3151f9ba5814f67e6a64e54d) |
-| `903103125f11cb1734904bac0ea601dc7fde207d` | [6552026](https://github.com/ubion-dev/project-ai-learning-analytics-instance-setup/commit/65520263d946a34d53ef6e111c6099137b3e8fcf) |
-| `92445986d38d514944e80b7e2cc58ac62682f990` | [0d4a33f](https://github.com/ubion-dev/project-ai-learning-analytics-instance-setup/commit/0d4a33fda8632a319515b35f053deb45d14240c8) |
-| `9aa3df027fce148c82172595e440f85b11434993` | [a69d458](https://github.com/ubion-dev/project-ai-learning-analytics-instance-setup/commit/a69d4580a59d77aca0974d50b6988e83e82ea381) |
-| `ce2065cd43a5ef833e39abfc5410080ce525001c` | [b206cfe](https://github.com/ubion-dev/project-ai-learning-analytics-instance-setup/commit/b206cfe6d304af28983f3eee6f24e142f166c16d) |
+| `0a1c87f3baf1a6446a8837aa4d01f261f48a80f7` | [8fc0a2d](https://github.com/ubion-dev/project-ai-learning-analytics-instance-setup/commit/8fc0a2dbec16feb43ad0eddf528533525873b9f5) |
+| `2c8fa6ff4b35fa63c75240ccd744eae1d6f0458f` | [cf6dfdc](https://github.com/ubion-dev/project-ai-learning-analytics-instance-setup/commit/cf6dfdc74f1a8c88f374c5f55c51b6866f2a67bb) |
+| `41c870f603a7bab249a7a827893630ffc5a97f36` | [9554b11](https://github.com/ubion-dev/project-ai-learning-analytics-instance-setup/commit/9554b1151536980c3eac439116b2b65825c9bdfd) |
+| `4bc033b762e061555abad30b9e17ef0c0744e475` | [b4c99bd](https://github.com/ubion-dev/project-ai-learning-analytics-instance-setup/commit/b4c99bd408354fc63a041c12a4fa1a427449ab2f) |
+| `4d3a62a74a0cc6d5c33bc248fe223fbb4a4788fe` | [59d905c](https://github.com/ubion-dev/project-ai-learning-analytics-instance-setup/commit/59d905c85116ec3c218786abaf5ed5bcb9eabe9a) |
+| `52f453a020944721724083fd81013336648db00b` | [49f7330](https://github.com/ubion-dev/project-ai-learning-analytics-instance-setup/commit/49f7330e3e0be122bc1a9b9a6312a3d0ac7ab985) |
+| `659d97e222f12ad16b279c4b6af2a8c44a1291a3` | [4ab255c](https://github.com/ubion-dev/project-ai-learning-analytics-instance-setup/commit/4ab255c9b65d76b174ddf43f67f123c65d217169) |
+| `668278019f011c26f2e20a3d038edc75c126380e` | [59d700e](https://github.com/ubion-dev/project-ai-learning-analytics-instance-setup/commit/59d700e97ad677ea5de0533c0fd9fa31a93cfcdb) |
+| `773ebb540f64268f392f88c3fb5eda1ee0ee9dae` | [80dd83a](https://github.com/ubion-dev/project-ai-learning-analytics-instance-setup/commit/80dd83ae86959fbe6f47ae3ba7ce4a31636a7afa) |
+| `80998a8626faebd60d0061b47bb3578c4b644037` | [aaf0503](https://github.com/ubion-dev/project-ai-learning-analytics-instance-setup/commit/aaf0503099bbee3e2825ee293564f698d5ec6b36) |
+| `81a5f347ba0732b1393e865afcf0a0ec7fa648bc` | [a459add](https://github.com/ubion-dev/project-ai-learning-analytics-instance-setup/commit/a459add4e301fbc8f74960e544834dc43184c5c3) |
+| `903103125f11cb1734904bac0ea601dc7fde207d` | [8d5bab6](https://github.com/ubion-dev/project-ai-learning-analytics-instance-setup/commit/8d5bab65bbb866282e8b7486197b2c5fe6b95f45) |
+| `92445986d38d514944e80b7e2cc58ac62682f990` | [38facf0](https://github.com/ubion-dev/project-ai-learning-analytics-instance-setup/commit/38facf08e8dcdd73819c37870278167339c7ef5f) |
+| `9aa3df027fce148c82172595e440f85b11434993` | [90a9b16](https://github.com/ubion-dev/project-ai-learning-analytics-instance-setup/commit/90a9b168713dead40280581d02056cf2f3d9235b) |
+| `ce2065cd43a5ef833e39abfc5410080ce525001c` | [2d605e6](https://github.com/ubion-dev/project-ai-learning-analytics-instance-setup/commit/2d605e68dea2e29d513c9713a9d76ec81e8d70de) |
 | `cf81793d75b47820c1984a35eafb5da323169f46` | [e4594b0](https://github.com/ubion-dev/project-ai-learning-analytics-instance-setup/commit/e4594b0fc00ad4e9358b456b631c5bbcae124766) |
-| `d4c5bf6d4f87faeaef1b5d5e87d109d338a5215c` | [57fa46c](https://github.com/ubion-dev/project-ai-learning-analytics-instance-setup/commit/57fa46c3109235e1df00b3b332c13ede71699b21) |
-| `d576bfb8e16119e58da67e2ade9ef5382d77a528` | [e6b7a59](https://github.com/ubion-dev/project-ai-learning-analytics-instance-setup/commit/e6b7a5981bfdaffb74436bc0f634519499d76b94) |
-| `d60d2e75c7419908342340698b70fa9a6d112afa` | [ef83893](https://github.com/ubion-dev/project-ai-learning-analytics-instance-setup/commit/ef838937e75f936f5756d05142f65d0641705da7) |
-| `efe9bed642eeb0c29feaa55d53480fbafe90ff00` | [1449db9](https://github.com/ubion-dev/project-ai-learning-analytics-instance-setup/commit/1449db9f88563b2e8d8a63e54b1932f024dca4de) |
-| `f9a85466c022a11e38848e50a1b50167dc15c527` | [120e309](https://github.com/ubion-dev/project-ai-learning-analytics-instance-setup/commit/120e309305a95229a9720906ed07fa15c33bafa8) |
+| `d4c5bf6d4f87faeaef1b5d5e87d109d338a5215c` | [85962dd](https://github.com/ubion-dev/project-ai-learning-analytics-instance-setup/commit/85962dd97fe77a17b7b8e3ab4f3d9171b94e08e4) |
+| `d576bfb8e16119e58da67e2ade9ef5382d77a528` | [d0033fc](https://github.com/ubion-dev/project-ai-learning-analytics-instance-setup/commit/d0033fc615b2f82f52e886ab189b9a1dc241ec2c) |
+| `d60d2e75c7419908342340698b70fa9a6d112afa` | [56179ba](https://github.com/ubion-dev/project-ai-learning-analytics-instance-setup/commit/56179bad45e9dd6c44b9749dc424a40a889c6416) |
+| `efe9bed642eeb0c29feaa55d53480fbafe90ff00` | [9d31b30](https://github.com/ubion-dev/project-ai-learning-analytics-instance-setup/commit/9d31b3053a4a7745606d57e8af5ec62e685a1eed) |
+| `f9a85466c022a11e38848e50a1b50167dc15c527` | [2d35143](https://github.com/ubion-dev/project-ai-learning-analytics-instance-setup/commit/2d35143caea2a2116d7a566aa3ff67de3f00897f) |
+
+## 공개 데이터 정책 강화
+
+후속 정리에서 테스트의 비루프백 IP 리터럴을 제거해 커밋 해시가 다시 변경됐다. 위 표는 현재 이력 기준이다. 당시 합성 주소는 실제 장비 주소가 아니었지만 엄격한 공개 규칙에 맞췄다. 원래 작성자·날짜·메시지·병합 관계는 유지한다. RC4 설치 바이너리는 변경하지 않고 소스 태그만 정리된 이력으로 연결한다. 과거 공개 객체/PR 캐시의 완전 삭제를 의미하지 않는다.
