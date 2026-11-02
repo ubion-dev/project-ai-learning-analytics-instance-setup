@@ -102,7 +102,7 @@ def main(argv=None, *, service=None):
             if not sys.stdin.isatty() or not sys.stdout.isatty():
                 p.error('메뉴는 SSH 터미널에서 실행하세요. 비대화형 환경에는 하위 명령을 지정하세요.')
             from .tui import AlaApp
-            section = 'config' if args.command == 'config' else 'chrome' if args.command == 'chrome' else 'dashboard'
+            section = 'config' if args.command == 'config' else 'chrome' if args.command == 'chrome' else 'home'
             AlaApp(service=svc, initial_section=section).run()
             return 0
         svc.authenticate()

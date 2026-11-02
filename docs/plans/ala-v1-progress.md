@@ -79,3 +79,25 @@
 - main에 public-data 필수 검사(strict)와 관리자 적용, 강제 푸시/삭제 금지를 설정했다. GitHub secret scanning/push protection도 활성 상태다.
 - 작업 폴더·develop 복제본에 로컬 pre-commit/commit-msg/pre-push 훅을 활성화했고, develop의 기존 이력은 별도 bundle 백업 후 동기화했다.
 - PR #1은 검토를 위해 OPEN 상태로 유지한다. 실제 Rocky 서버·OS 설정은 변경하지 않았고 실기기 수용은 여전히 미완료다.
+
+## ALA-13 시작
+
+- 사용자가 메뉴 복잡성과 다음 행동 불명확을 지적해 순서형 기본 흐름을 승인했다. main 627dea4에서 codex/guided-setup으로 작업한다.
+- 기존 TUI는 여섯 기능 탭과 별도 저장/계획/적용/인증 조작을 요구한다. 설치 엔진은 유지하고 기본 탐색과 설정 동선을 바꾼다.
+- 완료 조건: 기본 메뉴 4개, 계정/화면 선택만으로 설정 시작, 친숙한 변경 요약, 작업 종료 후 다음 행동, 기존 안전 계약 및 회귀 테스트 통과.
+
+## ALA-13 구현·대상 검증
+
+- 첫 화면 네 메뉴, 계정/화면/변경 요약 단계, 명시적 설정 시작, 진행/다음 행동을 추가했다. sudo는 순서형 시작에서 요청한다.
+- config-save/plan/submit 계약과 구성 변경 감지·단일 작업·SSH 독립 실행을 재사용한다. 고급 옵션은 보존하고 순서형 흐름에서는 자동 로그인/화면 정책을 켠다.
+- 변경 확인 시 구성만 저장하며 이전/홈으로 나가도 설치하지 않는다. 저장한 선택은 남는다는 점을 README에 명시했다.
+- TUI 25개, TUI+CLI/job 45개 통과. 80×24 합성 화면을 렌더링해 홈/선택/요약과 버튼 가시성을 확인했다. 기존 세 메뉴 순서 의존 테스트는 새 네 메뉴 동선으로 변경했다.
+- RC5 버전/설치 안내를 준비한다. RC4 자산·실제 Rocky 환경은 변경하지 않는다. 전체 회귀와 CI/RC5 배포가 남아 있다.
+
+## ALA-13 자동 검증·RC5 게시 완료
+
+- 구현 커밋 9cdffcf. 전체 로컬 회귀 362 passed + 40 subtests (126.49초). GitHub CI 41391116792 성공: public-data, Python 3.12 회귀, 고정 의존성, Bash 문법, 후보 빌드 및 CLI smoke 통과.
+- CI 산출물 RC5의 manifest 52개 파일 해시와 entry --version을 검증했다. 인증 없는 공개 다운로드도 같은 SHA-256임을 확인했다: 083928a450059b5213be1da365a9e8c3a6473c31f97f172f5e3c943b4b0382c6.
+- PR #2: https://github.com/ubion-dev/project-ai-learning-analytics-instance-setup/pull/2 — 검토 대기, 자동 병합하지 않는다.
+- 시험판: https://github.com/ubion-dev/project-ai-learning-analytics-instance-setup/releases/tag/v0.1.0-rc.5 — RC4 자산은 유지한다.
+- 남은 조건: 실제 Rocky에서 RC5 설치/갱신 후 키보드 설정 흐름과 실제 화면·재부팅 수용. 이번 작업에서는 실제 서버를 변경하지 않았다.

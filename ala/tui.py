@@ -18,6 +18,7 @@ from textual.widgets import Button, Checkbox, ContentSwitcher, DataTable, Footer
 from textual.widgets.option_list import Option
 
 from .config import Config
+from .guided import GuidedSetup, HOME_MENU
 
 
 SECTIONS = (
@@ -82,9 +83,10 @@ class ApplyConfirmation(ModalScreen[bool]):
         self.dismiss(False)
 
 
-class AlaApp(App[None]):
-    TITLE = "ala · AI 학습 분석실 인스턴스 관리"
+class AlaApp(GuidedSetup, App[None]):
+    TITLE = "ala · 서버 환경 설정"
     SUB_TITLE = "SSH 환경 관리"
+    ENABLE_COMMAND_PALETTE = False
     CSS = """
     Screen { min-width: 1; }
     #small-terminal { display: none; height: auto; background: $warning; color: $background; padding: 0 1; }
@@ -92,7 +94,7 @@ class AlaApp(App[None]):
     #toolbar Button { min-width: 10; margin-right: 1; }
     #notice { height: auto; max-height: 3; padding: 0 1; }
     #body { height: 1fr; }
-    #navigation { width: 18; min-width: 15; height: 1fr; border-right: solid $accent; }
+    #navigation { width: 24; min-width: 20; height: 1fr; border-right: solid $accent; }
     #content { width: 1fr; padding: 0 1; }
     .panel { height: 1fr; overflow-y: auto; }
     .actions { height: auto; min-height: 3; }
@@ -109,17 +111,28 @@ class AlaApp(App[None]):
     #setup-log { height: 5; min-height: 3; }
     #chrome-output, #run-output { height: 1fr; min-height: 4; }
     #run-table { height: 6; min-height: 3; }
+    .home-title { height: auto; margin-bottom: 1; text-style: bold; }
+    #home Static { height: auto; margin-bottom: 1; }
+    #wizard-pages { height: 1fr; }
+    #wizard-pages Static { height: auto; margin-bottom: 1; }
+    #wizard-pages Label { height: auto; }
+    #wizard-summary, #wizard-result { height: 1fr; min-height: 3; }
+    #advanced Button { width: 100%; margin-bottom: 1; }
+    #wizard-user, #wizard-url { margin-bottom: 1; }
+    #wizard-next { width: 20; min-width: 20; }
+    #wizard-back { width: 12; min-width: 12; }
     """
     BINDINGS = [
-        Binding("q", "leave", "종료"), Binding("escape", "navigation", "메뉴"),
-        Binding("r", "refresh", "새로고침"), Binding("a", "authenticate", "권한 인증"),
+        Binding("q", "leave", "종료"), Binding("escape", "navigation", "홈"),
+        Binding("r", "refresh", "새로고침", show=False), Binding("a", "authenticate", "권한 인증", show=False),
         Binding("ctrl+s", "save", "구성 저장", show=False),
     ]
 
-    def __init__(self, *, service, initial_section="dashboard", **kwargs):
+    def __init__(self, *, service, initial_section="home", **kwargs):
         super().__init__(**kwargs)
         self.service = service
-        self.section = initial_section if initial_section in dict(SECTIONS) else "dashboard"
+        self.section = initial_section if initial_section in dict(SECTIONS) or initial_section in {"home", "wizard", "advanced"} else "home"
+        self.init_guided()
         self._stored_config: dict[str, Any] | None = None
         self._plan_config: dict[str, Any] | None = None
         self._last_plan: dict[str, Any] | None = None
@@ -139,8 +152,9 @@ class AlaApp(App[None]):
             yield Button("새로고침", id="refresh")
         yield Static("읽기 전용 상태 조회 중입니다. 필요하면 'a'로 sudo 권한을 인증하세요.", id="notice", markup=False)
         with Horizontal(id="body"):
-            yield OptionList(*(Option(title, id=key) for key, title in SECTIONS), id="navigation")
+            yield OptionList(*(Option(title, id=key) for key, title in HOME_MENU), id="navigation")
             with ContentSwitcher(initial=self.section, id="content"):
+                yield from self.guided_panels()
                 with Vertical(id="dashboard", classes="panel"):
                     yield Static("상태 요약", id="dashboard-summary", classes="summary", markup=False)
                     yield DataTable(id="dashboard-table", classes="report-table", cursor_type="row")
@@ -199,7 +213,8 @@ class AlaApp(App[None]):
             self.query_one(f"#{section}-table", DataTable).add_columns("항목", "상태")
         self.query_one("#run-table", DataTable).add_columns("실행 ID", "상태", "시작")
         navigation = self.query_one("#navigation", OptionList)
-        navigation.highlighted = [key for key, _ in SECTIONS].index(self.section)
+        navigation.highlighted = next((i for i, (key, _) in enumerate(HOME_MENU) if key == self.section), 0)
+        self.query_one("#toolbar").display = self.section not in {"home", "wizard"}
         navigation.focus()
         self._resize_warning()
         self.set_interval(1.5, self.poll_job)
@@ -237,7 +252,13 @@ class AlaApp(App[None]):
         self.run_worker(self.load_section(self.section), group="section", exclusive=True, exit_on_error=False)
 
     async def load_section(self, section):
-        if section == "dashboard":
+        if section == "home":
+            await self.load_home()
+        elif section == "wizard":
+            await self.begin_wizard()
+        elif section == "advanced":
+            self.notice("세부 옵션과 기록입니다. 기본 설치는 첫 메뉴에서 진행하세요.")
+        elif section == "dashboard":
             value = await self.api("status")
             if value is None:
                 return
@@ -274,11 +295,10 @@ class AlaApp(App[None]):
         section = event.option.id
         if section is None:
             return
-        self.section = section
-        self.query_one("#content", ContentSwitcher).current = section
-        self.refresh_section()
+        self.show_section(section)
 
     def action_navigation(self):
+        self.show_section("home")
         self.query_one("#navigation", OptionList).focus()
 
     def action_leave(self):
@@ -315,7 +335,13 @@ class AlaApp(App[None]):
     @on(Button.Pressed)
     def button_pressed(self, event: Button.Pressed):
         key = event.button.id
-        if key == "authenticate":
+        if key == "wizard-next":
+            self.run_worker(self.wizard_advance(), group="wizard", exit_on_error=False)
+        elif key == "wizard-back":
+            self.wizard_back()
+        elif key and key.startswith("advanced-"):
+            self.show_section(key.removeprefix("advanced-"))
+        elif key == "authenticate":
             self.action_authenticate()
         elif key == "refresh":
             self.action_refresh()
@@ -342,6 +368,7 @@ class AlaApp(App[None]):
             self.notice("적용을 취소했습니다. 시스템 설정은 변경하지 않았습니다.")
 
     async def load_config(self):
+        self._stored_config = None
         value = await self.api("config-show")
         if value is None:
             return
@@ -403,6 +430,7 @@ class AlaApp(App[None]):
     async def make_plan(self, operation="setup"):
         self.invalidate_plan()
         self._plan_operation = operation
+        self._reports["plan"] = []
         if self.config_dirty():
             self.notice("편집한 구성을 먼저 저장하거나 다시 읽은 뒤 변경 계획을 확인하세요.")
             return
@@ -416,6 +444,9 @@ class AlaApp(App[None]):
         if after is None:
             return
         self.render_report("plan", value)
+        if not value.get("results"):
+            self.notice("검사 결과가 없습니다. 다시 확인하세요.")
+            return
         if before["config"] != after["config"]:
             self.notice("조사 중 구성이 변경됐습니다. 변경 계획을 다시 확인하세요.")
             return
@@ -493,6 +524,7 @@ class AlaApp(App[None]):
         if job.get("reason"):
             text += f"\n{job['reason']}"
         self.query_one("#job-summary", Static).update(Text(text))
+        self.render_guided_job(job)
         if job.get("report"):
             self.render_report("plan", job["report"])
 
@@ -549,3 +581,12 @@ class AlaApp(App[None]):
             self._active_job = run_id
         log = await self.api("logs", {"run_id": run_id})
         self.query_one("#run-output", TextArea).load_text(readable(job) + "\n\n" + (log or {}).get("log", ""))
+
+    @on(Checkbox.Changed, "#wizard-web")
+    def wizard_web_changed(self, event):
+        self.query_one("#wizard-url", Input).disabled = not event.value
+
+    @on(Input.Submitted, "#wizard-user")
+    @on(Input.Submitted, "#wizard-url")
+    def wizard_input_submitted(self):
+        self.run_worker(self.wizard_advance(), group="wizard", exit_on_error=False)
