@@ -18,7 +18,7 @@ from textual.widgets import Button, Checkbox, ContentSwitcher, DataTable, Footer
 from textual.widgets.option_list import Option
 
 from .config import Config
-from .guided import GuidedSetup, HOME_MENU
+from .guided import GuidedSetup, HOME_MENU, blocking_rows
 
 
 SECTIONS = (
@@ -88,14 +88,34 @@ class AlaApp(GuidedSetup, App[None]):
     SUB_TITLE = "SSH 환경 관리"
     ENABLE_COMMAND_PALETTE = False
     CSS = """
-    Screen { min-width: 1; }
+    Screen { min-width: 1; background: #101820; color: #e4edf5; }
+    Header { background: #182633; color: #d9e9f5; }
+    Footer { background: #182633; color: #a8bdce; }
+    Button { background: #253746; color: #e4edf5; border: tall #253746; }
+    Button.-primary { background: #256e87; border: tall #256e87; color: #ffffff; }
+    Button:focus { text-style: bold; border: tall #8cdbec; }
+    Button:disabled { background: #1b2935; border: tall #1b2935; color: #8293a1; }
+    Input { background: #182633; border: tall #344b5e; }
+    Input:focus { border: tall #8cdbec; }
+    OptionList { background: #182633; }
+    OptionList > .option-list--option-highlighted { background: #28566a; color: #ffffff; text-style: bold; }
+    TextArea { background: #141f2a; border: round #344b5e; }
+    Collapsible { background: #182633; border: none; margin: 0; padding: 0; }
+    #review-status { background: #193b36; color: #d4f5e4; border-left: thick #67c4a1; padding: 0 1; }
+    #review-status.has-blockers { background: #3a2e22; color: #ffdeb0; border-left: thick #e6ab60; }
+    #review-counts { color: #9dd5e5; text-style: bold; }
+    #review-changes { background: #182633; padding: 0 1; }
+    #review-footnote { color: #a2b4c4; }
+    #wizard-review { scrollbar-size: 1 1; }
+    #wizard-summary { height: 14; min-height: 6; }
+
     #small-terminal { display: none; height: auto; background: $warning; color: $background; padding: 0 1; }
     #toolbar { height: 3; }
     #toolbar Button { min-width: 10; margin-right: 1; }
-    #notice { height: auto; max-height: 3; padding: 0 1; }
+    #notice { height: auto; max-height: 2; padding: 0 1; color: #b7c8d8; background: #182633; }
     #body { height: 1fr; }
-    #navigation { width: 24; min-width: 20; height: 1fr; border-right: solid $accent; }
-    #content { width: 1fr; padding: 0 1; }
+    #navigation { width: 24; min-width: 20; height: 1fr; border-right: solid #344b5e; padding: 1 0; }
+    #content { width: 1fr; padding: 1 2 0 2; max-width: 120; }
     .panel { height: 1fr; overflow-y: auto; }
     .actions { height: auto; min-height: 3; }
     .actions Button { margin-right: 1; min-width: 9; }
@@ -116,7 +136,7 @@ class AlaApp(GuidedSetup, App[None]):
     #wizard-pages { height: 1fr; }
     #wizard-pages Static { height: auto; margin-bottom: 1; }
     #wizard-pages Label { height: auto; }
-    #wizard-summary, #wizard-result { height: 1fr; min-height: 3; }
+    #wizard-result { height: 1fr; min-height: 3; }
     #advanced Button { width: 100%; margin-bottom: 1; }
     #wizard-user, #wizard-url { margin-bottom: 1; }
     #wizard-next { width: 20; min-width: 20; }
@@ -463,11 +483,10 @@ class AlaApp(GuidedSetup, App[None]):
         if before["config"] != after["config"]:
             self.notice("조사 중 구성이 변경됐습니다. 변경 계획을 다시 확인하세요.")
             return
-        blockers = {"blocked", "unknown", "error"}
-        if any(r.get("state") in blockers and not (operation == "setup" and
-               str(r.get("id", "")).startswith(("network.", "hardware.")))
-               for r in value.get("results", [])):
-            self.notice("차단·확인 불가·실패 항목을 해결한 후 계획을 다시 확인하세요.")
+        blockers = blocking_rows(value) if operation == 'setup' else [
+            r for r in value.get('results', []) if r.get('state') in {'blocked', 'unknown', 'error'}]
+        if blockers:
+            self.notice("설치 전 해결할 항목이 있습니다. 변경 확인 화면의 안내를 확인하세요.")
             return
         self._plan_config = before["config"]
         self._last_plan = value

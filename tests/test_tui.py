@@ -556,3 +556,35 @@ def test_update_banner_and_offline_state(monkeypatch):
             await app.check_update()
             assert '계속' in str(app.query_one('#update-notice', Static).render())
     run(scenario())
+
+
+def test_review_prioritizes_blocker_separates_pending_and_exposes_details():
+    from textual.widgets import Static, Collapsible
+    async def scenario():
+        service = FakeService()
+        service.report['results'] += [
+            {'id': 'docker.conflict.podman', 'state': 'blocked', 'actual': 'podman', 'next_action': '컨테이너 확인'},
+            {'id': 'display.session', 'state': 'pending', 'actual': '세션 대기', 'next_action': '재부팅 후 확인'},
+        ]
+        app = AlaApp(service=service)
+        async with app.run_test(size=(80, 24)) as pilot:
+            await pilot.pause()
+            app.show_section('wizard')
+            await app.begin_wizard()
+            await app.wizard_advance()
+            await app.wizard_advance()
+            await pilot.pause()
+            text = str(app.query_one('#review-status', Static).render())
+            assert 'podman' in text and '1개' in text
+            assert '재부팅' not in text
+            assert app.query_one('#wizard-next', Button).disabled
+            assert app.query_one('#wizard-next').region.bottom <= 23
+            details = app.query_one('#review-details', Collapsible)
+            assert details.collapsed
+            details.query_one('CollapsibleTitle').focus()
+            await pilot.press('enter')
+            await pilot.pause()
+            assert not details.collapsed
+            assert 'docker.conflict.podman' in app.query_one('#wizard-summary', TextArea).text
+            assert '적용 후 확인' in app.query_one('#wizard-summary', TextArea).text
+    run(scenario())
