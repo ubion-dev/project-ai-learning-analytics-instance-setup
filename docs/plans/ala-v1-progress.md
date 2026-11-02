@@ -113,3 +113,12 @@
 - 버전 고정 systemd 실행기와 고정 unit으로 SSH 종료·중복 갱신에 대응한다. 설치 공통 잠금 아래 현재 버전을 재검사하여 오래 열린 CLI에서의 다운그레이드도 차단한다. 기존 구성/current 보존 동작 유지.
 - 전체 로컬 371 passed + 40 subtests (128.88초). 이후 추가 검증 포함 update/TUI 39 passed, installer 다운그레이드 방지 1 passed. 최종 전체 집계는 CI에서 확인한다.
 - RC6 준비, RC5 불변. 최초 수동 갱신 필요/정식 기본 채널/시험판 명시 선택/로그 조회를 문서화했다. 실제 Rocky 갱신은 미검증이다.
+
+## ALA-14 RC6 후보 게시 완료
+
+- 구현 cb75e4b. CI 41393391577 성공: Python 3.12 최종 377 passed + 40 subtests (81.11초), 공개 이력 검사, Bash, 고정 의존성, 배포 빌드/CLI smoke 통과.
+- CI RC6의 체크섬·manifest 53개 파일 검증 및 인증 없는 공개 다운로드 byte 일치 확인. 실제 공개 API 조회도 인증 없이 정상 응답했다.
+- PR #3: https://github.com/ubion-dev/project-ai-learning-analytics-instance-setup/pull/3 — 검토 대기.
+- 시험판: https://github.com/ubion-dev/project-ai-learning-analytics-instance-setup/releases/tag/v0.1.0-rc.6
+- RC5 이하 최초 수동 갱신 필요. 이후 정식 기본/시험판 명시 선택으로 자체 갱신한다. 자동 적용 타이머는 없다.
+- 실제 Rocky 갱신·SSH 종료 후 지속·재접속 수용은 남아 있다. 이번 작업은 실제 서버를 변경하지 않았다.
