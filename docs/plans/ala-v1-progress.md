@@ -194,3 +194,12 @@
 - RC9 후보와 검토 PR 준비. 실제 Rocky에서 sudo 인증과 간편 설정 실기기 수용은 미완료다.
 
 - PR #5가 미병합 상태이므로 후속 PR을 늘리지 않고 최종 간편 흐름으로 해당 PR의 구현·설명을 갱신한다. 관리자/간편 설정 커밋은 14cb8a9이며 기존 focused-tui 브랜치를 fast-forward한다.
+
+## ALA-17/18 RC9 후보 완료
+
+- 최종 구현 bacffd7. CI 41411915700: 전체 393 passed + 40 subtests (88.26초), 공개 이력 검사·Bash·고정 의존성·후보 빌드·CLI smoke 통과.
+- RC9 체크섬과 manifest 54개 파일 검증, 인증 없는 공개 다운로드 byte 일치 확인.
+- 기존 PR #5 제목·설명을 최종 간편 설정/관리자 진입 범위로 갱신했다: https://github.com/ubion-dev/project-ai-learning-analytics-instance-setup/pull/5
+- 시험판: https://github.com/ubion-dev/project-ai-learning-analytics-instance-setup/releases/tag/v0.1.0-rc.9
+- RC6 이상에서 sudo /usr/local/bin/ala update --prerelease로 설치 가능하다. 이후 ala 실행 시 관리자 인증과 Enter 간편 설정/s 상태 확인을 제공한다.
+- 실제 Rocky의 sudo 진입·간편 설정·화면 수용은 미완료다. 실제 서버는 이번 작업에서 변경하지 않았다.
