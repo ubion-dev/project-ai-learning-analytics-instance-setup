@@ -203,3 +203,24 @@
 - 시험판: https://github.com/ubion-dev/project-ai-learning-analytics-instance-setup/releases/tag/v0.1.0-rc.9
 - RC6 이상에서 sudo /usr/local/bin/ala update --prerelease로 설치 가능하다. 이후 ala 실행 시 관리자 인증과 Enter 간편 설정/s 상태 확인을 제공한다.
 - 실제 Rocky의 sudo 진입·간편 설정·화면 수용은 미완료다. 실제 서버는 이번 작업에서 변경하지 않았다.
+
+## ALA-19 시작
+
+- 사용자 정정에 따라 기본 TUI는 유지하되 간편 설정/상태 확인 두 화면으로 제한한다. 텍스트 콘솔 제거가 목적은 아니며 선택 명령으로 둔다.
+- 현재 codex/focused-tui / 32bf7f1에서 후속 작업. 이전 RC9 자산은 유지한다.
+- 두 화면 TUI와 Podman 안내 검토를 분담하고 CLI·문서·통합은 주담당이 진행한다. 실제 장비 변경은 하지 않는다.
+
+## ALA-19 Podman 판단 보강
+
+- 공식 Docker RHEL 절차의 사전 정리 대상이므로 차단은 유지한다. 설치 감지를 사용 중으로 단정하지 않는다. 일반 계정과 root 저장소를 각각 확인하고 미사용 확인 후 제거 예정 목록을 검토하도록 안내한다.
+- 실제 Engine.apply는 Docker 차단 뒤 이후 단계도 중단한다. 이전 OPERATIONS의 'Docker만 차단' 취지 설명을 정정했다. 엔진 동작은 변경하지 않는다.
+- Podman 공식 rootless 문서를 근거로 docs.podman.io를 공개 문서 호스트 허용 목록에 추가한다. 기본 흐름에 없는 '이전→변경 확인' 문구를 제거했다.
+
+## ALA-19 구현·대상 검증
+
+- 기본 ala / ala tui를 새 SimpleApp의 간편 설정·상태 확인 두 탭으로 연결했다. 다단계 wizard와 네 메뉴는 기본 경로에서 제거했고 텍스트 콘솔은 ala console로 선택한다.
+- 기존 config/submit/worker 계약으로 한 번 적용하며, 관리자 시작·단일 잠금·일반 사용자 Chrome·최초 구성 저장을 재사용한다. 상태 조회는 쓰기 작업이 없다.
+- 상태 조회 실패·빈 결과 때 이전 정상 표를 제거하고, 실행 중 작업을 재연결하며, 늦은 상태 응답이 새/완료 작업을 덮어쓰지 않도록 했다.
+- 새 TUI 전용 7개, TUI/CLI 관리자 통합 43개 통과. root 담당 엔진/콘솔/공개 정책 등 52개 + 3 subtests 통과.
+- 합성 데이터로 80×24/120×36 설정·상태 화면을 렌더링했다. Podman 원인 다음에 실제 조치를 먼저 표시하고 상태 상세 영역을 늘렸다.
+- 전체 회귀와 RC10 후보 빌드 검증 예정. 실제 Rocky 수용·Podman 사용 여부 확인은 남아 있다.

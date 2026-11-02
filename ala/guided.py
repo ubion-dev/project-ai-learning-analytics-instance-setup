@@ -132,7 +132,7 @@ class GuidedSetup:
                 else:
                     lines.append(f"{item_name(identifier)} · {row.get('actual', '상태 확인 필요')}")
                 lines.append(str(row.get('next_action') or '상세 내역에서 현재 상태를 확인하세요.'))
-            lines.append('해결 후 이전 → 변경 확인으로 다시 검사하세요.')
+            lines.append('정리 후 간편 설정을 다시 실행하세요.')
             status.update(Text('\n'.join(lines)))
         elif rows and self._last_plan:
             status.update(Text('준비 완료 · 아래 변경을 확인하고 설정 시작을 누르세요.'))

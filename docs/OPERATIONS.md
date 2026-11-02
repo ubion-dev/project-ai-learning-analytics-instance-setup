@@ -111,8 +111,23 @@ URL 미입력 또는 Chrome 자동 실행 off는 바탕화면 자동 로그인�
 
 ## 기본 설정 흐름
 
-`ala`는 일반 터미널에서 Enter 간편 설정 / s 상태 확인만 제공합니다. sudo 인증은 대화형 시작에서 처리합니다. 처음 적용할 때는 실행자의 일반 계정과 기본값을 공통 변경 잠금 안에서 저장합니다. 저장된 구성이 있으면 보존하며, 상태·계획 조회는 구성 파일을 만들지 않습니다. root 직접 접속으로 일반 계정을 알 수 없으면 먼저 `ala config edit` 또는 구성 가져오기로 지정해야 합니다.
+`ala`와 `ala tui`는 간편 설정 / 상태 확인 두 화면을 제공합니다. 간편 설정 실행 버튼 한 번으로 저장된 구성이나 최초 기본값을 적용합니다. sudo 인증은 대화형 시작에서 처리합니다. 처음 적용할 때는 실행자의 일반 계정과 기본값을 공통 변경 잠금 안에서 저장합니다. 저장된 구성이 있으면 보존하며, 상태·계획 조회는 구성 파일을 만들지 않습니다. root 직접 접속으로 일반 계정을 알 수 없으면 먼저 `ala config edit` 또는 구성 가져오기로 지정해야 합니다.
 
-설치 엔진은 모듈별로 현재 상태를 재확인합니다. Podman 충돌이 있으면 Docker 관련 변경은 차단하고 다른 안전한 모듈의 결과도 함께 기록합니다. 마지막에 모든 항목이 완료됐다고 표시하지 않으며 `ala check`에서 원인과 다음 조치를 확인합니다. Podman은 일반 사용자와 root 각각 `podman ps -a`, `podman volume ls`로 기존 사용 여부를 확인한 뒤 정리하세요.
+설치 엔진은 모듈별로 현재 상태를 재확인합니다. Podman 충돌이 있으면 Docker와 이후 GPU·화면 단계는 중단됩니다. 앞 단계에서 적용한 설정은 유지됩니다. 충돌 해결 후 간편 설정을 다시 실행하면 현재 상태를 재검사하고 필요한 작업을 진행합니다. 마지막에 모든 항목이 완료됐다고 표시하지 않으며 `ala check`에서 원인과 다음 조치를 확인합니다. Podman은 일반 사용자와 root 각각 `podman ps -a`, `podman volume ls`로 기존 사용 여부를 확인한 뒤 정리하세요.
 
-상세 TUI는 `ala tui`로만 엽니다. `ala check --json`은 요약되지 않은 전체 기대값·현재값을 반환합니다. 실행 중 작업은 `ala status`, 중단한 터미널에서 재접속한 뒤 기록은 `ala runs list`로 조회합니다.
+일반 텍스트 콘솔은 `ala console`로 선택합니다. 개별 옵션 변경은 `ala config edit`에서 가능합니다. `ala check --json`은 요약되지 않은 전체 기대값·현재값을 반환합니다. 실행 중 작업은 `ala status`, 중단한 터미널에서 재접속한 뒤 기록은 `ala runs list`로 조회합니다.
+
+## Podman 설치 감지로 중단된 경우
+
+Docker 공식 RHEL 설치 안내는 Podman을 사전 정리 대상으로 명시합니다. 설치되어 있다는 사실만으로 사용 중이라고 단정하지 않습니다. ala를 종료한 일반 사용자 SSH 터미널에서 확인합니다.
+
+```bash
+podman ps -a
+podman volume ls
+sudo podman ps -a
+sudo podman volume ls
+```
+
+조회 오류를 빈 목록으로 취급하지 마세요. 일반 계정의 rootless 저장소는 root 조회에 나타나지 않으므로 다른 사용 계정도 있다면 별도로 확인해야 합니다. Podman을 사용하지 않는 초기 장비이고 필요한 데이터·다른 계정·예약 서비스가 없음을 확인한 경우 `sudo dnf remove podman`으로 제거 예정 목록을 검토한 뒤 진행합니다. `-y`로 검토를 건너뛰지 않습니다. 정리 후 ala에서 간편 설정을 다시 실행합니다.
+
+근거: [Docker RHEL 설치](https://docs.docker.com/engine/install/rhel/), [Podman rootless 설명](https://docs.podman.io/en/latest/markdown/podman.1.html#rootless-mode). 공개 검사에 Podman 공식 문서 호스트를 추가한 근거이기도 합니다.

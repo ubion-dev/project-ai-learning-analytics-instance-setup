@@ -70,11 +70,28 @@ def test_help_and_update_check_never_elevate(monkeypatch, capsys):
     capsys.readouterr()
 
 
-def test_default_cli_opens_compact_console_after_admin_entry(monkeypatch):
+def test_default_cli_opens_simple_tui_after_admin_entry(monkeypatch):
+    import sys
+    from types import SimpleNamespace
+    tty(monkeypatch)
+    calls = []
+    monkeypatch.setattr(backend.Service, 'enter_admin', lambda self, argv: calls.append(('admin', argv)))
+    class SimpleApp:
+        def __init__(self, service): pass
+        def run(self): calls.append(('tui', None))
+    monkeypatch.setitem(sys.modules, 'ala.simple_tui', SimpleNamespace(SimpleApp=SimpleApp))
+    assert cli.main([]) == 0
+    assert calls == [('admin', []), ('tui', None)]
+    calls.clear()
+    assert cli.main(['tui']) == 0
+    assert calls == [('admin', ['tui']), ('tui', None)]
+
+
+def test_text_console_is_explicit_option(monkeypatch):
     from ala import console
     tty(monkeypatch)
     calls = []
     monkeypatch.setattr(backend.Service, 'enter_admin', lambda self, argv: calls.append(('admin', argv)))
     monkeypatch.setattr(console, 'run_console', lambda service: calls.append(('console', None)) or 0)
-    assert cli.main([]) == 0
-    assert calls == [('admin', []), ('console', None)]
+    assert cli.main(['console']) == 0
+    assert calls == [('admin', ['console']), ('console', None)]
