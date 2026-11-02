@@ -135,3 +135,11 @@
 - TUI·엔진 59 passed + 3 subtests. Podman 차단 1개와 재부팅 대기가 섞이지 않음, 80×24 하단 버튼 가시성, 키보드 상세 펼침을 검증했다.
 - 합성 데이터로 80×24/120×36 실제 TUI SVG를 렌더링하고 색상/무색 환경을 확인했다. 실제 장비 화면은 미검증이다.
 - RC7 후보 준비. 전체 회귀·빌드는 CI에서 확인한다.
+
+## ALA-15 RC7 후보 완료
+
+- 구현 d4ce013, CI 41405610840: 전체 378 passed + 40 subtests (53.37초). 공개 이력 검사·빌드·CLI smoke 통과.
+- RC7 체크섬과 manifest 53개 파일 검증, 인증 없는 공개 다운로드 byte 일치 확인.
+- PR #4: https://github.com/ubion-dev/project-ai-learning-analytics-instance-setup/pull/4
+- 시험판: https://github.com/ubion-dev/project-ai-learning-analytics-instance-setup/releases/tag/v0.1.0-rc.7
+- RC6에서 ala update --prerelease 사용 가능. 기존 후보는 유지한다. 실제 장비의 Podman 사용 여부 확인·정리와 화면 수용은 남아 있다.
