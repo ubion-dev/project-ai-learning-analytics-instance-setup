@@ -303,3 +303,11 @@
 - 기존 TUI/상태 모델/관리자 진입/콘솔 대상 66개 통과 후 추가 렌더 검증 포함 신규 레이아웃 18개 통과. 초기·진행·종료대기·조회오류, 3개 크기, 비겹침·가로 스크롤·긴 항목·끝행 탐색·선택 보존·버튼 캡션을 검증했다.
 - 80×24/120×36/160×48의 준비·진행·종료대기·상태 화면을 합성 데이터로 렌더링했다. 별도 읽기 검토에서 기존 실행/권한/조회 계약 유지 확인. 실제 Rocky 장비는 변경하지 않았다.
 - RC13 전체 CI·배포 파일 검증이 남아 있다. 이전 RC12 파일은 유지한다.
+
+## ALA-22 RC13 후보 완료
+
+- 최종 구현 2f9ef51e8e0da9be08e23b706977ef2eb2f6de5e. CI 41431039704: Python 3.12 전체 457 passed + 42 subtests (105.82초), 공개 이력·Bash·고정 의존성·빌드·CLI smoke 통과.
+- CI 설치 묶음의 체크섬·manifest 57개 파일 해시를 검증하고 인증 없는 공개 다운로드와 byte 일치를 확인했다. SHA-256: fd53774f7f7127532272de7d35add5a961fffa723d13443fa36e02c05716e03f.
+- 기존 PR #6을 최종 반응형 배치·진행 표시 범위로 갱신했다: https://github.com/ubion-dev/project-ai-learning-analytics-instance-setup/pull/6
+- 시험판: https://github.com/ubion-dev/project-ai-learning-analytics-instance-setup/releases/tag/v0.1.0-rc.13
+- 설정 작업 종료 후 ala update --prerelease로 갱신하고 다시 실행한다. 실제 Rocky 터미널의 가독성·화면 수용은 남아 있으며 이번 작업은 실제 장비를 변경하지 않았다.
