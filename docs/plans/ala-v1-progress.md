@@ -93,3 +93,11 @@
 - 변경 확인 시 구성만 저장하며 이전/홈으로 나가도 설치하지 않는다. 저장한 선택은 남는다는 점을 README에 명시했다.
 - TUI 25개, TUI+CLI/job 45개 통과. 80×24 합성 화면을 렌더링해 홈/선택/요약과 버튼 가시성을 확인했다. 기존 세 메뉴 순서 의존 테스트는 새 네 메뉴 동선으로 변경했다.
 - RC5 버전/설치 안내를 준비한다. RC4 자산·실제 Rocky 환경은 변경하지 않는다. 전체 회귀와 CI/RC5 배포가 남아 있다.
+
+## ALA-13 자동 검증·RC5 게시 완료
+
+- 구현 커밋 9cdffcf. 전체 로컬 회귀 362 passed + 40 subtests (126.49초). GitHub CI 41391116792 성공: public-data, Python 3.12 회귀, 고정 의존성, Bash 문법, 후보 빌드 및 CLI smoke 통과.
+- CI 산출물 RC5의 manifest 52개 파일 해시와 entry --version을 검증했다. 인증 없는 공개 다운로드도 같은 SHA-256임을 확인했다: 083928a450059b5213be1da365a9e8c3a6473c31f97f172f5e3c943b4b0382c6.
+- PR #2: https://github.com/ubion-dev/project-ai-learning-analytics-instance-setup/pull/2 — 검토 대기, 자동 병합하지 않는다.
+- 시험판: https://github.com/ubion-dev/project-ai-learning-analytics-instance-setup/releases/tag/v0.1.0-rc.5 — RC4 자산은 유지한다.
+- 남은 조건: 실제 Rocky에서 RC5 설치/갱신 후 키보드 설정 흐름과 실제 화면·재부팅 수용. 이번 작업에서는 실제 서버를 변경하지 않았다.
