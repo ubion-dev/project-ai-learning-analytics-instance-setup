@@ -440,3 +440,9 @@
 - 독립 회귀에서 제목 뒤 NUL 잔여값과 외부 프로필 증거 누락을 발견해 보완했다. 첫 로컬 전체 실행은 수정 전 모듈을 읽어 750 passed + 54 subtests와 새 경계 2건 실패였다. 수정 후 관련 parser/display/health 202개를 재검증해 통과했다. 최종 전체 회귀는 CI에서 다시 확인한다.
 - Linux 실제 Chrome 스모크를 별도 CI 단계로 추가했다. 일반 사용자·네트워크 격리·sandbox 유지·private CDP PID와 실제 proc 제목 형식·요청 옵션 일치를 검증하며 명시적 실행의 환경/의미 실패를 skip하지 않는다. Mac의 기본 opt-in skip을 확인했으며 실제 Linux 통과로 기록하지 않는다.
 - 공개 index 검사 212 objects와 diff 검사를 통과했다. RC18 버전/설치 안내·운영 진단을 준비했다. 현재 Chrome/실제 장비/이전 후보는 변경하지 않았다. 다음 행동은 CI의 전체·실제 Linux 검증과 후보 빌드 대조·RC18 게시다.
+
+## ALA-29 첫 CI 확인
+
+- 구현 fb260b842dde1e455a5255c790e5a2ae22f3ee33의 push 41588603093 / PR 41588608770에서 전체 752 passed + 54 subtests와 공개/Bash 검사를 통과했다.
+- 실제 Linux Chrome은 private CDP/독립 PID/관측기까지 실행됐지만 NUL 형식을 유지해, 새 Linux 제목 분기를 실측해야 한다는 엄격한 스모크 조건이 실패했다. 이를 Linux 제목 검증 성공으로 취급하지 않으며 후보 빌드/업로드/릴리스는 진행하지 않았다.
+- GNOME과 CI의 시작 환경 차이를 조사한다. Chromium은 title 초기화 전에 DBUS 환경을 보충할 수 있고 title 초기화는 원래 환경의 연속 배치를 요구한다. 안전한 disabled DBUS 주소를 미리 전달하는 테스트 환경 보완을 검토하며 실제 서버나 런타임 설정을 바꾸지 않는다.

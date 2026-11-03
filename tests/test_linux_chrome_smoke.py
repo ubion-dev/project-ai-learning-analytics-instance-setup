@@ -24,11 +24,16 @@ def require(condition, message):
 
 
 def quiet_spawn(program, arguments, environment, *, file_actions):
+    # Chromium sets this before setproctitle_init. Adding a missing environment
+    # entry then can break its original contiguous argv/environ layout check.
+    # Seed only this child so title rewriting can be exercised without a real
+    # desktop bus or D-Bus autolaunch; no user/system configuration is changed.
+    child_environment = dict(environment, DBUS_SESSION_BUS_ADDRESS='disabled:')
     # Browser stderr can contain environment/account/profile details. Keep this
     # smoke's public evidence limited to success/failure and the observed format.
     silence = [(os.POSIX_SPAWN_OPEN, 1, os.devnull, os.O_WRONLY, 0o600),
                (os.POSIX_SPAWN_DUP2, 1, 2)]
-    return os.posix_spawn(program, arguments, environment, file_actions=[*silence, *file_actions])
+    return os.posix_spawn(program, arguments, child_environment, file_actions=[*silence, *file_actions])
 
 
 def test_real_linux_chrome_proc_observation_and_independent_browser_pid(tmp_path):
