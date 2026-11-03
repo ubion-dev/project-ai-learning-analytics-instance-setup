@@ -1,6 +1,7 @@
 """SSH keyboard acceptance without commands, network, or real display changes."""
 import asyncio
 from copy import deepcopy
+from rich.cells import cell_len
 
 from textual.widgets import Button, Input, Static, Tabs, TextArea
 
@@ -121,6 +122,8 @@ def test_small_terminal_controls_and_detail_remain_inside_viewport():
                 assert region.x >= 0 and region.y >= 0
                 assert region.right <= 80 and region.bottom <= 23
             assert app.query_one('#screens-stop', Button).region.width >= 7
+            for button in app.query('#screens-actions Button'):
+                assert button.content_size.width >= cell_len(str(button.label)) + 2
             await pilot.resize_terminal(125, 42)
             await pilot.pause()
             await app.query_one('#screens', ScreenPanel).refresh_state()

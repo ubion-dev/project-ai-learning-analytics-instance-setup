@@ -104,6 +104,8 @@ class SimpleApp(App[None]):
     Button:disabled { background: #1c2835; border: tall #1c2835; color: #a4b5c6; }
     #setup-start { width: 24; }
     #chrome-open { width: 16; height: 3; margin-left: 1; padding: 0 1; }
+    #screens-actions { height: 6; layout: grid; grid-size: 4 2; grid-rows: 3 3; grid-columns: 1fr 1fr 1fr 1fr; grid-gutter: 0 1; }
+    #screens-actions Button { padding: 0; min-width: 7; width: 1fr; }
     #setup-overview { height: auto; margin-bottom: 1; padding: 0 2; border-left: solid #648ba7; }
     #setup-overview.running { background: #142a32; border-left: solid #62cce5; }
     #setup-overview.pending { background: #2b2518; border-left: solid #e6ba63; }
@@ -145,7 +147,7 @@ class SimpleApp(App[None]):
     Screen.compact #screens-summary { height: 1; margin-bottom: 0; }
     Screen.compact #screens-map { height: auto; max-height: 3; padding: 0; border: none; }
     Screen.compact #screens-table { margin-top: 0; }
-    Screen.compact #screens-detail { height: 4; min-height: 3; margin-top: 0; }
+    Screen.compact #screens-detail { height: 3; min-height: 3; margin-top: 0; }
     Screen.compact #screens-actions { margin-top: 0; }
     """
 

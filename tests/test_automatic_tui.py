@@ -1,5 +1,6 @@
 import asyncio
 from copy import deepcopy
+from rich.cells import cell_len
 
 from textual.widgets import Button, Switch
 
@@ -33,6 +34,8 @@ def test_opening_automatic_controls_never_enrolls_or_confirms_acceptance():
             for key in ('prepare', 'apply', 'enable', 'disable', 'close', 'refresh'):
                 region = app.screen.query_one('#automatic-'+key).region
                 assert region.x >= 0 and region.right <= 80 and region.bottom <= 24
+                button = app.screen.query_one('#automatic-'+key)
+                assert button.content_size.width >= cell_len(str(button.label)) + 2
             await pilot.press('escape')
             assert len(app.screen_stack) == 1
     asyncio.run(scenario())

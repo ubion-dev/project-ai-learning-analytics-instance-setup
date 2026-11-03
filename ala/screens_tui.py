@@ -175,7 +175,7 @@ class ScreenPanel(Vertical):
         yield DataTable(id='screens-table', cursor_type='row')
         yield TextArea('', id='screens-detail', read_only=True, show_cursor=False, highlight_cursor_line=False)
         with Horizontal(id='screens-actions'):
-            for key, label in [('start', '시작'), ('stop', '중지'), ('restart', '재시작'), ('reload', '갱신'), ('edit', '설정'), ('add', '추가'), ('logs', '로그'), ('retry', '배포 확인')]:
+            for key, label in [('start', '시작'), ('stop', '중지'), ('restart', '재시작'), ('reload', '갱신'), ('edit', '설정'), ('add', '추가'), ('logs', '로그'), ('retry', '배포 재시도')]:
                 yield Button(label, id='screens-'+key, disabled=key != 'add')
 
     def on_mount(self):
@@ -242,8 +242,8 @@ class ScreenPanel(Vertical):
         columns = (('대상 · 출력', min(20, available//3)),
                    ('적용 사이트', max(12, available-min(20, available//3)-22)),
                    ('실행 · 사이트', 22)) if compact else (
-                   ('대상', 14), ('출력', 13), ('적용 사이트', max(16, available-59)),
-                   ('Chrome', 10), ('사이트', 12), ('창 배치', 10))
+                   ('대상', 14), ('출력', 13), ('적용 사이트', max(16, available-66)),
+                   ('실행 · 적용', 17), ('사이트', 12), ('창 배치', 10))
         for label, width in columns:
             table.add_column(label, width=width)
         run_labels = {'active': '실행 중', 'activating': '시작 중', 'inactive': '중지됨', 'failed': '실패'}
@@ -253,14 +253,19 @@ class ScreenPanel(Vertical):
             health = value.get('health') or {}
             placement = value.get('placement') or {}
             run = run_labels.get(service.get('ActiveState'), '확인 불가')
+            runtime = value.get('runtime') or {}
+            update_pending = bool(runtime.get('committed') and runtime.get('desired')
+                                  and runtime['committed'] != runtime['desired'])
+            if update_pending:
+                run = run.replace(' ', '')+'·적용대기'
             site = '중지됨' if service.get('ActiveState') == 'inactive' else health_labels.get(health.get('state'), '확인 불가')
             deployment = value.get('frontend_status') or {}
             if (value.get('frontend') or {}).get('enabled') and deployment.get('state') == 'blocked':
                 site += ' · 배포 보류'
             output = value.get('output') or '단일 출력 자동'
             color = 'green' if site == '정상' else 'dim' if site == '중지됨' else 'yellow'
-            items = (f'{value["id"]} · {output}', site_label(value.get('applied_url', value.get('url'))), Text(run+' · '+site, style=color)) if compact else (
-                value['id'], output, site_label(value.get('applied_url', value.get('url'))), run, Text(site, style=color),
+            items = (f'{value["id"]} · {output}', site_label(value.get('applied_url', value.get('url'))), Text(run+'·'+site, style='yellow' if update_pending else color)) if compact else (
+                value['id'], output, site_label(value.get('applied_url', value.get('url'))), Text(run, style='yellow' if update_pending else ''), Text(site, style=color),
                 {'ok': '확인됨', 'pending': '배치 대기', 'unknown': '확인 불가'}.get(placement.get('state'), '확인 불가'))
             table.add_row(*items, key=value['id'])
         if self.selected:
