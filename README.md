@@ -3,7 +3,7 @@
 Rocky Linux 서버의 기본 환경·Docker·GPU 드라이버·Chrome DID 화면을 설치하고 검사하는 CLI/TUI입니다.
 
 - 대상: **Rocky Linux 10 x86_64 + GNOME/GDM + 기존 sudo 사용자**
-- 현재 배포 후보: **0.1.0rc17**. 실제 장비의 설치·GPU·화면·재부팅 수용은 아직 완료하지 않았습니다.
+- 현재 배포 후보: **0.1.0rc18**. 실제 장비의 설치·GPU·화면·재부팅 수용은 아직 완료하지 않았습니다.
 - **공개 릴리스에서 바로 다운로드합니다. Git·GitHub 로그인·토큰·Mac 파일 전송은 필요 없습니다.**
 
 ## 1. 설치 — Rocky 터미널
@@ -14,8 +14,8 @@ SSH로 서버에 접속한 일반 사용자 터미널에서 실행합니다. `cu
 ```bash
 (
   set -e
-  VERSION='0.1.0rc17'
-  RELEASE='v0.1.0-rc.17'
+  VERSION='0.1.0rc18'
+  RELEASE='v0.1.0-rc.18'
   BASE_URL="https://github.com/ubion-dev/project-ai-learning-analytics-instance-setup/releases/download/${RELEASE}"
   mkdir -p "$HOME/ala-downloads/$VERSION"
   cd "$HOME/ala-downloads/$VERSION"
@@ -33,7 +33,7 @@ SSH로 서버에 접속한 일반 사용자 터미널에서 실행합니다. `cu
 )
 ```
 
-`0.1.0rc17`가 나오면 도구 설치 완료입니다. **서버 설정은 다음 단계에서 별도로 적용합니다.**
+`0.1.0rc18`가 나오면 도구 설치 완료입니다. **서버 설정은 다음 단계에서 별도로 적용합니다.**
 GitHub의 `Source code` 압축이나 `scripts/rocky-linux` 폴더만으로는 ala를 설치할 수 없습니다.
 서버가 GitHub에 접속할 수 없으면 [Mac에서 받아 SCP로 전달](docs/INSTALL.md#mac에서-받아-scp로-전달)할 수 있습니다.
 

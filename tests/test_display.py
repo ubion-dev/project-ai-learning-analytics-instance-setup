@@ -927,3 +927,149 @@ def test_greeter_session_is_not_a_logged_in_desktop(setup):
     assert results['display.login_screen'].state=='pending'
     assert 'greeter' in results['display.login_screen'].actual
     assert not any(argv[0]=='runuser' and argv[-1]=='check' for argv,_ in host.calls)
+
+
+# ALA-29: process titles are observations, not recovered shell argv.
+def _ala29_flat_process(paths, pid, *, arguments=None, suffix=b'\0', executable='/opt/google/chrome/chrome'):
+    process=paths.at('/proc')/str(pid)
+    if arguments is None:
+        arguments=(process/'cmdline').read_bytes().decode().rstrip('\0').split('\0')
+    (process/'cmdline').write_bytes((' '.join(['/opt/google/chrome/chrome',*arguments[1:]])).encode()+suffix)
+    link=process/'exe'
+    if link.is_symlink():link.unlink()
+    link.symlink_to(executable)
+    return process
+
+
+@pytest.mark.parametrize('suffix',[b'',b'\0',b'\0\0\0'])
+def test_ala29_flat_supervised_chrome_keeps_real_options_and_health(setup,suffix):
+    config,paths,host,home=user_fixture(setup)
+    _seed_supervised_display(config,paths,host)
+    _ala29_flat_process(paths,322,suffix=suffix)
+    before={str(path):(path.read_bytes(),path.stat().st_mtime_ns)
+            for path in paths.root.rglob('*') if path.is_file() and not path.is_symlink()}
+    result=display.user_action('check',config=config,home=home,host=host,paths=paths)
+    assert result['exit_code']==0
+    assert result['health']['state']=='healthy'
+    assert any(row['id']=='chrome.health' and row['state']=='ok' for row in result['results'])
+    assert all(row['state']=='ok' for row in result['results'] if row['id'].startswith('chrome.option.'))
+    assert before=={str(path):(path.read_bytes(),path.stat().st_mtime_ns)
+                   for path in paths.root.rglob('*') if path.is_file() and not path.is_symlink()}
+    assert not _started_commands(host)
+
+
+@pytest.mark.parametrize('condition',['duplicate','wrong','forbidden'])
+def test_ala29_flat_title_does_not_hide_definite_bad_switches(setup,condition):
+    config,paths,host,home=user_fixture(setup)
+    _seed_supervised_display(config,paths,host)
+    process=paths.at('/proc/322')
+    arguments=(process/'cmdline').read_bytes().decode().rstrip('\0').split('\0')
+    if condition=='duplicate':arguments.insert(-1,'--password-store=basic')
+    elif condition=='wrong':arguments=[arg if arg!='--password-store=basic' else '--password-store=gnome' for arg in arguments]
+    else:arguments.insert(-1,'--no-sandbox')
+    _ala29_flat_process(paths,322,arguments=arguments)
+    result=display.user_action('check',config=config,home=home,host=host,paths=paths)
+    assert result['exit_code']==1 and result['health']['state']=='unknown'
+    identifier='chrome.forbidden' if condition=='forbidden' else 'chrome.option.password-store'
+    assert any(row['id']==identifier and row['state']=='error' for row in result['results'])
+    assert not any(row['id']=='chrome.health' and row['state']=='ok' for row in result['results'])
+
+
+@pytest.mark.parametrize('condition',['exe_mismatch','exe_unreadable','malformed_utf8','quoted_profile','residual_after_nul'])
+def test_ala29_ambiguous_title_is_one_process_unknown_without_option_error_flood(setup,condition,monkeypatch):
+    config,paths,host,home=user_fixture(setup)
+    _seed_supervised_display(config,paths,host)
+    process=_ala29_flat_process(paths,322)
+    if condition=='exe_mismatch':
+        (process/'exe').unlink();(process/'exe').symlink_to('/usr/bin/python3')
+    elif condition=='exe_unreadable':
+        original=os.readlink
+        def denied(path,*args,**kwargs):
+            if Path(path)==process/'exe':raise PermissionError('synthetic denied')
+            return original(path,*args,**kwargs)
+        monkeypatch.setattr(os,'readlink',denied)
+    elif condition=='malformed_utf8':(process/'cmdline').write_bytes(b'\xff\0')
+    elif condition=='quoted_profile':
+        value=(process/'cmdline').read_bytes()
+        original=('--user-data-dir='+str(display._profile(home))).encode()
+        quoted=('--user-data-dir="'+str(display._profile(home))+'"').encode()
+        (process/'cmdline').write_bytes(value.replace(original,quoted))
+    else:(process/'cmdline').write_bytes((process/'cmdline').read_bytes()+b'--no-sandbox\0')
+    result=display.user_action('check',config=config,home=home,host=host,paths=paths)
+    assert result['exit_code']==1 and result['health']['state']=='unknown'
+    assert sum(row['id']=='chrome.process' and row['state']=='unknown' for row in result['results'])==1
+    assert not any(row['id'].startswith('chrome.option.') for row in result['results'])
+    assert not any(row['id']=='chrome.url' for row in result['results'])
+    assert not any(row['id']=='chrome.health' and row['state']=='ok' for row in result['results'])
+
+
+def test_ala29_flat_success_still_rechecks_process_identity_after_arguments(setup,monkeypatch):
+    from ala import display_health as health
+    config,paths,host,home=user_fixture(setup)
+    _seed_supervised_display(config,paths,host)
+    _ala29_flat_process(paths,322)
+    counts={}
+    original=health.process_identity
+    def changed(paths,pid):
+        counts[pid]=counts.get(pid,0)+1
+        return '456' if pid==322 and counts[pid]>1 else original(paths,pid)
+    monkeypatch.setattr(health,'process_identity',changed)
+    result=display.user_action('check',config=config,home=home,host=host,paths=paths)
+    assert result['exit_code']==1 and counts[322]>=2
+    assert result['health']['state']=='unknown'
+    assert not any(row['id']=='chrome.health' and row['state']=='ok' for row in result['results'])
+
+
+def test_ala29_foreign_flat_profile_is_blocked_without_touching_other_process_or_lock(setup):
+    config,paths,host,home=user_fixture(setup)
+    process=paths.at('/proc/999');process.mkdir(parents=True)
+    (process/'status').write_text(f'Uid:\t{os.getuid()}\n')
+    arguments=['/usr/bin/google-chrome-stable','--user-data-dir='+str(display._profile(home)),'--start-fullscreen']
+    _ala29_flat_process(paths,999,arguments=arguments)
+    profile=display._profile(home);profile.mkdir(parents=True)
+    lock=profile/'SingletonLock';lock.symlink_to('host-999')
+    result=display.user_action('start',config=config,home=home,host=host,paths=paths)
+    assert result['exit_code']==1 and result['state']=='blocked'
+    assert lock.is_symlink() and (process/'cmdline').exists()
+    assert not _started_commands(host)
+    assert not any(argv[0]=='pkill' or 'reset-failed' in argv for argv,_ in host.calls)
+
+
+def test_ala29_unrelated_ambiguous_title_is_not_claimed_as_display_profile_owner(setup):
+    config,paths,host,home=user_fixture(setup)
+    process=paths.at('/proc/999');process.mkdir(parents=True)
+    (process/'status').write_text(f'Uid:\t{os.getuid()}\n')
+    (process/'cmdline').write_bytes(b'not-chrome unrelated-title-with-spaces\0')
+    (process/'exe').symlink_to('/usr/bin/python3')
+    assert display._foreign_profile_pid(paths,display._profile(home)) is None
+
+
+@pytest.mark.parametrize('condition',['different_profile','profile_text_inside_url'])
+def test_ala29_foreign_detection_requires_an_exact_profile_switch_boundary(setup,condition):
+    config,paths,host,home=user_fixture(setup)
+    process=paths.at('/proc/999');process.mkdir(parents=True)
+    (process/'status').write_text(f'Uid:\t{os.getuid()}\n')
+    target=str(display._profile(home))
+    arguments=['/usr/bin/google-chrome-stable','--user-data-dir='+target+'-other']
+    if condition=='profile_text_inside_url':
+        arguments.append('https://example.com/?value=--user-data-dir='+target)
+    _ala29_flat_process(paths,999,arguments=arguments)
+    assert display._foreign_profile_pid(paths,display._profile(home)) is None
+
+
+def test_ala29_unsupported_foreign_title_with_display_profile_evidence_blocks_launch(setup):
+    config,paths,host,home=user_fixture(setup)
+    process=paths.at('/proc/999');process.mkdir(parents=True)
+    (process/'status').write_text(f'Uid:\t{os.getuid()}\n')
+    arguments=['/usr/bin/google-chrome-stable','--user-data-dir='+str(display._profile(home)),'--start-fullscreen']
+    _ala29_flat_process(paths,999,arguments=arguments)
+    (process/'cmdline').write_bytes((process/'cmdline').read_bytes()+b'unrecognized-residual\0')
+    try:
+        result=display.user_action('start',config=config,home=home,host=host,paths=paths)
+    except ValueError:
+        # A read-only ambiguity is safe if the privileged RPC rejects the action.
+        pass
+    else:
+        assert result['exit_code']==1 and result['state'] in {'unknown','blocked'}
+    assert not _started_commands(host)
+    assert not any(argv[0]=='pkill' or 'reset-failed' in argv for argv,_ in host.calls)

@@ -112,6 +112,10 @@ Chrome 반복 장애는 시작 제한에 걸릴 수 있습니다. 로그로 원�
 
 Chromium은 자기 PID를 별도 systemd scope로 옮길 수 있습니다. cgroup 문자열이 다르다는 이유만으로 무관 프로세스로 판단하지 않고 부팅·직접 PPid·UID·양쪽 시작 식별자·표시 프로필과 실제 인자를 대조합니다. 증거가 불명확하면 Chrome/health를 확인 불가로 표시하고 임의 프로세스를 제어하지 않습니다. [Chromium 구현](https://chromium.googlesource.com/chromium/src/+/refs/tags/138.0.7186.0/components/dbus/xdg/systemd.cc)
 
+Linux Chromium은 `/proc`에 원래 NUL 구분 인자 대신 옵션을 공백으로 합친 프로세스 제목을 표시할 수 있습니다. ala는 공식 stable 실행 파일(`/opt/google/chrome/chrome`)과 지원하는 제목 형식을 확인한 뒤 프로필·필수 옵션·금지 옵션을 검사합니다. 이 제목은 원래 인자의 경계를 보존하지 않으므로 공백·인용 부호 등으로 해석이 모호하면 옵션별 누락 오류 대신 프로세스 확인 불가로 남깁니다. [Chromium 제목 구현](https://raw.githubusercontent.com/chromium/chromium/main/base/process/set_process_title.cc)
+
+RC17 이하에서 이 형식 때문에 모든 옵션이 누락으로 표시된 경우 먼저 ala를 갱신하고 다시 검사하세요. 도구 갱신은 현재 Chrome을 재시작하지 않습니다. 실제 옵션 불일치나 감시 전환이 남은 경우에만 화면 관리에서 다음 조치를 선택합니다.
+
 무인 표시용 `--password-store=basic`은 키링을 쓰는 보관 방식보다 보호가 약합니다.
 표시 프로필에는 계정·암호·토큰을 입력하지 않습니다. 다른 Chrome 프로세스의 저장 방식은 변경하지 않습니다.
 

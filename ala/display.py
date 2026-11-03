@@ -556,6 +556,7 @@ def chrome_arguments(config, home, manager, *, supervised=False):
 
 
 def _foreign_profile_pid(paths, profile, allowed=()):
+    from .chrome_process import AmbiguousCommandLine, profile_evidence
     proc = paths.at('/proc')
     if not proc.is_dir():
         return None
@@ -566,12 +567,36 @@ def _foreign_profile_pid(paths, profile, allowed=()):
             uid_line = next(line for line in (process/'status').read_text().splitlines() if line.startswith('Uid:'))
             if int(uid_line.split()[1]) != os.getuid():
                 continue
-            args = (process/'cmdline').read_bytes().decode().rstrip('\0').split('\0')
-            if '--user-data-dir=' + str(profile) in args and not any(arg.startswith('--type=') for arg in args):
+            raw = (process/'cmdline').read_bytes()
+            if not profile_evidence(raw, profile):
+                continue
+            try:
+                args = _observe_chrome_process(process, ['--user-data-dir=' + str(profile)], raw=raw).arguments
+            except AmbiguousCommandLine:
+                # Only an exact requested-profile observation reaches here. Do
+                # not block every unrelated process with an unsupported title.
+                return int(process.name)
+            if not any(arg.startswith('--type=') for arg in args):
                 return int(process.name)
         except (OSError, ValueError, StopIteration):
             continue
     return None
+
+
+def _observe_chrome_process(process, expected_arguments, *, raw=None):
+    from .chrome_process import AmbiguousCommandLine, observe_chrome_cmdline
+    try:
+        raw = (process/'cmdline').read_bytes() if raw is None else raw
+    except OSError:
+        raise AmbiguousCommandLine('Chrome 인자 관측을 읽을 수 없습니다.') from None
+    executable = None
+    if len(raw.rstrip(b'\0').split(b'\0')) == 1:
+        try:
+            executable = (process/'exe').readlink()
+        except OSError:
+            raise AmbiguousCommandLine('실제 Chrome 실행 파일을 조회하지 못해 Linux 제목 형식을 확인할 수 없습니다.') from None
+    return observe_chrome_cmdline(raw, executable=executable,
+                                  expected_arguments=[arg for arg in expected_arguments if arg is not None])
 
 
 def _check_user(config, home, host, paths):
@@ -638,11 +663,11 @@ def _check_user(config, home, host, paths):
                 results.append(health_result)
                 return Report(results).to_dict() | {'state':health_state, 'service':state, 'health':health}
             process = paths.at('/proc') / str(browser_pid)
-            arguments = (process/'cmdline').read_bytes().decode().rstrip('\0').split('\0')
         else:
             results.append(_result('chrome.health','pending','사이트 지속 감시','기존 단독 Chrome 실행을 유지했습니다.',
                                    '화면 관리에서 명시적으로 다시 시작하거나 다음 GNOME 로그인에서 지속 감시로 전환하세요.'))
         required = chrome_arguments(config, home, _manager(host),supervised=supervised)[1:]
+        arguments = list(_observe_chrome_process(process, required).arguments)
         from .display_health import RECOVERY_URL
         launch_url = RECOVERY_URL if supervised else config.url
         for expected in required:
@@ -667,7 +692,8 @@ def _check_user(config, home, host, paths):
             from .display_health import verify_direct_child
             verify_direct_child(paths,int(pid),browser_pid,health)
     except (OSError, ValueError, StopIteration, IndexError, KeyError) as exc:
-        results.append(_result('chrome.process','unknown','프로세스 확인',str(exc)))
+        results.append(_result('chrome.process','unknown','프로세스 확인',str(exc),
+                               '화면 관리에서 상태·로그와 Chrome 실행 파일·인자 형식을 확인하세요.'))
     if supervised:
         if any(result.state in {'error','unknown','blocked'} for result in results):
             health = (health or {}) | {'state':'unknown','target_matches_config':False,
