@@ -389,3 +389,13 @@
 - 전체 로컬 627 passed + 54 subtests (155.33초). 후속 읽기 검토에서 고정 update unit의 이전 실행 부활, 정상 redirect 후 reload, 부분 서비스 조회 실패의 정상 오인을 재현·보완했다. 최종 관련 212 passed (5.16초), diff 검사 통과. JSON 파이프의 비대화형 sudo·실패 응답 즉시 표시·최신 기록 재조회도 회귀로 보강했다.
 - 실제 Mac Chrome 156 격리 headless/임시 프로필/로컬 합성 HTTP로 private pipe와 정상→503 안내→복구→주 문서404 안내, 검증된 redirect URL의 재로드, 정상 probe 중 navigation 0회를 확인했다. Linux 부팅/프로세스 ID는 해당 스모크에서만 대체했으므로 실제 Rocky GNOME 수용을 대신하지 않는다. 실제 화면·앱 내부 데이터·모니터 배치는 미검증이다.
 - 업데이트 완료/버전 구분 modal을 80×24와 120×36 합성 화면으로 렌더링해 확인했다. 실제 서버·기존 브라우저·게시 RC15는 변경하지 않았다. 다음 행동은 최종 공개 데이터 검사·CI·RC16 후보 검증이며 ALA-25 출력 배치는 장비 연결 확인이 남아 있다.
+
+## ALA-26/27 RC16 후보 완료
+
+- 최종 구현 b8c8c2af08b36be6c9e22e31fd6de5f9a1c47476. push CI 41564907910와 PR CI 41564912729 모두 성공. Python 3.12 전체 643 passed + 54 subtests (100.39초), 공개 이력·Bash·고정 의존성·후보 빌드·CLI smoke 통과.
+- 설치 묶음의 SHA-256·manifest 60개 파일을 검증했다. CI/로컬 고정 wheel 빌드/인증 없는 공개 다운로드 byte 일치를 확인했다. SHA-256: 37258a98d8cddadb8bc91d9996e48685ec7b701ac0fbaaa4fd1ed26eead1d4ab.
+- 업데이트/표시/TUI를 나눠 구현하고 서로 읽기 검토했다. 이전 작업 부활·정상 redirect 재로드·부분 서비스 조회 실패·비대화형 sudo·terminal 실패 응답 표시를 보완했으며 마지막 관련 212개 재검증과 실제 격리 headless 스모크를 통과했다.
+- PR #6 설명을 최종 완료 확인/감시 복구 범위와 검증으로 갱신했다: https://github.com/ubion-dev/project-ai-learning-analytics-instance-setup/pull/6
+- 시험판: https://github.com/ubion-dev/project-ai-learning-analytics-instance-setup/releases/tag/v0.1.0-rc.16
+- RC15 이하에서 이번 한 번 갱신은 구버전 동작에 따라 journal로 완료를 확인한 뒤 ala를 다시 실행한다. 이후 update는 완료 추적/status/TUI u 조회를 제공한다. 기존 실행 Chrome의 감시 전환은 다음 그래픽 로그인 또는 명시적 화면 재시작으로 적용한다.
+- 실제 Rocky GNOME·전체화면·앱 내부 데이터·재부팅 수용은 미완료다. 실제 서버·게시된 이전 후보는 변경하지 않았으며 ALA-25의 출력/외부 장비 구조 확인도 남아 있다. 정식 v0.1.0 완료로 표시하지 않는다.
