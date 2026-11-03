@@ -7,6 +7,7 @@ import pytest
 
 from ala.config import Config
 from ala.system import Command, Paths
+from ala.model import Report
 from ala import display
 
 
@@ -26,6 +27,9 @@ class FakeHost:
         self.locked='no'
         self.gdm_status=Command(0,'LoadState=loaded\nActiveState=active\nSubState=running\nResult=success\n')
         self.gdm_logs=Command(0,'')
+        self.real_user_check=False
+        self.process_on_start=None
+        self.show_failures={}
     def run(self, argv, **kwargs):
         self.calls.append((argv,kwargs))
         if argv[:2]==['getent','passwd']:
@@ -42,6 +46,9 @@ class FakeHost:
                 return Command(0,json.dumps({'exit_code':0,'state':'ok'}))
             if argv[-1]=='settings':
                 return Command(0,json.dumps({'exit_code':0,'settings':self.settings}))
+            if argv[-1]=='ensure-start' or (argv[-1]=='check' and self.real_user_check):
+                result=display.user_action(argv[-1],config=self.config,home=self.paths.at('/home/user'),host=self,paths=self.paths)
+                return Command(result.get('exit_code',0),json.dumps(result))
             return Command(0,json.dumps(self.script_result))
         if argv==['systemctl','is-enabled','gdm.service']:
             return Command(0,self.gdm_enabled+'\n')
@@ -52,12 +59,16 @@ class FakeHost:
         if argv[:3]==['systemctl','--user','show-environment']:
             return Command(0,self.manager)
         if argv[:3]==['systemctl','--user','show']:
+            if argv[3] in self.show_failures:
+                return self.show_failures[argv[3]]
             return Command(0,'\n'.join(f'{key}={value}' for key,value in self.states[argv[3]].items()))
         if argv[:3]==['systemctl','--user','stop']:
             self.states[argv[-1]]['ActiveState']='inactive'
             return Command(0)
         if argv[:3]==['systemctl','--user','start']:
             self.states[display.UNIT]['ActiveState']='active'
+            if self.process_on_start:
+                self.process_on_start()
             return Command(0)
         if argv[:2]==['gsettings','get']:
             name=argv[2]+'.'+argv[3]
@@ -452,6 +463,201 @@ def test_current_desktop_ignores_old_gdm_errors(setup):
     result={r.id:r for r in display.inspect_display(config,host,paths)}
     assert result['display.session'].state=='ok'
     assert 'display.gdm_diagnostics' not in result
+    assert not any(argv[0]=='journalctl' for argv,_ in host.calls)
+
+
+def _started_commands(host):
+    return [argv for argv,_ in host.calls if argv[:3]==['systemctl','--user','start']]
+
+
+def _seed_display_process(config,paths,host,pid='321'):
+    home=paths.at('/home/user')
+    process=paths.at('/proc')/pid
+    process.mkdir(parents=True,exist_ok=True)
+    (process/'status').write_text(f'Uid:\t{os.getuid()}\n')
+    arguments=display.chrome_arguments(config,home,{'WAYLAND_DISPLAY':'wayland-0'})
+    (process/'cmdline').write_bytes(('\0'.join(arguments)+'\0').encode())
+    host.states[display.UNIT].update(ActiveState='active',MainPID=pid)
+
+
+def test_registration_uses_stable_launcher_across_tool_releases(monkeypatch):
+    monkeypatch.setattr(display,'RELEASE',Path('/opt/ala/releases/0.1.0rc14'))
+    first=(display.unit_text(),display.desktop_text())
+    monkeypatch.setattr(display,'RELEASE',Path('/opt/ala/releases/0.1.0rc15'))
+    assert (display.unit_text(),display.desktop_text())==first
+    assert '"/usr/local/bin/ala" "_chrome-run"' in first[0]
+    assert '"/usr/local/bin/ala" "_session"' in first[1]
+    assert '/opt/ala/releases/' not in ''.join(first)
+
+
+def test_apply_migrates_only_managed_versioned_launchers_once(setup,monkeypatch):
+    config,paths,host=setup
+    display.apply_display(config,host,paths)
+    unit=paths.at('/etc/systemd/user/ala-chrome.service')
+    desktop=paths.at('/home/user/.config/autostart/ala-display.desktop')
+    legacy_entry='"/opt/ala/releases/0.1.0rc14/.venv/bin/python" "-I" "/opt/ala/releases/0.1.0rc14/entry.py"'
+    old_unit=display.unit_text().replace('"/usr/local/bin/ala"',legacy_entry)
+    old_desktop=display.desktop_text().replace('"/usr/local/bin/ala"',legacy_entry)
+    unit.write_text(old_unit);desktop.write_text(old_desktop)
+    assert {'chrome.unit','chrome.autostart'} <= {r.id for r in display.inspect_display(config,host,paths) if r.state=='change_required'}
+    display.apply_display(config,host,paths)
+    backups=[p.read_text() for p in paths.backups.iterdir() if p.is_file()]
+    assert old_unit in backups and old_desktop in backups
+    before={p:(p.read_bytes(),p.stat().st_mtime_ns) for p in (unit,desktop)}
+    backup_names={p.name for p in paths.backups.iterdir()}
+    monkeypatch.setattr(display,'RELEASE',Path('/opt/ala/releases/0.1.0rc15'))
+    result={r.id:r.state for r in display.inspect_display(config,host,paths)}
+    assert result['chrome.unit']==result['chrome.autostart']=='ok'
+    display.apply_display(config,host,paths)
+    assert {p:(p.read_bytes(),p.stat().st_mtime_ns) for p in (unit,desktop)}==before
+    assert {p.name for p in paths.backups.iterdir()}==backup_names
+    # Only display registrations use the stable launcher. User RPC stays pinned
+    # to the executing release, as do the install jobs managed elsewhere.
+    assert any('/opt/ala/releases/0.1.0rc15/entry.py' in argv for argv,_ in host.calls if argv[0]=='runuser')
+
+
+def test_apply_starts_inactive_chrome_once_and_rechecks_health(setup):
+    config,paths,host=setup
+    host.real_user_check=True
+    host.process_on_start=lambda:_seed_display_process(config,paths,host)
+    result=display.apply_display(config,host,paths)
+    assert _started_commands(host)==[['systemctl','--user','start','--no-block',display.UNIT]]
+    assert Report(result).exit_code==0
+    assert any(r.id=='chrome.option.start-fullscreen' and r.state=='ok' for r in result)
+    before={str(p):(p.read_bytes(),p.stat().st_mtime_ns) for p in paths.root.rglob('*') if p.is_file()}
+    display.apply_display(config,host,paths)
+    assert len(_started_commands(host))==1
+    assert before=={str(p):(p.read_bytes(),p.stat().st_mtime_ns) for p in paths.root.rglob('*') if p.is_file()}
+    assert not any('reset-failed' in argv or argv[:3]==['systemctl','--user','stop'] for argv,_ in host.calls)
+
+
+def test_apply_does_not_claim_async_start_is_running(setup):
+    config,paths,host=setup
+    host.real_user_check=True
+    # systemctl accepted the request but has no Chrome PID yet.
+    result=display.apply_display(config,host,paths)
+    assert len(_started_commands(host))==1
+    assert Report(result).exit_code==2
+    assert any(r.id=='chrome.runtime' and r.state=='pending' for r in result)
+
+
+@pytest.mark.parametrize('condition',['autostart_off','no_url','no_session','no_bus','locked','multiple_sessions'])
+def test_apply_prepares_registration_without_unsafe_current_start(setup,condition):
+    config,paths,host=setup
+    if condition=='autostart_off':config=replace(config,autostart=False)
+    if condition=='no_url':config=replace(config,url=None)
+    host.config=config
+    if condition=='no_session':host.sessions=0
+    if condition=='no_bus':host.runtime=False
+    if condition=='locked':host.locked='yes'
+    if condition=='multiple_sessions':host.sessions=2
+    result={r.id:r for r in display.apply_display(config,host,paths)}
+    assert result['display.configuration'].state=='ok'
+    assert result['chrome.unit'].state=='ok'
+    assert result['chrome.autostart'].state=='ok'
+    assert not _started_commands(host)
+    assert not any('reset-failed' in argv or argv[:3]==['systemctl','--user','stop'] for argv,_ in host.calls)
+    if condition=='no_bus':
+        assert result['chrome.runtime'].state=='pending'
+        assert 'GNOME' in result['chrome.runtime'].next_action
+    if condition=='no_url':assert result['chrome.url'].state=='pending'
+    if condition=='no_session':assert result['display.session'].state=='pending'
+    if condition=='locked':assert result['display.session_lock'].state=='pending'
+    if condition=='multiple_sessions':assert result['display.session'].state=='blocked'
+
+
+def test_apply_waits_for_missing_manager_environment_without_failure(setup):
+    config,paths,host=setup
+    host.manager='XDG_CURRENT_DESKTOP=GNOME\n'
+    host.real_user_check=True
+    result={r.id:r for r in display.apply_display(config,host,paths)}
+    assert result['chrome.autostart'].state=='ok'
+    assert result['chrome.runtime'].state=='pending'
+    assert '화면 환경' in result['chrome.runtime'].actual
+    assert 'GNOME' in result['chrome.runtime'].next_action
+    assert not _started_commands(host)
+    assert not any(r.state in {'blocked','error'} for r in result.values())
+
+
+def test_apply_preserves_legacy_running_service_without_migration_restart(setup):
+    config,paths,host=setup
+    host.states[display.LEGACY]['ActiveState']='active'
+    host.real_user_check=True
+    result=display.apply_display(config,host,paths)
+    assert host.states[display.LEGACY]['ActiveState']=='active'
+    assert host.states[display.UNIT]['ActiveState']=='inactive'
+    assert any(r.id=='chrome.legacy' and r.state=='pending' for r in result)
+    assert not _started_commands(host)
+    assert not any('reset-failed' in argv or argv[:3]==['systemctl','--user','stop'] for argv,_ in host.calls)
+
+
+def test_apply_preserves_failed_start_limit_and_failure_reason(setup):
+    config,paths,host=setup
+    host.states[display.UNIT].update(ActiveState='failed',Result='start-limit-hit')
+    host.real_user_check=True
+    result=display.apply_display(config,host,paths)
+    assert host.states[display.UNIT]['ActiveState']=='failed'
+    assert any(r.id=='chrome.runtime.ensure_start' and r.state=='error' and 'start-limit-hit' in r.actual for r in result)
+    assert Report(result).exit_code==1
+    assert not _started_commands(host)
+    assert not any('reset-failed' in argv or argv[:3]==['systemctl','--user','stop'] for argv,_ in host.calls)
+
+
+@pytest.mark.parametrize('unit',[display.UNIT,display.LEGACY])
+@pytest.mark.parametrize('response',[Command(124,'','timeout'),Command(0),
+                                     Command(1,'ActiveState=inactive\nLoadState=loaded\n','denied')])
+def test_ensure_start_does_not_infer_inactive_from_failed_service_query(setup,unit,response):
+    config,paths,host=setup
+    host.show_failures[unit]=response
+    host.real_user_check=True
+    result=display.apply_display(config,host,paths)
+    assert any(r.id=='chrome.runtime.ensure_start' and r.state=='unknown' for r in result)
+    assert Report(result).exit_code==1
+    assert not _started_commands(host)
+    assert not any('reset-failed' in argv or argv[:3]==['systemctl','--user','stop'] for argv,_ in host.calls)
+
+
+def test_structured_absence_of_legacy_unit_allows_new_start(setup):
+    config,paths,host=setup
+    host.show_failures[display.LEGACY]=Command(1,'ActiveState=inactive\nLoadState=not-found\nMainPID=0\n','unit not found')
+    result=display.apply_display(config,host,paths)
+    assert len(_started_commands(host))==1
+    assert not any(r.id=='chrome.runtime.ensure_start' and r.state=='unknown' for r in result)
+
+
+def test_ensure_start_rejects_partial_active_response_before_kept_branch(setup):
+    config,paths,host=setup
+    host.show_failures[display.UNIT]=Command(1,'ActiveState=active\nLoadState=loaded\nMainPID=0\n','denied')
+    value=display.user_action('ensure-start',config=config,home=paths.at('/home/user'),host=host,paths=paths)
+    assert value['state']=='unknown' and value['exit_code']==1
+    assert not _started_commands(host)
+    assert not any('reset-failed' in argv or argv[:3]==['systemctl','--user','stop'] for argv,_ in host.calls)
+
+
+def test_apply_preserves_foreign_profile_and_reports_start_blocker(setup):
+    config,paths,host=setup
+    _seed_display_process(config,paths,host,'999')
+    host.states[display.UNIT].update(ActiveState='inactive',MainPID='0')
+    profile=display._profile(paths.at('/home/user'))
+    profile.mkdir(parents=True)
+    lock=profile/'SingletonLock';lock.symlink_to('host-999')
+    result=display.apply_display(config,host,paths)
+    assert any(r.id=='chrome.runtime.ensure_start' and r.state=='blocked' and '999' in r.actual for r in result)
+    assert lock.is_symlink()
+    assert not _started_commands(host)
+    assert not any(argv[0]=='pkill' or 'reset-failed' in argv or argv[:3]==['systemctl','--user','stop'] for argv,_ in host.calls)
+
+
+def test_inspection_never_runs_ensure_start_or_changes_registration(setup):
+    config,paths,host=setup
+    display.apply_display(config,host,paths)
+    host.calls=[]
+    host.states[display.UNIT]['ActiveState']='inactive'
+    before={str(p):(p.read_bytes(),p.stat().st_mtime_ns) for p in paths.root.rglob('*') if p.is_file()}
+    display.inspect_display(config,host,paths)
+    assert before=={str(p):(p.read_bytes(),p.stat().st_mtime_ns) for p in paths.root.rglob('*') if p.is_file()}
+    assert not any(argv[0]=='runuser' and argv[-1] in {'prepare','ensure-start'} for argv,_ in host.calls)
+    assert not _started_commands(host)
     assert not any(argv[0]=='journalctl' for argv,_ in host.calls)
 
 

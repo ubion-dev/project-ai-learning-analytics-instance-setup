@@ -501,7 +501,7 @@ class SimpleApp(App[None]):
                   'completed': ('✓ 정상·완료', 'green'), 'running': ('● 진행 중', 'bold cyan'),
                   'pending': ('◷ 적용 대기', 'yellow'), 'blocked': ('! 조치 필요', 'bold red'),
                   'error': ('! 조치 필요', 'bold red'), 'unknown': ('? 확인 필요', 'yellow'),
-                  'change_required': ('설정 필요', 'yellow'), 'waiting': ('… 실행 대기', 'dim'),
+                  'change_required': ('자동 설정 대상', 'yellow'), 'waiting': ('… 실행 대기', 'dim'),
                   'not_run': ('— 미실행', 'dim'), 'not_applicable': ('— 해당 없음', 'dim')}
         for row in parents:
             label, style = groups.get(row['state'], (STATE_LABELS.get(row['state'], row['state']), 'red'))
@@ -557,7 +557,10 @@ class SimpleApp(App[None]):
         if not 0 <= index < len(self._progress_rows):
             return
         row = self._progress_rows[index]
-        detail = row['label'] + '\n' + row.get('detail', '')
+        label = row['label'].lstrip(' ▸▾├└─')
+        detail = row.get('detail', '')
+        if not detail.startswith(label + '\n'):
+            detail = label + '\n' + detail
         if not self._has_checked and self._setup_report is None and self._display_job is None:
             detail = row['label'] + '\n환경 상태를 검사하고 있습니다.\n검사가 끝나면 현재 값과 필요한 조치를 표시합니다.'
         output = self.query_one('#setup-output', TextArea)
@@ -583,7 +586,7 @@ class SimpleApp(App[None]):
         for index, (name, items) in enumerate(groups.items()):
             state = max((row.get('state', 'unknown') for row in items), key=lambda value: PRIORITY.get(value, 5))
             style = 'green' if state == 'ok' else 'dim' if state == 'not_applicable' else 'yellow' if state in {'change_required', 'pending', 'unknown'} else 'red'
-            label = '조회 확인 필요' if state == 'unknown' else LABELS.get(state, '확인 불가')
+            label = '조회 확인 필요' if state == 'unknown' else '자동 설정 대상' if state == 'change_required' else LABELS.get(state, '확인 불가')
             table.add_row(Text(name, style='bold'), Text(label, style=style), key=str(index))
         if rows:
             issues = sum(row.get('state') in {'error', 'blocked', 'unknown'} for row in rows)

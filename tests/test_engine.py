@@ -137,6 +137,16 @@ class EngineTests(unittest.TestCase):
         for name, value in (("vendor", "0x10de"), ("class", "0x030000"), ("device", "0x2684"), ("subsystem_vendor", "0x10de"), ("subsystem_device", "0x0001")):
             self.write("/sys/bus/pci/devices/0000:01:00.0/" + name, value)
 
+    def track_display_apply(self, state="ok"):
+        applied = []
+        def display(apply=False):
+            if apply:
+                applied.append(True)
+                return [CheckResult("chrome.apply_only", state, actual="synthetic native result")]
+            return [CheckResult("chrome.integration", "ok")]
+        patch.object(self.engine, "_extra_display", side_effect=display).start()
+        return applied
+
     def test_complete_state_and_plan_do_not_mutate_files_or_execute(self):
         before = {p: (p.read_bytes(), p.stat().st_mtime_ns) for p in self.paths.root.rglob("*") if p.is_file()}
         report = self.engine.inspect()
@@ -237,6 +247,130 @@ class EngineTests(unittest.TestCase):
         report = self.engine.apply()
         self.assertEqual(self.by_id(report, "docker.conflict.podman").state, "blocked")
         self.assertEqual(self.host.executed, [])
+
+    def test_display_registration_precedes_docker_and_gpu_once_per_apply(self):
+        applied = self.track_display_apply()
+        for attempt in range(2):
+            stages = []
+            report = self.engine.apply(lambda *args: stages.append(args))
+            self.assertEqual(report.exit_code, 0)
+            self.assertEqual(applied, [True] * (attempt + 1))
+            self.assertEqual(stages.count(("chrome", "started")), 1)
+            self.assertEqual(stages.count(("chrome", "completed")), 1)
+            self.assertLess(stages.index(("ssh", "kept")), stages.index(("display", "kept")))
+            self.assertLess(stages.index(("display", "kept")), stages.index(("chrome", "started")))
+            self.assertLess(stages.index(("chrome", "completed")), stages.index(("docker", "kept")))
+            self.assertLess(stages.index(("chrome", "completed")), stages.index(("gpu", "kept")))
+            self.assertEqual(sum(r.id == "chrome.apply_only" for r in report.results), 1)
+        self.assertEqual(self.host.executed, [])
+
+    def test_docker_blocker_keeps_earlier_chrome_registration_result(self):
+        applied = self.track_display_apply()
+        self.host.packages.add("podman")
+        stages = []
+        report = self.engine.apply(lambda *args: stages.append(args))
+        self.assertEqual(applied, [True])
+        self.assertEqual(report.exit_code, 1)
+        self.assertEqual(self.by_id(report, "docker.conflict.podman").state, "blocked")
+        self.assertEqual(self.by_id(report, "chrome.apply_only").state, "ok")
+        self.assertLess(stages.index(("chrome", "completed")), stages.index(("docker", "blocked")))
+        self.assertEqual(self.host.executed, [])
+
+    def test_gpu_blocker_keeps_earlier_chrome_registration_result(self):
+        applied = self.track_display_apply()
+        stages = []
+        with patch.object(self.engine, "_gpu", return_value=[CheckResult("gpu.driver", "blocked")]):
+            report = self.engine.apply(lambda *args: stages.append(args))
+        self.assertEqual(applied, [True])
+        self.assertEqual(report.exit_code, 1)
+        self.assertEqual(self.by_id(report, "gpu.driver").state, "blocked")
+        self.assertEqual(self.by_id(report, "chrome.apply_only").state, "ok")
+        self.assertLess(stages.index(("chrome", "completed")), stages.index(("gpu", "blocked")))
+        self.assertEqual(self.host.executed, [])
+
+    def test_chrome_native_error_is_preserved_while_later_stages_continue(self):
+        applied = self.track_display_apply("error")
+        stages = []
+        report = self.engine.apply(lambda *args: stages.append(args))
+        self.assertEqual(applied, [True])
+        self.assertEqual(report.exit_code, 1)
+        self.assertEqual(self.by_id(report, "chrome.apply_only").state, "error")
+        self.assertIn(("chrome", "failed"), stages)
+        self.assertIn(("docker", "kept"), stages)
+        self.assertIn(("gpu", "kept"), stages)
+
+    def test_chrome_event_distinguishes_blockers_from_application_wait(self):
+        for state, event, code in (("blocked", "blocked", 1), ("unknown", "blocked", 1),
+                                   ("change_required", "blocked", 1), ("pending", "pending", 2),
+                                   ("not_applicable", "completed", 0)):
+            with self.subTest(state=state):
+                with patch.object(self.engine, "_extra_display", side_effect=lambda apply=False: [
+                        CheckResult("chrome.apply_only", state)] if apply else [CheckResult("chrome.integration", "ok")]):
+                    stages = []
+                    report = self.engine.apply(lambda *args: stages.append(args))
+                self.assertEqual(report.exit_code, code)
+                self.assertIn(("chrome", event), stages)
+                self.assertEqual(self.by_id(report, "chrome.apply_only").state, state)
+                self.assertIn(("docker", "kept"), stages)
+                self.assertIn(("gpu", "kept"), stages)
+
+    def test_chrome_error_event_has_priority_over_blocked_and_pending(self):
+        outcome = [CheckResult("chrome.apply.wait", "pending"), CheckResult("chrome.apply.block", "blocked"),
+                   CheckResult("chrome.apply.error", "error")]
+        with patch.object(self.engine, "_extra_display", side_effect=lambda apply=False: outcome if apply else [CheckResult("chrome.integration", "ok")]):
+            stages = []
+            report = self.engine.apply(lambda *args: stages.append(args))
+        self.assertEqual(report.exit_code, 1)
+        self.assertIn(("chrome", "failed"), stages)
+        self.assertNotIn(("chrome", "blocked"), stages)
+        self.assertNotIn(("chrome", "pending"), stages)
+
+    def test_chrome_result_survives_later_module_failure_and_unresolved_install(self):
+        applied = self.track_display_apply("pending")
+        self.host.packages.remove("docker-ce")
+        for code in (7, 0):
+            with self.subTest(module_code=code):
+                self.host.execution_code = code
+                report = self.engine.apply()
+                self.assertEqual(report.exit_code, 1)
+                self.assertEqual(self.by_id(report, "chrome.apply_only").state, "pending")
+                self.assertEqual(self.by_id(report, "docker.package.docker-ce").state, "change_required")
+                if code:
+                    self.assertEqual(self.by_id(report, "docker.apply").actual, code)
+        self.assertEqual(applied, [True, True])
+        self.assertEqual([Path(argv[1]).name for argv in self.host.executed], ["setup-docker.sh"] * 2)
+
+    def test_chrome_result_survives_gpu_container_install_failure(self):
+        applied = self.track_display_apply("error")
+        self.gpu()
+        self.host.replies[("nvidia-smi",)] = Command(0, "GPU ready")
+        self.host.replies[("docker", "info", "--format", "{{json .Runtimes}}" )] = Command(0, '{"runc":{}}')
+        def execute(argv):
+            self.host.execution_code = 6 if Path(argv[1]).name == "setup-nvidia-container.sh" else 0
+        self.host.on_execute = execute
+        report = self.engine.apply()
+        self.assertEqual(applied, [True])
+        self.assertEqual(report.exit_code, 1)
+        self.assertEqual(self.by_id(report, "chrome.apply_only").state, "error")
+        self.assertEqual(self.by_id(report, "gpu_container.apply").actual, 6)
+
+    def test_pre_display_blockers_still_prevent_native_registration(self):
+        applied = self.track_display_apply()
+        for stage in ("base", "updates", "shell", "ssh", "display_policy"):
+            with self.subTest(stage=stage):
+                with patch.object(self.engine, "_" + stage, return_value=[CheckResult(stage + ".probe", "blocked")]):
+                    report = self.engine.apply()
+                self.assertEqual(report.exit_code, 1)
+                self.assertEqual(applied, [])
+                self.assertEqual(self.host.executed, [])
+
+    def test_display_policy_pending_still_prepares_chrome(self):
+        applied = self.track_display_apply()
+        with patch.object(self.engine, "_display_policy", return_value=[CheckResult("display.policy", "pending")]):
+            report = self.engine.apply()
+        self.assertEqual(applied, [True])
+        self.assertEqual(report.exit_code, 2)
+        self.assertEqual(self.by_id(report, "chrome.apply_only").state, "ok")
 
     def test_invalid_docker_json_is_not_overwritten(self):
         path = self.write("/etc/docker/daemon.json", "[]")

@@ -3,7 +3,7 @@
 Rocky Linux 서버의 기본 환경·Docker·GPU 드라이버·Chrome DID 화면을 설치하고 검사하는 CLI/TUI입니다.
 
 - 대상: **Rocky Linux 10 x86_64 + GNOME/GDM + 기존 sudo 사용자**
-- 현재 배포 후보: **0.1.0rc14**. 실제 장비의 설치·GPU·화면·재부팅 수용은 아직 완료하지 않았습니다.
+- 현재 배포 후보: **0.1.0rc15**. 실제 장비의 설치·GPU·화면·재부팅 수용은 아직 완료하지 않았습니다.
 - **공개 릴리스에서 바로 다운로드합니다. Git·GitHub 로그인·토큰·Mac 파일 전송은 필요 없습니다.**
 
 ## 1. 설치 — Rocky 터미널
@@ -14,8 +14,8 @@ SSH로 서버에 접속한 일반 사용자 터미널에서 실행합니다. `cu
 ```bash
 (
   set -e
-  VERSION='0.1.0rc14'
-  RELEASE='v0.1.0-rc.14'
+  VERSION='0.1.0rc15'
+  RELEASE='v0.1.0-rc.15'
   BASE_URL="https://github.com/ubion-dev/project-ai-learning-analytics-instance-setup/releases/download/${RELEASE}"
   mkdir -p "$HOME/ala-downloads/$VERSION"
   cd "$HOME/ala-downloads/$VERSION"
@@ -33,7 +33,7 @@ SSH로 서버에 접속한 일반 사용자 터미널에서 실행합니다. `cu
 )
 ```
 
-`0.1.0rc14`가 나오면 도구 설치 완료입니다. **서버 설정은 다음 단계에서 별도로 적용합니다.**
+`0.1.0rc15`가 나오면 도구 설치 완료입니다. **서버 설정은 다음 단계에서 별도로 적용합니다.**
 GitHub의 `Source code` 압축이나 `scripts/rocky-linux` 폴더만으로는 ala를 설치할 수 없습니다.
 서버가 GitHub에 접속할 수 없으면 [Mac에서 받아 SCP로 전달](docs/INSTALL.md#mac에서-받아-scp로-전달)할 수 있습니다.
 
@@ -56,6 +56,8 @@ ala
 **상태 확인**은 기능별로 의도한 설정과 실제 상태를 비교하고 문제의 원인·다음 조치를 보여줍니다. Tab·화살표·Enter로 조작하고 q로 종료합니다. 조회만으로 설정을 바꾸지 않습니다.
 
 기본 환경은 패키지·Chrome, 시간 동기화, Bash, SSH·방화벽, Docker·Compose, GPU 자동 감지, 자동 업데이트 차단, 자동 로그인·화면 절전 방지를 포함합니다. DID 주소가 없으면 바탕화면부터 준비합니다. Chrome과 그래픽 작업은 일반 사용자로 실행합니다.
+
+Chrome 자동 시작 등록은 간편 설정이 처리합니다. URL과 활성 화면 세션이 준비돼 있으면 중지된 표시용 Chrome의 시작도 요청합니다. 재로그인·사이트 응답 등 외부 조건이 남으면 상세에 원인과 다음 조치를 표시합니다. `자동 설정 대상`은 사용자가 파일을 직접 고치라는 뜻이 아닙니다.
 
 TUI 대신 명령으로 바로 실행할 수도 있습니다.
 

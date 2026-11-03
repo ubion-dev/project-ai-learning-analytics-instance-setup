@@ -148,6 +148,20 @@ def test_display_masks_and_hardware_firmware_match_real_inspector_ids():
     assert rows['modules']['state'] == 'blocked'
 
 
+def test_chrome_runtime_pending_reason_precedes_healthy_session_details():
+    report = {'results': [
+        {'id': 'display.session', 'state': 'ok', 'actual': 'active'},
+        {'id': 'chrome.environment', 'state': 'ok', 'actual': 'ready'},
+        {'id': 'chrome.runtime', 'state': 'pending', 'actual': '화면 환경 전달 대기',
+         'next_action': '다음 그래픽 로그인 후 자동 시작'},
+    ]}
+    rows, _ = children('chrome', report=report)
+    detail = rows['session']['detail']
+    assert rows['session']['state'] == 'pending'
+    assert detail.index('현재: 화면 환경 전달 대기') < detail.index('display.session')
+    assert detail.index('다음: 다음 그래픽 로그인 후 자동 시작') < detail.index('chrome.runtime')
+
+
 def test_native_pending_stage_without_substep_signals_keeps_verified_current_state():
     job = {'state': 'pending', 'stages': [{'id': 'chrome', 'state': 'started'},
                                         {'id': 'chrome', 'state': 'pending'}],

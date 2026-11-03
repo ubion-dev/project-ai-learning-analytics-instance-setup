@@ -125,6 +125,32 @@ def test_missing_substep_record_is_neutral_but_actual_unknown_check_needs_attent
     asyncio.run(scenario())
 
 
+def test_chrome_registration_is_an_automatic_target_with_one_clear_detail_heading():
+    async def scenario():
+        service = FakeService()
+        service.config.update(autostart=True, url='https://example.com')
+        service.report = Report([
+            CheckResult('chrome.unit', 'ok', actual='일치'),
+            CheckResult('chrome.autostart', 'change_required', actual='등록 없음',
+                        next_action='간편 설정 실행으로 자동 등록'),
+        ]).to_dict()
+        app = SimpleApp(service=service)
+        async with app.run_test(size=(80, 24)) as pilot:
+            await pilot.pause()
+            table = app.query_one('#setup-table', DataTable)
+            table.focus()
+            table.move_cursor(row=next(i for i, row in enumerate(app._progress_rows) if row['id'] == 'chrome'))
+            await pilot.press('enter')
+            table.move_cursor(row=next(i for i, row in enumerate(app._progress_rows) if row['id'] == 'chrome.service'))
+            await pilot.pause()
+            assert table.get_cell('chrome.service', 'state').plain == '자동 설정 대상'
+            detail = app.query_one('#setup-output', TextArea).text
+            assert detail.count('Chrome 자동 시작 등록') == 1
+            assert detail.index('간편 설정 실행으로 자동 등록') < detail.index('chrome.unit')
+            assert not any(action == 'submit' for action, _ in service.calls)
+    asyncio.run(scenario())
+
+
 def test_fresh_status_clears_the_old_job_panel_color():
     async def scenario():
         service = FakeService()

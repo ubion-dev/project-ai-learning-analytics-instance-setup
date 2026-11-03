@@ -17,7 +17,7 @@ STAGES = (
 STATE_LABELS = {
     'ok': '✓ 현재 정상', 'kept': '✓ 정상 유지', 'completed': '✓ 완료',
     'running': '● 진행 중', 'waiting': '… 실행 대기', 'not_run': '— 미실행',
-    'change_required': '설정 필요', 'pending': '◷ 적용 대기',
+    'change_required': '자동 설정 대상', 'pending': '◷ 적용 대기',
     'blocked': '! 조치 필요', 'error': '× 실패', 'unknown': '? 확인 불가',
     'interrupted': '! 중단됨', 'not_applicable': '— 해당 없음',
 }

@@ -520,9 +520,18 @@ class Engine:
         return self.inspect(workers=workers)
 
     def apply(self, on_stage=None, on_substep=None) -> Report:
+        extra = []
+
         def event(stage, state):
             if on_stage:
                 on_stage(stage, state)
+
+        def finish(additional=()):
+            report = self.inspect()
+            known = {r.id for r in report.results}
+            report.results.extend(r for r in extra if r.id not in known)
+            report.results.extend(additional)
+            return report
 
         def run_module(stage, command):
             from .substeps import step_ids
@@ -557,10 +566,10 @@ class Engine:
             ("hardware", self._hardware, None, []),
             ("shell", self._shell, "setup-bash.sh", ["--user", self.config.user] + (["--with-root"] if self.config.root_bash else [])),
             ("ssh", self._ssh, "setup-ssh.sh", ["--ssh-zone", self.config.ssh_zone] if self.config.ssh_zone else []),
+            ("display", self._display_policy, "setup-display.sh", []),
             ("docker", self._docker, "setup-docker.sh", []),
             ("gpu", self._gpu, "setup-nvidia.sh", ["--auto"]),
             ("dev_tools", self._dev_tools, "setup-dev-tools.sh", []),
-            ("display", self._display_policy, "setup-display.sh", []),
         ]
         for stage, inspect, script, args in specs:
             current = inspect()
@@ -573,7 +582,7 @@ class Engine:
                     # Docker, or display policy changes dependent on that device.
                     # The final report still retains the blocked/unknown checks.
                     continue
-                return Report(self.inspect().results)
+                return finish()
             changed = any(r.state == "change_required" for r in current)
             if changed:
                 event(stage, "started")
@@ -595,7 +604,7 @@ class Engine:
                     event(stage, "pending")
                 elif code != 0:
                     event(stage, "failed")
-                    return Report(self.inspect().results + [self._result(stage + ".apply", "error", "설치 모듈 성공", code, "단계 로그 확인 후 재실행")])
+                    return finish([self._result(stage + ".apply", "error", "설치 모듈 성공", code, "단계 로그 확인 후 재실행")])
                 else:
                     event(stage, "completed")
             else:
@@ -606,17 +615,25 @@ class Engine:
                     event("gpu_container", "started")
                     code = run_module("gpu_container", ["bash", str(SCRIPTS / "setup-nvidia-container.sh")])
                     if code != 0:
-                        return Report(self.inspect().results + [self._result("gpu_container.apply", "error", 0, code)])
+                        return finish([self._result("gpu_container.apply", "error", 0, code)])
                     event("gpu_container", "completed")
                     after = inspect()
             if any(r.state in {"error", "blocked", "unknown", "change_required"} for r in after):
                 if stage == "hardware" and not any(r.state == "error" for r in after):
                     continue
-                return Report(self.inspect().results)
-        event("chrome", "started")
-        extra = self._extra_display(apply=True)
-        event("chrome", "completed" if all(r.state in {"ok", "not_applicable"} for r in extra) else "pending")
-        report = self.inspect()
-        known = {r.id for r in report.results}
-        report.results.extend(r for r in extra if r.id not in known)
-        return report
+                return finish()
+            if stage == "display":
+                # Registration needs the display prerequisites, not Docker/GPU.
+                # Keep it in this same serial worker and before unrelated blockers.
+                event("chrome", "started")
+                extra = self._extra_display(apply=True)
+                if any(r.state == "error" for r in extra):
+                    state = "failed"
+                elif any(r.state in {"blocked", "unknown", "change_required"} for r in extra):
+                    state = "blocked"
+                elif any(r.state == "pending" for r in extra):
+                    state = "pending"
+                else:
+                    state = "completed"
+                event("chrome", state)
+        return finish()

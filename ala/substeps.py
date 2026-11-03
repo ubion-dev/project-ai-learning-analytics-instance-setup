@@ -193,6 +193,8 @@ def child_rows(stage, *, report=None, job=None, parent_state='unknown'):
         if active and job.get('query_warning') and event_state == 'started':
             state = 'unknown'
         details = [entry['label']]
+        if terminal and parent_state == 'not_run' and actual == 'change_required':
+            details.append('이번 작업에서 이 단계는 실행되지 않았습니다. 선행 단계의 결과를 확인한 뒤 간편 설정을 다시 실행하세요.')
         if event:
             details.append('세부 작업 기록: ' + _EVENT_LABELS.get(event_state, '확인 불가'))
         elif active:
@@ -201,10 +203,14 @@ def child_rows(stage, *, report=None, job=None, parent_state='unknown'):
             details.append('이 세부 항목의 개별 검사 결과가 없습니다.')
         if active and items:
             details.append('아래 값은 실행 전 조회 결과입니다.')
-        for item in items:
-            details.append(str(item.get('id', '')) + ': ' + _value(item.get('actual')))
+        ordered = sorted(items, key=lambda item: _PRIORITY.get(item.get('state'), 5), reverse=True)
+        for index, item in enumerate(ordered):
+            if index:
+                details.append('')
+            details.append('현재: ' + _value(item.get('actual')))
             if item.get('next_action'):
                 details.append('다음: ' + _value(item['next_action']))
+            details.append('검사 항목: ' + str(item.get('id', '')))
         rows.append({'id': stage + '.' + entry['id'], 'label': entry['label'],
                      'state': state, 'evidence': evidence, 'detail': '\n'.join(details)})
         if current_id == entry['id'] and state == 'running':
