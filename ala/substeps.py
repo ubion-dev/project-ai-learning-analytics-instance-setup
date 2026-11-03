@@ -207,8 +207,12 @@ def child_rows(stage, *, report=None, job=None, parent_state='unknown'):
         for index, item in enumerate(ordered):
             if index:
                 details.append('')
-            details.append('현재: ' + _value(item.get('actual')))
-            if item.get('next_action'):
+            actual_value = _value(item.get('actual'))
+            long_value = len(actual_value) > 160 or '\n' in actual_value
+            if long_value and item.get('next_action'):
+                details.append('다음: ' + _value(item['next_action']))
+            details.append('현재: ' + actual_value)
+            if not long_value and item.get('next_action'):
                 details.append('다음: ' + _value(item['next_action']))
             details.append('검사 항목: ' + str(item.get('id', '')))
         rows.append({'id': stage + '.' + entry['id'], 'label': entry['label'],

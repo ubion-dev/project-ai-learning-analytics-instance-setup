@@ -13,6 +13,17 @@ def children(stage, **kwargs):
     return {row['id'].split('.', 1)[1]: row for row in rows}, current
 
 
+def test_long_runtime_evidence_does_not_push_its_next_action_out_of_view():
+    actual = {'runc': {'status': 'synthetic-runtime-metadata-' * 20}}
+    report = {'results': [{'id':'gpu.runtime.live', 'state':'pending', 'actual':actual,
+                           'next_action':'유지보수 시간에 Docker 재시작 후 검사'}]}
+    rows, _ = children('gpu_container', report=report)
+    detail = next(row['detail'] for row in rows.values() if 'gpu.runtime.live' in row['detail'])
+    assert detail.index('다음:') < detail.index('현재:')
+    assert 'synthetic-runtime-metadata-' * 20 in detail
+    assert report['results'][0]['actual'] == actual
+
+
 def test_catalog_is_known_safe_and_every_install_stage_has_details():
     assert len(STAGE_TASKS) == 11
     for parent, tasks in STAGE_TASKS.items():
