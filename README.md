@@ -3,7 +3,7 @@
 Rocky Linux 서버의 기본 환경·Docker·GPU 드라이버·Chrome DID 화면을 설치하고 검사하는 CLI/TUI입니다.
 
 - 대상: **Rocky Linux 10 x86_64 + GNOME/GDM + 기존 sudo 사용자**
-- 현재 배포 후보: **0.1.0rc16**. 실제 장비의 설치·GPU·화면·재부팅 수용은 아직 완료하지 않았습니다.
+- 현재 배포 후보: **0.1.0rc17**. 실제 장비의 설치·GPU·화면·재부팅 수용은 아직 완료하지 않았습니다.
 - **공개 릴리스에서 바로 다운로드합니다. Git·GitHub 로그인·토큰·Mac 파일 전송은 필요 없습니다.**
 
 ## 1. 설치 — Rocky 터미널
@@ -14,8 +14,8 @@ SSH로 서버에 접속한 일반 사용자 터미널에서 실행합니다. `cu
 ```bash
 (
   set -e
-  VERSION='0.1.0rc16'
-  RELEASE='v0.1.0-rc.16'
+  VERSION='0.1.0rc17'
+  RELEASE='v0.1.0-rc.17'
   BASE_URL="https://github.com/ubion-dev/project-ai-learning-analytics-instance-setup/releases/download/${RELEASE}"
   mkdir -p "$HOME/ala-downloads/$VERSION"
   cd "$HOME/ala-downloads/$VERSION"
@@ -33,7 +33,7 @@ SSH로 서버에 접속한 일반 사용자 터미널에서 실행합니다. `cu
 )
 ```
 
-`0.1.0rc16`가 나오면 도구 설치 완료입니다. **서버 설정은 다음 단계에서 별도로 적용합니다.**
+`0.1.0rc17`가 나오면 도구 설치 완료입니다. **서버 설정은 다음 단계에서 별도로 적용합니다.**
 GitHub의 `Source code` 압축이나 `scripts/rocky-linux` 폴더만으로는 ala를 설치할 수 없습니다.
 서버가 GitHub에 접속할 수 없으면 [Mac에서 받아 SCP로 전달](docs/INSTALL.md#mac에서-받아-scp로-전달)할 수 있습니다.
 
@@ -57,7 +57,9 @@ ala
 
 기본 환경은 패키지·Chrome, 시간 동기화, Bash, SSH·방화벽, Docker·Compose, GPU 자동 감지, 자동 업데이트 차단, 자동 로그인·화면 절전 방지를 포함합니다. DID 주소가 없으면 바탕화면부터 준비합니다. Chrome과 그래픽 작업은 일반 사용자로 실행합니다.
 
-Chrome 자동 시작 등록은 간편 설정이 처리합니다. URL과 활성 화면 세션이 준비돼 있으면 중지된 표시용 Chrome의 시작도 요청합니다. 재로그인·사이트 응답 등 외부 조건이 남으면 상세에 원인과 다음 조치를 표시합니다. `자동 설정 대상`은 사용자가 파일을 직접 고치라는 뜻이 아닙니다.
+간편 설정은 Chrome 자동 시작 등록까지 준비하며 현재 Chrome 창을 열거나 닫지 않습니다. **화면 관리** 버튼 또는 **c**에서 시작·중지·재시작·상태·로그를 관리합니다. 현재는 단일 표시용 Chrome을 관리하며 모니터별 배치는 별도 준비 중입니다. `자동 설정 대상`은 사용자가 파일을 직접 고치라는 뜻이 아닙니다.
+
+자동 로그인·Chrome 자동 시작이 켜져 있으면 다음 정상 부팅 시 **GDM 자동 로그인 → GNOME 자동 시작 → 표시용 Chrome 서비스** 순서로 실행합니다. 설정 준비 완료와 현재 실행·사이트 상태를 나눠 표시합니다. 처음 구성한 장비는 직접 재부팅한 뒤 SSH로 재접속하고 모니터의 실제 표시를 확인하세요.
 
 표시 사이트는 실행 중에도 감시합니다. 사이트 장애가 확인되면 로컬 복구 안내를 표시하고, 복구가 확인되면 원래 주소로 돌아갑니다. 정상 화면을 일정 주기로 새로고침하지 않습니다. HTTP 응답·관리 탭 상태와 실제 앱 데이터·모니터 표시의 정상 여부는 구분합니다.
 
@@ -89,6 +91,7 @@ ala update --status       # 마지막 갱신의 완료·실패와 설치 버전
 | 작업 | 명령 |
 |---|---|
 | DID 주소·선택 옵션 변경 | `ala config edit` |
+| 현재 Chrome 시작·중지·재시작·상태·로그 | TUI의 `c` / 화면 관리 또는 `ala chrome` |
 | 구성 확인 | `ala config show` |
 | 변경 없이 전체 결과 확인 | `ala check --json`, `ala setup --plan --json` |
 | 최초 전체 OS 준비 | `ala prepare --plan`, `ala prepare --apply` |

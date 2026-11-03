@@ -78,7 +78,7 @@ class SimpleApp(App[None]):
     ENABLE_COMMAND_PALETTE = False
     BINDINGS = [Binding('q', 'quit', '종료'), Binding('s', 'status', '상태 확인'),
                 Binding('g', 'setup', '간편 설정'), Binding('r', 'refresh', '새로고침'),
-                Binding('u', 'update', '업데이트')]
+                Binding('u', 'update', '업데이트'), Binding('c', 'chrome', '화면 관리')]
     CSS = """
     Screen { background: #10151c; color: #e9f0f7; align-horizontal: center; }
     #heading, #tabs, #notice, #update-notice, #query-status, #small-terminal, #body { width: 100%; max-width: 132; }
@@ -93,7 +93,7 @@ class SimpleApp(App[None]):
     #setup, #status { height: 1fr; }
     #setup-toolbar { height: auto; margin-bottom: 1; padding: 0 2; background: #172735; border-left: solid #648ba7; }
     #setup-context { width: 1fr; height: auto; }
-    #config-summary { height: auto; max-height: 3; text-style: bold; }
+    #config-summary { height: auto; max-height: 3; text-style: bold; text-wrap: nowrap; text-overflow: ellipsis; }
     #setup-note { height: auto; max-height: 2; margin-top: 1; color: #aabdd0; }
     .actions { height: 3; margin-bottom: 1; }
     #setup-actions { width: 24; margin: 0 0 0 3; }
@@ -102,6 +102,7 @@ class SimpleApp(App[None]):
     Button:focus { border: tall #ccf7e8; }
     Button:disabled { background: #1c2835; border: tall #1c2835; color: #a4b5c6; }
     #setup-start { width: 24; }
+    #chrome-open { width: 16; height: 3; margin-left: 1; padding: 0 1; }
     #setup-overview { height: auto; margin-bottom: 1; padding: 0 2; border-left: solid #648ba7; }
     #setup-overview.running { background: #142a32; border-left: solid #62cce5; }
     #setup-overview.pending { background: #2b2518; border-left: solid #e6ba63; }
@@ -153,6 +154,7 @@ class SimpleApp(App[None]):
         self._status_known = False
         self._groups = {}
         self._setup_report = None
+        self._full_report = None
         self._display_job = None
         self._progress_rows = []
         self._last_followed_step = None
@@ -165,6 +167,7 @@ class SimpleApp(App[None]):
         self._update_release = None
         self._update_polling = False
         self._update_lock = asyncio.Lock()
+        self._chrome_mutating = False
 
     def compose(self) -> ComposeResult:
         yield Static(f'ala {__version__} · 서버 환경 관리' + (' · 관리자' if os.geteuid() == 0 else ''), id='heading', markup=False)
@@ -179,9 +182,10 @@ class SimpleApp(App[None]):
                     with Horizontal(id='setup-toolbar'):
                         with Vertical(id='setup-context'):
                             yield Static('현재 구성을 확인하고 있습니다.', id='config-summary', markup=False)
-                            yield Static('기존 설정을 재사용하고 필요한 항목만 보완합니다.', id='setup-note', markup=False)
+                            yield Static('환경과 자동 시작 등록을 준비합니다. Chrome 제어는 화면 관리에서 합니다.', id='setup-note', markup=False)
                         with Horizontal(classes='actions', id='setup-actions'):
                             yield Button('간편 설정 실행', id='setup-start', variant='primary', disabled=True)
+                        yield Button('화면 관리', id='chrome-open')
                     with Vertical(id='setup-overview'):
                         yield Static('실행하면 SSH·화면을 닫아도 설정 작업은 계속됩니다.', id='setup-progress', markup=False)
                         yield Static('현재 상태를 확인하고 있습니다.', id='setup-summary', markup=False)
@@ -291,11 +295,11 @@ class SimpleApp(App[None]):
         if not self.is_running:
             return
         self.query_one('#setup-actions').display = not bool(self._active_job)
-        self.query_one('#setup-note').display = not bool(self._active_job) and not self.screen.has_class('compact')
+        self.query_one('#setup-note').display = not bool(self._active_job) and not self.query_one('#setup-note').screen.has_class('compact')
         self.query_one('#setup-start', Button).disabled = bool(
             self._loading or self._submitting or self._active_job or not self._status_known
             or not self._config or not self._config.get('user')
-            or (self._update_status or {}).get('state') in ACTIVE)
+            or self._chrome_mutating or (self._update_status or {}).get('state') in ACTIVE)
 
     async def load_state(self):
         if not self.is_running or self._loading or self._submitting:
@@ -337,6 +341,7 @@ class SimpleApp(App[None]):
             self._status_known = bool(report and (report.get('results') or report.get('preparation', {}).get('results')))
             if report is None:
                 self._setup_report = None
+                self._full_report = None
                 if not self._active_job:
                     self._display_job = None
                     self.render_setup_table()
@@ -345,7 +350,12 @@ class SimpleApp(App[None]):
                 self.query_one('#status-summary', Static).update('상태 조회 실패 · 정상으로 판단할 수 없습니다.')
                 self.query_one('#status-detail', TextArea).load_text('현재 조회가 실패했습니다. 상태 다시 확인으로 재시도하세요.')
             if report is not None:
+                self._full_report = deepcopy(report)
                 self._setup_report = deepcopy(report)
+                configuration = self._setup_report.get('configuration_report')
+                if (isinstance(configuration, dict) and configuration.get('scope') == 'configuration'
+                        and isinstance(configuration.get('results'), list)):
+                    self._setup_report.update(configuration)
                 self.render_status(report)
                 active = next((job for job in report.get('runs', []) if job.get('state') in ACTIVE), None)
                 if active and not self._active_job and tracked_at_start is None and not attached_early:
@@ -453,11 +463,37 @@ class SimpleApp(App[None]):
             if job.get('state') not in ACTIVE:
                 self._active_job = None
                 if job.get('report'):
-                    self.render_status(job['report'])
+                    if job['report'].get('scope') == 'configuration':
+                        self._setup_report = dict(self._setup_report or {}, **deepcopy(job['report']))
+                        self._setup_report['configuration_report'] = deepcopy(job['report'])
+                        self.query_one('#status-summary', Static).update('설정 결과 수신 · 현재 실행 상태를 다시 확인하고 있습니다.')
+                        self.run_worker(self.refresh_runtime_status(), group='runtime-status', exclusive=True, exit_on_error=False)
+                    else:
+                        self._full_report = deepcopy(job['report'])
+                        self.render_status(job['report'])
                 self.notice('작업 결과와 다음 조치를 확인하세요. 정상 항목은 유지합니다.')
         finally:
             self._polling = False
             self.update_button()
+
+    async def refresh_runtime_status(self):
+        """A configuration-only installation result is not a live runtime check."""
+        value = await self.api('status')
+        if not self.is_running:
+            return
+        if isinstance(value, dict) and isinstance(value.get('results'), list) and value['results']:
+            self._full_report = deepcopy(value)
+            configuration = value.get('configuration_report')
+            if (isinstance(configuration, dict) and configuration.get('scope') == 'configuration'
+                    and isinstance(configuration.get('results'), list)):
+                self._setup_report = {**deepcopy(value), **deepcopy(configuration)}
+            self.render_status(value)
+        else:
+            self._full_report = None
+            self._groups = {}
+            self.query_one('#status-table', DataTable).clear()
+            self.query_one('#status-summary', Static).update('현재 실행 상태 조회 실패 · 정상으로 판단할 수 없습니다.')
+            self.query_one('#status-detail', TextArea).load_text('현재 실행 상태를 확인하지 못했습니다. 상태를 다시 확인하세요.')
 
     def render_job(self, job):
         if not self.is_running:
@@ -637,6 +673,15 @@ class SimpleApp(App[None]):
         from .update_tui import UpdateScreen
         if not isinstance(self.screen, UpdateScreen):
             self.push_screen(UpdateScreen(self))
+
+    def action_chrome(self):
+        from .chrome_tui import ChromeScreen
+        if len(self.screen_stack) == 1:
+            self.push_screen(ChromeScreen(self))
+
+    @on(Button.Pressed, '#chrome-open')
+    def chrome_pressed(self):
+        self.action_chrome()
 
     def on_click(self, event: events.Click):
         if event.widget and event.widget.id == 'update-notice':

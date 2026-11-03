@@ -171,7 +171,7 @@ def test_each_failed_stage_retains_unknown_and_report_order(monkeypatch, tmp_pat
         raise PermissionError('synthetic read denied')
 
     monkeypatch.setattr(engine, '_network', _network)
-    serial = engine.inspect().to_dict()
+    serial = engine.inspect(configuration_only=True).to_dict()
     parallel = engine.plan(workers=4).to_dict()
     assert serial == parallel
     assert parallel['exit_code'] == 1

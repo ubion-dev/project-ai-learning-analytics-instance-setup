@@ -61,7 +61,8 @@ def test_engine_accepts_only_structured_known_task_events(tmp_path, monkeypatch)
     for method in ('_updates','_hardware','_shell','_ssh','_docker','_gpu','_dev_tools','_display_policy'):
         setattr(engine, method, lambda *args, **kwargs: [CheckResult('unused', 'not_applicable')])
     engine._extra_display = lambda **kwargs: [CheckResult('chrome', 'not_applicable')]
-    engine.inspect = lambda: Report([CheckResult('base.package.git', 'ok')])
+    engine.inspect = lambda *, configuration_only=False: Report(
+        [CheckResult('base.package.git', 'ok')], scope='configuration' if configuration_only else None)
     events = []
     assert engine.apply(on_substep=lambda *values: events.append(values)).exit_code == 0
     assert events == [('base','packages','started'), ('base','packages','completed')]

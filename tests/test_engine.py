@@ -151,7 +151,10 @@ class EngineTests(unittest.TestCase):
         before = {p: (p.read_bytes(), p.stat().st_mtime_ns) for p in self.paths.root.rglob("*") if p.is_file()}
         report = self.engine.inspect()
         self.assertEqual(report.exit_code, 0, [(r.id, r.state) for r in report.results if r.state != "ok"])
-        self.assertEqual(self.engine.plan().to_dict(), report.to_dict())
+        configuration = self.engine.inspect(configuration_only=True)
+        self.assertEqual(self.engine.plan().to_dict(), configuration.to_dict())
+        self.assertEqual(configuration.scope, 'configuration')
+        self.assertNotIn('display.logind.runtime', {r.id for r in configuration.results})
         self.assertEqual(before, {p: (p.read_bytes(), p.stat().st_mtime_ns) for p in self.paths.root.rglob("*") if p.is_file()})
         self.assertEqual(self.host.executed, [])
         self.assertFalse(any(any(part in {"start", "stop", "enable", "mask", "install"} for part in call) for call in self.host.calls))

@@ -258,13 +258,13 @@ def _configuration_readiness(results):
                    '설정 준비와 실제 세션·화면 표시는 별도로 검사합니다.')
 
 
-def inspect_display(config: Config, host=None, paths=None):
+def inspect_display_parts(config: Config, host=None, paths=None, *, include_runtime=True):
     host, paths = host or Host(), paths or Paths()
     results = []
     try:
         uid, _, home = _account(config, host)
     except (ValueError, OSError) as exc:
-        return [_result('chrome.account', 'pending' if not config.user else 'blocked', '일반 화면 계정', str(exc), 'ala config edit')]
+        return [_result('chrome.account', 'pending' if not config.user else 'blocked', '일반 화면 계정', str(exc), 'ala config edit')], []
     autostart = paths.at(str(home / '.config/autostart/ala-display.desktop'))
     gdm = paths.at('/etc/gdm/custom.conf')
     try:
@@ -301,10 +301,17 @@ def inspect_display(config: Config, host=None, paths=None):
             results.append(_result('chrome.autostart', state, '자동 시작 등록 없음', '등록 있음', 'ala setup --apply'))
         else:
             results.append(_result('chrome.autostart', 'ok', False, False))
-        if not config.display:
-            return results + [_result('chrome.runtime', 'not_applicable', False, False)]
-        if config.autostart and not config.url:
+        if config.display and config.autostart and not config.url:
             results.append(_result('chrome.url', 'pending', '로그인 없는 DID URL', '입력 대기', 'ala config edit'))
+    except (OSError, ValueError) as exc:
+        results.append(_result('display.inspect', 'blocked' if isinstance(exc, ValueError) else 'unknown', '표시 구성 조회', str(exc)))
+        return results, []
+    if not include_runtime:
+        return results, []
+    configuration, results = results, []
+    try:
+        if not config.display:
+            return configuration, [_result('chrome.runtime', 'not_applicable', False, False)]
         greeters = []
         sessions, reason = _graphical_sessions(host, uid, greeters=greeters)
         if sessions is None:
@@ -348,7 +355,12 @@ def inspect_display(config: Config, host=None, paths=None):
                                '설정·세션·프로세스 검사는 모니터의 실제 표시나 팝업 부재를 보증하지 않습니다.'))
     except (OSError, ValueError) as exc:
         results.append(_result('display.inspect', 'blocked' if isinstance(exc, ValueError) else 'unknown', '표시 구성 조회', str(exc)))
-    return results
+    return configuration, results
+
+
+def inspect_display(config: Config, host=None, paths=None, *, configuration_only=False):
+    configuration, runtime = inspect_display_parts(config, host, paths, include_runtime=not configuration_only)
+    return configuration + runtime
 
 
 def _safe_parents(path):
@@ -461,29 +473,9 @@ def apply_display(config: Config, host=None, paths=None):
         prepared = _user_call(config, host, paths, 'prepare')
         if prepared.get('exit_code', 1):
             return [_result('display.prepare', prepared.get('state','pending'), '사용자 자동 시작 준비', prepared.get('reason','사용자 runtime 필요'), 'GNOME 로그인 후 재실행')]
-        start_result = None
-        if config.display and config.autostart and config.url:
-            sessions, _ = _graphical_sessions(host, uid)
-            if (sessions is not None and len(sessions) == 1
-                    and sessions[0][1].get('Active') == 'yes'
-                    and sessions[0][1].get('LockedHint') != 'yes'):
-                # The user-side action rechecks all prerequisites and only starts an
-                # inactive unit. It never resets a failure or replaces running Chrome.
-                start_result = _user_call(config, host, paths, 'ensure-start')
-        results = inspect_display(config, host, paths)
-        if start_result and start_result.get('state') in {'error', 'blocked', 'unknown'}:
-            # A failed request may leave the unit inactive, so a status-only query
-            # cannot recover its failure reason. Keep that explicit action evidence.
-            results.append(_result('chrome.runtime.ensure_start', start_result['state'],
-                                   '현재 세션에서 표시용 Chrome 시작',
-                                   start_result.get('reason', start_result.get('error', '자동 시작 요청 실패')),
-                                   start_result.get('next_action', 'ala chrome logs로 원인을 확인하세요.')))
-        elif start_result and start_result.get('state') == 'starting':
-            for result in results:
-                if result.id == 'chrome.runtime' and result.state == 'pending' and result.actual == '중지됨':
-                    result.actual = '자동 시작 요청 후 서비스 활성화 대기'
-                    result.next_action = '잠시 후 상태를 다시 확인하세요. 시작 요청만으로 실행 정상을 확정하지 않습니다.'
-        return results
+        # Setup only provisions registration. Boot autostart and explicit screen
+        # management own the Chrome lifecycle, independently of installation.
+        return inspect_display(config, host, paths, configuration_only=True)
     except (OSError, ValueError, RuntimeError) as exc:
         return [_result('display.apply', 'blocked', '표시 구성 준비', str(exc), '로그와 경로 확인 후 재실행')]
 
@@ -540,6 +532,11 @@ def _unit_state(host, unit=UNIT):
     if response.returncode and value.get('LoadState') != 'not-found':
         value['QueryError']=response.stderr.strip() or '서비스 상태 조회 실패'
     return value
+
+
+def _confirmed_unit_state(value):
+    return not value.get('QueryError') and value.get('ActiveState') in {
+        'active','activating','inactive','failed','deactivating','reloading'}
 
 
 def _profile(home):
@@ -608,13 +605,15 @@ def _check_user(config, home, host, paths):
         results.append(_result('chrome.runtime','pending','유효한 Chrome PID','시작 중'))
         return Report(results).to_dict() | {'state':'pending', 'service':state}
     process = paths.at('/proc')/pid
+    health = None
+    health_result = None
+    supervised = False
     try:
         uid_line = next(line for line in (process/'status').read_text().splitlines() if line.startswith('Uid:'))
         if int(uid_line.split()[1]) != os.getuid():
             raise ValueError('다른 사용자 소유 프로세스입니다.')
         arguments = (process/'cmdline').read_bytes().decode().rstrip('\0').split('\0')
         supervised = '_chrome-run' in arguments
-        health = None
         if supervised:
             from .display_health import read_health
             entry = Path(arguments[2]) if len(arguments) == 4 else None
@@ -627,21 +626,18 @@ def _check_user(config, home, host, paths):
             health_state = health['state']
             if health_state == 'healthy' and not health.get('target_matches_config'):
                 health_state = 'unknown'
+                health = health | {'state':'unknown','reason':'관리 탭과 현재 구성의 연결 근거를 확인하지 못했습니다.',
+                                   'next_action':'Chrome 로그와 화면 구성을 확인하세요.'}
             check_state = {'healthy':'ok','waiting_site':'pending','recovering':'pending',
                            'failed':'error','unknown':'unknown'}[health_state]
-            results.append(_result('chrome.health',check_state,'관리 탭 주 문서·HTTP 지속 감시',health,
-                                   health.get('next_action',''),
-                                   'HTTP 응답·관리 탭의 문서 관측입니다. 앱 내부 데이터·실제 모니터 표시는 보증하지 않습니다.'))
+            health_result = _result('chrome.health',check_state,'관리 탭 주 문서·HTTP 지속 감시',health,
+                                    health.get('next_action',''),
+                                    'HTTP 응답·관리 탭의 문서 관측입니다. 앱 내부 데이터·실제 모니터 표시는 보증하지 않습니다.')
             browser_pid = health.get('browser_pid')
             if type(browser_pid) is not int or browser_pid < 1 or health_state in {'unknown','failed'}:
+                results.append(health_result)
                 return Report(results).to_dict() | {'state':health_state, 'service':state, 'health':health}
             process = paths.at('/proc') / str(browser_pid)
-            supervisor_cgroup = (paths.at('/proc')/pid/'cgroup').read_text()
-            if not supervisor_cgroup.strip() or (process/'cgroup').read_text() != supervisor_cgroup:
-                raise ValueError('Chrome 자식과 감독 서비스의 cgroup이 다릅니다.')
-            uid_line = next(line for line in (process/'status').read_text().splitlines() if line.startswith('Uid:'))
-            if int(uid_line.split()[1]) != os.getuid():
-                raise ValueError('Chrome 자식의 소유자가 다릅니다.')
             arguments = (process/'cmdline').read_bytes().decode().rstrip('\0').split('\0')
         else:
             results.append(_result('chrome.health','pending','사이트 지속 감시','기존 단독 Chrome 실행을 유지했습니다.',
@@ -667,11 +663,23 @@ def _check_user(config, home, host, paths):
         for bad in forbidden:
             if any(arg.split('=',1)[0]==bad for arg in arguments):
                 results.append(_result('chrome.forbidden','error','허용된 실행 옵션',bad,'ala chrome restart'))
-    except (OSError, ValueError, StopIteration) as exc:
+        if supervised:
+            from .display_health import verify_direct_child
+            verify_direct_child(paths,int(pid),browser_pid,health)
+    except (OSError, ValueError, StopIteration, IndexError, KeyError) as exc:
         results.append(_result('chrome.process','unknown','프로세스 확인',str(exc)))
+    if supervised:
+        if any(result.state in {'error','unknown','blocked'} for result in results):
+            health = (health or {}) | {'state':'unknown','target_matches_config':False,
+                                      'reason':'Chrome 자식의 소유권·부모 관계·시작 식별자·실행 인자를 모두 확인하지 못했습니다.',
+                                      'next_action':'Chrome 프로세스와 로그를 확인한 뒤 화면 관리에서 필요한 조치를 선택하세요.'}
+            health_result = _result('chrome.health','unknown','검증된 Chrome 자식의 사이트 감시',health,
+                                    health['next_action'])
+        if health_result is not None:
+            results.append(health_result)
     report=Report(results)
     return report.to_dict() | {'state':{0:'running',1:'error',2:'pending'}[report.exit_code], 'service':state,
-                                        'health':health if 'health' in locals() else None,
+                                        'health':health,
                                         'limits':'프로세스·감시 기록 검사입니다. 실제 창·팝업·앱 내용은 별도 확인합니다.'}
 
 
@@ -708,11 +716,24 @@ def user_action(action, *, config=None, home=None, host=None, paths=None):
         raise ValueError('허용되지 않은 사용자 Chrome 작업입니다.')
     if action == 'stop':
         state = _unit_state(host)
-        if state.get('ActiveState') in {'active','activating','failed'}:
+        if not _confirmed_unit_state(state):
+            return {'exit_code':1,'state':'unknown','reason':'표시 서비스 상태를 확실히 조회하지 못해 중지하지 않았습니다.',
+                    'next_action':'사용자 서비스 연결·권한을 확인한 뒤 다시 요청하세요.'}
+        if state.get('ActiveState') != 'inactive':
             result=host.run(['systemctl','--user','stop',UNIT],timeout=35)
             if result.returncode:
                 return {'exit_code':1,'state':'error','reason':result.stderr.strip()}
-        return {'exit_code':0,'state':'stopped','reason':'현재 실행을 중지했습니다. 다음 그래픽 로그인에는 자동 실행됩니다.'}
+            after = _unit_state(host)
+            if not _confirmed_unit_state(after):
+                return {'exit_code':1,'state':'unknown','reason':'중지 요청 후 서비스 상태를 조회하지 못해 종료를 확인할 수 없습니다.',
+                        'next_action':'사용자 서비스 연결과 Chrome 상태를 다시 확인하세요.'}
+            if after.get('ActiveState') != 'inactive':
+                return {'exit_code':1,'state':'blocked','reason':'중지 요청 후 서비스가 중지 상태로 전환되지 않았습니다.',
+                        'next_action':'Chrome 로그와 서비스 상태를 확인하세요.'}
+        reason = '현재 실행을 중지했습니다.'
+        if config.display and config.autostart and config.url:
+            reason += ' 다음 그래픽 로그인에는 자동 실행됩니다.'
+        return {'exit_code':0,'state':'stopped','reason':reason}
     if action == 'ensure-start' and (not config.display or not config.autostart):
         return {'exit_code':0,'state':'not_applicable','reason':'Chrome 자동 시작이 꺼져 있습니다.'}
     if not config.display or not config.url:
@@ -736,12 +757,9 @@ def user_action(action, *, config=None, home=None, host=None, paths=None):
                 'next_action':'잠금 정책 적용 후 다음 GNOME 로그인 또는 유지보수 재부팅으로 확인하세요.'}
     old = _unit_state(host,LEGACY)
     current = _unit_state(host)
-    known_states={'active','activating','inactive','failed','deactivating','reloading'}
-    if action == 'ensure-start' and (old.get('QueryError') or current.get('QueryError')
-                                    or old.get('ActiveState') not in known_states
-                                    or current.get('ActiveState') not in known_states):
-        return {'exit_code':1,'state':'unknown','reason':'기존 Chrome 서비스 상태를 확실히 조회하지 못해 자동 시작하지 않았습니다.',
-                'next_action':'사용자 서비스 연결·권한을 확인한 뒤 다시 설정을 적용하세요.'}
+    if not _confirmed_unit_state(old) or not _confirmed_unit_state(current):
+        return {'exit_code':1,'state':'unknown','reason':'기존 Chrome 서비스 상태를 확실히 조회하지 못해 실행 요청을 진행하지 않았습니다.',
+                'next_action':'사용자 서비스 연결·권한을 확인한 뒤 다시 요청하세요.'}
     if action in {'start','ensure-start'} and old.get('ActiveState') in {'active','activating','deactivating','reloading'}:
         return {'exit_code':2,'state':'pending','reason':'기존 did-chrome 실행을 유지했습니다.',
                 'next_action':'기존 표시를 유지하려면 그대로 두세요. 전환이 필요하면 명시적으로 ala chrome restart를 실행하세요.'}
@@ -754,9 +772,15 @@ def user_action(action, *, config=None, home=None, host=None, paths=None):
         return {'exit_code':2,'state':'pending','reason':'표시용 Chrome 서비스 상태 변경을 기다립니다: ' + current.get('ActiveState','unknown')}
     if action == 'restart':
         for unit, state in ((LEGACY,old),(UNIT,current)):
-            if state.get('ActiveState') in {'active','activating','failed'}:
+            if state.get('ActiveState') != 'inactive':
                 stopped=host.run(['systemctl','--user','stop',unit],timeout=35)
-                if stopped.returncode or _unit_state(host,unit).get('ActiveState') in {'active','activating','deactivating'}:
+                if stopped.returncode:
+                    return {'exit_code':1,'state':'blocked','reason':f'{unit} 종료를 확인할 수 없습니다.'}
+                after = _unit_state(host,unit)
+                if not _confirmed_unit_state(after):
+                    return {'exit_code':1,'state':'unknown','reason':f'{unit} 중지 요청 후 상태를 조회하지 못했습니다.',
+                            'next_action':'사용자 서비스 연결과 Chrome 상태를 확인하세요. 새 실행을 시작하지 않았습니다.'}
+                if after.get('ActiveState') not in {'inactive','failed'}:
                     return {'exit_code':1,'state':'blocked','reason':f'{unit} 종료를 확인할 수 없습니다.'}
     foreign = _foreign_profile_pid(paths,_profile(home))
     if foreign:
