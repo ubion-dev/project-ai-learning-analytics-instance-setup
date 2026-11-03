@@ -517,3 +517,12 @@
 
 - 최종공식소스검토에서 journalctl의JSON출력이quiet를내포하므로grep무매치가Noentries문구없이rc1/완전빈stdout·stderr로반환될수있음을확인했다. 고정helper조회에만이정확한형식을정상빈기록으로인정하도록보완했다. runtime조회실패·부분JSON·권한stderr·다른반환코드는계속실패한다.
 - 저널통합43개와diff검사를통과했다. 이전커밋7f18f96의검증을최종코드전체통과로대체하지않고이후커밋의전체CI를확인한다. 수정된후보는게시전이며RC20기게시파일을덮어쓰지않는다.
+
+## ALA-31 RC20 후보 완료
+
+- 최종코드4df926f6bd282ff75b430806429caa99ca8da4b9의 push CI41624105616 / PR CI41624111968 모두성공했다. Python3.12 전체904 passed +54 subtests, 실제Linux Chrome3개를통과했고공개이력/Bash/고정의존성/빌드/진입점/업로드까지성공했다.
+- CI/로컬/익명공개다운로드 파일의byte일치와SHA-256·manifest63개파일을검증했다. SHA-256: 03ea77b497dd52f354ae6d9389062e4f4a63eace4c16bde59db00b73179cd5eb.
+- PR #8 범위/제목/검증을최종부팅연결·실행진단으로갱신했다: https://github.com/ubion-dev/project-ai-learning-analytics-instance-setup/pull/8
+- 시험판: https://github.com/ubion-dev/project-ai-learning-analytics-instance-setup/releases/tag/v0.1.0-rc.20
+- 사용자장비의원래세부실패단계는기존로그만으로확정하지못했다. 이번후보는확인된준비대기/단발연결/불필요초기화/로그공백의취약점을보완하며실제Rocky GNOME부팅·모니터수용을대체하지않는다. 기존릴리스/실제서버/현재Chrome·GDM은변경하지않았다.
+- 후속은도구업데이트완료/버전확인→간편설정1회로unit취소정책반영→사용자가직접정상재부팅→SSH재접속·모니터자동표시/상태/로그확인이다. 적용은현재Chrome이나GDM을재시작하지않으며재부팅을자동수행하지않는다. 실제수용후에만해결완료로표시한다.
