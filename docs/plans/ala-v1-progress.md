@@ -446,3 +446,13 @@
 - 구현 fb260b842dde1e455a5255c790e5a2ae22f3ee33의 push 41588603093 / PR 41588608770에서 전체 752 passed + 54 subtests와 공개/Bash 검사를 통과했다.
 - 실제 Linux Chrome은 private CDP/독립 PID/관측기까지 실행됐지만 NUL 형식을 유지해, 새 Linux 제목 분기를 실측해야 한다는 엄격한 스모크 조건이 실패했다. 이를 Linux 제목 검증 성공으로 취급하지 않으며 후보 빌드/업로드/릴리스는 진행하지 않았다.
 - GNOME과 CI의 시작 환경 차이를 조사한다. Chromium은 title 초기화 전에 DBUS 환경을 보충할 수 있고 title 초기화는 원래 환경의 연속 배치를 요구한다. 안전한 disabled DBUS 주소를 미리 전달하는 테스트 환경 보완을 검토하며 실제 서버나 런타임 설정을 바꾸지 않는다.
+
+## ALA-29 RC18 후보 완료
+
+- 최종 코드 4dce9c256a470138a670f082d066f89209c632a6. push CI 41589559253와 PR CI 41589566196 모두 성공했다. Python 3.12 전체 752 passed + 54 subtests, 별도 실제 Linux Chrome smoke 1 passed다.
+- 실제 Chrome을 일반 사용자·sandbox 유지·외부 인터페이스 없는 네트워크 namespace·임시 프로필·private CDP pipe에서 실행했다. CDP의 browser PID와 실제 자식 PID 일치, linux_title 형식, 요청 인자 각 1회와 금지 인자 부재를 확인했다. 테스트 자식의 disabled DBUS 환경을 미리 준비한 뒤 제목 분기를 실측했으며 NUL 관측만으로 성공 처리하지 않았다.
+- 공개 이력/Bash/고정 의존성/빌드/진입점 검증을 통과했다. CI/로컬/인증 없는 공개 다운로드 파일의 byte 일치와 SHA-256·manifest 62개 파일을 검증했다. SHA-256: 3691fbb980ea66ce8aafc1f317797f2beaf80db7d788e291910ceb8ca2c51282.
+- PR #7: https://github.com/ubion-dev/project-ai-learning-analytics-instance-setup/pull/7
+- 시험판: https://github.com/ubion-dev/project-ai-learning-analytics-instance-setup/releases/tag/v0.1.0-rc.18
+- PR 설명을 최종 검사 수정과 화면 관리 분리 범위로 갱신했다. GitHub 연결 앱은 PR 수정 권한이 없어 기존 gh 인증으로 반영했다. 기존 릴리스와 실제 서버/Chrome은 변경하지 않았다.
+- 후속은 ala 갱신 완료 후 새 CLI에서 실행 상태를 재조회하고 실제 Rocky 재부팅·GNOME·화면 수용을 확인하는 것이다. 현재 Chrome을 자동 재시작하지 않으며 옵션 누락 경고가 실제로 남을 때 다음 조치를 확인한다. 정식 완료나 GPU/다중 출력 수용으로 기록하지 않는다.
