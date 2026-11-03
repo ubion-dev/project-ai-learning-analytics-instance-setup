@@ -10,7 +10,7 @@ Rocky Linux 10 x86_64, GNOME/GDM, 기존 일반 sudo 사용자를 지원합니�
 Textual과 고정 의존성은 배포 묶음의 wheel로 전용 venv에 설치하며 시스템 Python 패키지를 덮어쓰지 않습니다.
 환경 설정 단계에는 Google·Docker·NVIDIA 등 필요한 패키지 저장소 접속이 필요합니다.
 
-`ala-0.1.0rc15.tar.gz`와 `.tar.gz.sha256`은 같은 릴리스에서 받습니다.
+`ala-0.1.0rc16.tar.gz`와 `.tar.gz.sha256`은 같은 릴리스에서 받습니다.
 SHA-256 검사는 파일 일치/손상 확인이며 배포자 서명을 대신하지 않습니다. 현재 배포는 GitHub HTTPS 경로를 신뢰하며 별도 서명 검증은 미구현입니다.
 검사가 실패하면 설치하지 않습니다. GitHub의 Source code 압축은 wheel과 manifest가 없는 개발 소스이므로 설치용 배포 파일과 다릅니다.
 
@@ -22,8 +22,8 @@ Rocky가 GitHub에 직접 접속하지 못하는 경우 사용합니다. Mac 터
 ```bash
 (
   set -e
-  VERSION='0.1.0rc15'
-  RELEASE='v0.1.0-rc.15'
+  VERSION='0.1.0rc16'
+  RELEASE='v0.1.0-rc.16'
   BASE_URL="https://github.com/ubion-dev/project-ai-learning-analytics-instance-setup/releases/download/${RELEASE}"
   mkdir -p "$HOME/Downloads/ala-$VERSION"
   cd "$HOME/Downloads/ala-$VERSION"
@@ -43,9 +43,9 @@ ssh user@서버IP
 (
   set -e
   cd ~
-  sha256sum -c ala-0.1.0rc15.tar.gz.sha256
-  tar -xzf ala-0.1.0rc15.tar.gz
-  cd ala-0.1.0rc15
+  sha256sum -c ala-0.1.0rc16.tar.gz.sha256
+  tar -xzf ala-0.1.0rc16.tar.gz
+  cd ala-0.1.0rc16
   sudo bash ./install.sh
   ala --version
 )
@@ -69,6 +69,17 @@ SSH 호스트 키 변경 경고가 나오면 대상 장비·키를 확인합니�
 공개 배포 이전 버전의 파일은 공개 릴리스에 포함하지 않습니다.
 배포 서명 검증과 자동 확인 타이머는 미구현입니다. 자체 갱신은 아래의 명시적 명령으로 실행합니다.
 
+```bash
+ala update --prerelease        # 접수 후 완료·실패까지 표시
+ala update --status            # 마지막 결과·실제 설치 버전
+ala update --status --json     # 자동화용 읽기 전용 결과
+ala update --prerelease --detach  # 완료를 기다리지 않고 접수 결과 반환
+```
+
+백그라운드 작업과 화면의 수명은 독립적입니다. Ctrl+C나 SSH 종료는 갱신을 취소하지 않습니다. `--detach`는 진행 중을 의미하는 종료 코드 2, 검증된 완료는 0, 실패·중단·확인 불가는 1입니다. TUI에서는 `u` 업데이트 관리창에서 같은 기록을 확인합니다. 설치된 버전과 현재 실행 중인 ala 버전이 다르면 다시 실행합니다.
+
+RC15 이하에서 새 버전으로 처음 갱신할 때는 기존 명령의 동작에 따라 journal에서 완료를 확인해야 합니다. 갱신된 ala를 다시 실행한 이후 위 상태 조회를 사용합니다.
+
 ## 개발자용 배포 빌드
 
 Python 3.12 이상에서 프로젝트 루트 기준으로 실행합니다.
@@ -79,10 +90,10 @@ python3 -m venv .venv
 .venv/bin/python scripts/build-release.py
 ```
 
-`dist/ala-0.1.0rc15.tar.gz`와 `.sha256`을 생성합니다. 기존 wheel이 있으면 `--wheelhouse /경로/wheels`를 지정할 수 있으며 해시 검증은 유지됩니다.
+`dist/ala-0.1.0rc16.tar.gz`와 `.sha256`을 생성합니다. 기존 wheel이 있으면 `--wheelhouse /경로/wheels`를 지정할 수 있으며 해시 검증은 유지됩니다.
 빌더는 허용 목록의 코드·운영 문서·고정 wheel·파일별 manifest만 포함합니다. Git 이력, 테스트, 개발 가상환경과 작업 기록은 포함하지 않습니다.
 게시된 파일을 같은 버전으로 다시 만들거나 덮어쓰지 않습니다.
-후보 태그 `v0.1.0-rc.15`와 Python 버전 `0.1.0rc15`의 표기 차이에 주의하세요.
+후보 태그 `v0.1.0-rc.16`와 Python 버전 `0.1.0rc16`의 표기 차이에 주의하세요.
 
 릴리스는 자동 테스트와 실제 Rocky 수용을 구분합니다. 현재 후보의 실제 장비 설치·GNOME·GPU·재부팅은 미검증입니다.
 

@@ -77,7 +77,8 @@ class SimpleApp(App[None]):
     TITLE = 'ala · 환경 관리'
     ENABLE_COMMAND_PALETTE = False
     BINDINGS = [Binding('q', 'quit', '종료'), Binding('s', 'status', '상태 확인'),
-                Binding('g', 'setup', '간편 설정'), Binding('r', 'refresh', '새로고침')]
+                Binding('g', 'setup', '간편 설정'), Binding('r', 'refresh', '새로고침'),
+                Binding('u', 'update', '업데이트')]
     CSS = """
     Screen { background: #10151c; color: #e9f0f7; align-horizontal: center; }
     #heading, #tabs, #notice, #update-notice, #query-status, #small-terminal, #body { width: 100%; max-width: 132; }
@@ -159,6 +160,11 @@ class SimpleApp(App[None]):
         self._table_layout = None
         self._has_checked = False
         self._query_started = 0.0
+        self._update_status = None
+        self._update_run_id = None
+        self._update_release = None
+        self._update_polling = False
+        self._update_lock = asyncio.Lock()
 
     def compose(self) -> ComposeResult:
         yield Static(f'ala {__version__} · 서버 환경 관리' + (' · 관리자' if os.geteuid() == 0 else ''), id='heading', markup=False)
@@ -202,6 +208,8 @@ class SimpleApp(App[None]):
         self._resize_warning()
         self.set_interval(1.5, self.poll_job)
         self.set_interval(0.2, self.refresh_query_label)
+        self.set_interval(1.5, self.poll_update)
+        self.run_worker(self.poll_update(), group='update-status', exit_on_error=False)
         self.run_worker(self.load_state(), group='load', exclusive=True, exit_on_error=False)
         if not self.is_headless:
             self.run_worker(self.check_update(), group='updates', exit_on_error=False)
@@ -286,7 +294,8 @@ class SimpleApp(App[None]):
         self.query_one('#setup-note').display = not bool(self._active_job) and not self.screen.has_class('compact')
         self.query_one('#setup-start', Button).disabled = bool(
             self._loading or self._submitting or self._active_job or not self._status_known
-            or not self._config or not self._config.get('user'))
+            or not self._config or not self._config.get('user')
+            or (self._update_status or {}).get('state') in ACTIVE)
 
     async def load_state(self):
         if not self.is_running or self._loading or self._submitting:
@@ -618,8 +627,82 @@ class SimpleApp(App[None]):
         try:
             result = await asyncio.to_thread(check)
         except Exception:
-            return
+            result = {'exit_code': 1}
         if not self.is_running:
             return
-        if result.get('available'):
-            self.query_one('#update-notice', Static).update(Text(f"새 버전 {result['latest']} · ala update로 갱신"))
+        self._update_release = result if isinstance(result, dict) else {'exit_code': 1}
+        self.render_update_notice()
+
+    def action_update(self):
+        from .update_tui import UpdateScreen
+        if not isinstance(self.screen, UpdateScreen):
+            self.push_screen(UpdateScreen(self))
+
+    def on_click(self, event: events.Click):
+        if event.widget and event.widget.id == 'update-notice':
+            self.action_update()
+
+    def accept_update_status(self, value):
+        from .update_tui import STATES
+        if (not isinstance(value, dict) or not isinstance(value.get('state'), str)
+                or value['state'] not in STATES):
+            value = {'state': 'unknown', 'reason': '업데이트 상태 응답을 확인하지 못했습니다.'}
+        elif value['state'] == 'completed' and (not value.get('installed_version')
+                or value.get('installed_version') != value.get('target_version')
+                or value.get('exit_code', 0)):
+            value = dict(value, state='unknown', reason='설치 완료 버전 검증 결과를 확인하지 못했습니다.')
+        previous = self._update_status or {}
+        self._update_status = {**previous, **value, 'runtime_version': __version__}
+        if value.get('run_id'):
+            self._update_run_id = value['run_id']
+        if self.is_running:
+            self.render_update_notice()
+            self.update_button()
+
+    async def poll_update(self, latest=False):
+        if not self.is_running or (self._update_polling and not latest):
+            return
+        async with self._update_lock:
+            if not self.is_running:
+                return
+            if latest:
+                self._update_run_id = None
+            self._update_polling = True
+            try:
+                payload = {'run_id': self._update_run_id} if self._update_run_id else {}
+                value = await self.service.call('update-status', payload)
+            except AssertionError:
+                # Older injected services do not implement this optional RPC.
+                return
+            except Exception:
+                value = {'state': 'unknown', 'reason': '업데이트 상태 조회 실패 · 다시 확인하세요.'}
+            finally:
+                self._update_polling = False
+            if not self.is_running:
+                return
+            self.accept_update_status(value)
+
+    def render_update_notice(self):
+        if not self.is_running or not self.query('#update-notice'):
+            return
+        from .update_tui import LABELS, newer_than_installed
+        status, release = self._update_status or {}, self._update_release or {}
+        state = status.get('state')
+        message = ''
+        if state and state != 'idle':
+            message = LABELS.get(state, '업데이트 상태 확인 불가')
+            if status.get('target_version'):
+                message += ' · ' + str(status['target_version'])
+        elif release.get('exit_code') or release.get('error'):
+            message = '업데이트 조회 실패 · 네트워크 연결을 확인하세요.'
+        elif newer_than_installed(release, status):
+            message = f"새 버전 {release.get('latest', '확인 불가')}"
+        installed = status.get('installed_version')
+        runtime = status.get('runtime_version') or __version__
+        if installed and installed != runtime:
+            message += (' · ' if message else '') + f'설치 {installed} / 실행 {runtime} · ala 재실행 필요'
+        if message:
+            message += ' · u 업데이트 관리'
+        notice = self.query_one('#update-notice', Static)
+        notice.update(Text(message, style='yellow' if state in {'failed', 'interrupted', 'unknown'} else ''))
+        notice.display = bool(message)

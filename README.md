@@ -3,7 +3,7 @@
 Rocky Linux 서버의 기본 환경·Docker·GPU 드라이버·Chrome DID 화면을 설치하고 검사하는 CLI/TUI입니다.
 
 - 대상: **Rocky Linux 10 x86_64 + GNOME/GDM + 기존 sudo 사용자**
-- 현재 배포 후보: **0.1.0rc15**. 실제 장비의 설치·GPU·화면·재부팅 수용은 아직 완료하지 않았습니다.
+- 현재 배포 후보: **0.1.0rc16**. 실제 장비의 설치·GPU·화면·재부팅 수용은 아직 완료하지 않았습니다.
 - **공개 릴리스에서 바로 다운로드합니다. Git·GitHub 로그인·토큰·Mac 파일 전송은 필요 없습니다.**
 
 ## 1. 설치 — Rocky 터미널
@@ -14,8 +14,8 @@ SSH로 서버에 접속한 일반 사용자 터미널에서 실행합니다. `cu
 ```bash
 (
   set -e
-  VERSION='0.1.0rc15'
-  RELEASE='v0.1.0-rc.15'
+  VERSION='0.1.0rc16'
+  RELEASE='v0.1.0-rc.16'
   BASE_URL="https://github.com/ubion-dev/project-ai-learning-analytics-instance-setup/releases/download/${RELEASE}"
   mkdir -p "$HOME/ala-downloads/$VERSION"
   cd "$HOME/ala-downloads/$VERSION"
@@ -33,7 +33,7 @@ SSH로 서버에 접속한 일반 사용자 터미널에서 실행합니다. `cu
 )
 ```
 
-`0.1.0rc15`가 나오면 도구 설치 완료입니다. **서버 설정은 다음 단계에서 별도로 적용합니다.**
+`0.1.0rc16`가 나오면 도구 설치 완료입니다. **서버 설정은 다음 단계에서 별도로 적용합니다.**
 GitHub의 `Source code` 압축이나 `scripts/rocky-linux` 폴더만으로는 ala를 설치할 수 없습니다.
 서버가 GitHub에 접속할 수 없으면 [Mac에서 받아 SCP로 전달](docs/INSTALL.md#mac에서-받아-scp로-전달)할 수 있습니다.
 
@@ -59,6 +59,8 @@ ala
 
 Chrome 자동 시작 등록은 간편 설정이 처리합니다. URL과 활성 화면 세션이 준비돼 있으면 중지된 표시용 Chrome의 시작도 요청합니다. 재로그인·사이트 응답 등 외부 조건이 남으면 상세에 원인과 다음 조치를 표시합니다. `자동 설정 대상`은 사용자가 파일을 직접 고치라는 뜻이 아닙니다.
 
+표시 사이트는 실행 중에도 감시합니다. 사이트 장애가 확인되면 로컬 복구 안내를 표시하고, 복구가 확인되면 원래 주소로 돌아갑니다. 정상 화면을 일정 주기로 새로고침하지 않습니다. HTTP 응답·관리 탭 상태와 실제 앱 데이터·모니터 표시의 정상 여부는 구분합니다.
+
 TUI 대신 명령으로 바로 실행할 수도 있습니다.
 
 ```bash
@@ -75,9 +77,12 @@ SSH나 화면을 닫아도 접수된 설치는 계속됩니다. 재부팅이 필
 ala update --check        # 정식판 확인
 ala update               # 정식판으로 갱신
 ala update --prerelease   # 시험판 포함 갱신
+ala update --status       # 마지막 갱신의 완료·실패와 설치 버전
 ```
 
-`sudo journalctl -u ala-update -f`에서 완료를 확인하고 ala를 다시 실행합니다. 기존 구성과 실행 기록은 유지합니다. RC5 이하에서는 최초 한 번 위 설치 절차로 새 버전을 받아야 합니다. 정기 자동 적용·서명 검증은 아직 제공하지 않습니다.
+`ala update`는 완료·실패까지 추적합니다. SSH나 표시를 종료해도 접수된 작업은 계속되며, 다시 접속한 뒤 `ala update --status`로 확인합니다. 즉시 반환하려면 `--detach`를 사용합니다. TUI에서는 `u`로 업데이트 관리창을 열어 확인·갱신·결과 조회를 할 수 있습니다. 새 버전 설치가 끝나면 ala를 다시 실행합니다.
+
+기존 구성과 실행 기록은 유지합니다. RC15 이하의 업데이트 화면은 journal에 의존하므로 이번 버전으로 최초 갱신할 때는 `sudo journalctl -u ala-update -f`에서 완료를 확인하고 다시 실행하세요. 정기 자동 적용·서명 검증은 아직 제공하지 않습니다.
 
 ## 필요할 때만 쓰는 상세 기능
 

@@ -2,6 +2,7 @@ from dataclasses import replace
 from pathlib import Path
 import json
 import os
+import time
 import urllib.error
 import pytest
 
@@ -287,7 +288,8 @@ def test_user_runtime_check_checks_real_arguments_and_failure_state(setup):
     (process/'cmdline').write_bytes(('\0'.join(arguments)+'\0').encode())
     host.states[display.UNIT].update(ActiveState='active',MainPID='111')
     result=display.user_action('check',config=config,home=home,host=host,paths=paths)
-    assert result['exit_code']==0
+    assert result['exit_code']==2  # Old standalone Chrome is preserved; monitoring needs an explicit restart.
+    assert any(r['id']=='chrome.health' and r['state']=='pending' for r in result['results'])
     assert any(r['id']=='chrome.option.password-store' and r['state']=='ok' for r in result['results'])
     arguments.remove('--password-store=basic')
     (process/'cmdline').write_bytes(('\0'.join(arguments)+'\0').encode())
@@ -298,22 +300,18 @@ def test_user_runtime_check_checks_real_arguments_and_failure_state(setup):
     assert result['service']['Result']=='start-limit-hit'
 
 
-def test_readiness_retries_then_executes_exact_url_and_new_profile(setup):
+def test_runtime_launches_user_supervisor_with_private_pipe_and_new_profile(setup):
     config,paths,host,home=user_fixture(setup)
-    calls=[];sleep=[];executed=[]
-    class Response:
-        status=200
-        def __enter__(self):return self
-        def __exit__(self,*args):pass
-    def opener(request,timeout):
-        calls.append((request.full_url,timeout))
-        if len(calls)<3:raise urllib.error.URLError('not ready')
-        return Response()
-    assert display.run_chrome(config=config,home=home,host=host,paths=paths,sleeper=sleep.append,opener=opener,execute=executed.append)==0
-    assert sleep==[10,10]
-    assert all(timeout==5 for _,timeout in calls)
+    from ala.display_health import RECOVERY_URL
+    executed=[]
+    class FakeSupervisor:
+        def __init__(self, actual_config, actual_home, argv, **kwargs):
+            assert actual_config==config and actual_home==home and kwargs['paths']==paths
+            executed.append(argv)
+        def run(self): return 0
+    assert display.run_chrome(config=config,home=home,host=host,paths=paths,supervisor_factory=FakeSupervisor)==0
     args=executed[0]
-    assert args[-1]==config.url
+    assert args[-1]==RECOVERY_URL and '--remote-debugging-pipe' in args
     assert '--password-store=basic' in args
     assert '--user-data-dir='+str(home/'.config/ala/chrome-display') in args
     assert '--ozone-platform=wayland' in args
@@ -350,7 +348,7 @@ def test_existing_unmanaged_display_profile_is_preserved(setup):
     profile=display._profile(home);profile.mkdir(parents=True)
     cookie=profile/'Cookies';cookie.write_text('do not migrate')
     with pytest.raises(RuntimeError,match='관리되지 않은'):
-        display.run_chrome(config=config,home=home,host=host,paths=paths,execute=lambda args:None)
+        display.run_chrome(config=config,home=home,host=host,paths=paths)
     assert cookie.read_text()=='do not migrate'
 
 
@@ -480,6 +478,100 @@ def _seed_display_process(config,paths,host,pid='321'):
     host.states[display.UNIT].update(ActiveState='active',MainPID=pid)
 
 
+def _seed_supervised_display(config,paths,host,pid='321',browser='322'):
+    from ala import display_health as health
+    home=paths.at('/home/user')
+    for process_id,args in ((pid,['/opt/ala/current/.venv/bin/python','-I','/opt/ala/current/entry.py','_chrome-run']),
+                            (browser,display.chrome_arguments(config,home,{'WAYLAND_DISPLAY':'wayland-0'},supervised=True))):
+        process=paths.at('/proc')/process_id
+        process.mkdir(parents=True,exist_ok=True)
+        (process/'status').write_text(f'Uid:\t{os.getuid()}\n')
+        (process/'stat').write_text(f'{process_id} (chrome process) S '+'0 '*18+'123')
+        (process/'cgroup').write_text('0::/user.slice/ala-chrome.service\n')
+        (process/'cmdline').write_bytes(('\0'.join(args)+'\0').encode())
+    boot=paths.at('/proc/sys/kernel/random/boot_id');boot.parent.mkdir(parents=True,exist_ok=True);boot.write_text('test-boot')
+    value={'state':'healthy','supervisor_pid':int(pid),'browser_pid':int(browser),
+           'supervisor_start_ticks':'123','browser_start_ticks':'123','boot_id':'test-boot',
+           'updated_at':health.stamp(time.time()),'config_fingerprint':health.fingerprint(config.url),
+           'target_matches_config':True,'reason':'주 문서 확인','next_action':'실제 화면 별도 확인'}
+    state=health.state_path(home);state.parent.mkdir(parents=True,exist_ok=True)
+    state.write_text(json.dumps(value));state.chmod(0o600)
+    host.states[display.UNIT].update(ActiveState='active',MainPID=pid)
+
+
+def test_supervisor_record_and_actual_child_flags_are_both_required(setup):
+    config,paths,host,home=user_fixture(setup)
+    _seed_supervised_display(config,paths,host)
+    result=display.user_action('check',config=config,home=home,host=host,paths=paths)
+    assert result['exit_code']==0
+    assert any(r['id']=='chrome.health' and r['state']=='ok' for r in result['results'])
+    process=paths.at('/proc/322/cmdline')
+    process.write_bytes(process.read_bytes().replace(b'--remote-debugging-pipe\0',b''))
+    assert display.user_action('check',config=config,home=home,host=host,paths=paths)['exit_code']==1
+
+
+def test_supervisor_without_record_is_pending_without_claiming_site_is_down(setup):
+    from ala.display_health import state_path
+    config,paths,host,home=user_fixture(setup)
+    _seed_supervised_display(config,paths,host)
+    state_path(home).unlink()
+    before={str(p) for p in paths.root.rglob('*')}
+    result=display.user_action('check',config=config,home=home,host=host,paths=paths)
+    assert result['exit_code']==2
+    actual=next(r['actual'] for r in result['results'] if r['id']=='chrome.health')
+    assert '감시 기록을 아직' in actual['reason']
+    assert before=={str(p) for p in paths.root.rglob('*')}
+
+
+def test_supervisor_cannot_claim_unrelated_child_cgroup_is_healthy(setup):
+    config,paths,host,home=user_fixture(setup)
+    _seed_supervised_display(config,paths,host)
+    paths.at('/proc/322/cgroup').write_text('0::/other.service\n')
+    result=display.user_action('check',config=config,home=home,host=host,paths=paths)
+    assert result['exit_code']==1
+    assert any(r['id']=='chrome.process' and r['state']=='unknown' for r in result['results'])
+
+
+@pytest.mark.parametrize('unit',[display.UNIT,display.LEGACY])
+@pytest.mark.parametrize('action',['check','status'])
+def test_partial_service_query_failure_never_claims_healthy_running(setup,unit,action):
+    config,paths,host,home=user_fixture(setup)
+    _seed_supervised_display(config,paths,host)
+    host.show_failures[unit]=Command(1,'ActiveState=active\nLoadState=loaded\nMainPID=321\n','synthetic denied')
+    result=display.user_action(action,config=config,home=home,host=host,paths=paths)
+    assert result['state']=='unknown'
+    assert (result['check_exit_code'] if action=='status' else result['exit_code'])==1
+    assert any(r['id']=='chrome.runtime' and r['state']=='unknown' for r in result['results'])
+    assert any(r['id']=='chrome.health' and r['state']=='unknown' for r in result['results'])
+    assert not any(argv[:3] in (['systemctl','--user','start'],['systemctl','--user','stop']) for argv,_ in host.calls)
+
+
+@pytest.mark.parametrize('supervised',[False,True])
+@pytest.mark.parametrize('flag',['--remote-debugging-port=9222','--remote-debugging-port=0','--remote-debugging-address=localhost'])
+def test_network_debugging_flags_are_forbidden_in_every_display_mode(setup,supervised,flag):
+    config,paths,host,home=user_fixture(setup)
+    if supervised:
+        _seed_supervised_display(config,paths,host)
+        process=paths.at('/proc/322/cmdline')
+    else:
+        _seed_display_process(config,paths,host)
+        process=paths.at('/proc/321/cmdline')
+    process.write_bytes(process.read_bytes()+flag.encode()+b'\0')
+    result=display.user_action('check',config=config,home=home,host=host,paths=paths)
+    assert result['exit_code']==1
+    assert any(r['id']=='chrome.forbidden' and r['state']=='error' for r in result['results'])
+
+
+def test_debugging_pipe_requires_valid_supervisor_evidence(setup):
+    config,paths,host,home=user_fixture(setup)
+    _seed_display_process(config,paths,host)
+    process=paths.at('/proc/321/cmdline')
+    process.write_bytes(process.read_bytes()+b'--remote-debugging-pipe\0')
+    result=display.user_action('check',config=config,home=home,host=host,paths=paths)
+    assert result['exit_code']==1
+    assert any(r['id']=='chrome.forbidden' and r['actual']=='--remote-debugging-pipe' for r in result['results'])
+
+
 def test_registration_uses_stable_launcher_across_tool_releases(monkeypatch):
     monkeypatch.setattr(display,'RELEASE',Path('/opt/ala/releases/0.1.0rc14'))
     first=(display.unit_text(),display.desktop_text())
@@ -519,7 +611,7 @@ def test_apply_migrates_only_managed_versioned_launchers_once(setup,monkeypatch)
 def test_apply_starts_inactive_chrome_once_and_rechecks_health(setup):
     config,paths,host=setup
     host.real_user_check=True
-    host.process_on_start=lambda:_seed_display_process(config,paths,host)
+    host.process_on_start=lambda:_seed_supervised_display(config,paths,host)
     result=display.apply_display(config,host,paths)
     assert _started_commands(host)==[['systemctl','--user','start','--no-block',display.UNIT]]
     assert Report(result).exit_code==0

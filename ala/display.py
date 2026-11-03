@@ -546,12 +546,15 @@ def _profile(home):
     return home / '.config/ala/chrome-display'
 
 
-def chrome_arguments(config, home, manager):
+def chrome_arguments(config, home, manager, *, supervised=False):
     args = ['/usr/bin/google-chrome-stable', '--user-data-dir=' + str(_profile(home)),
             '--start-fullscreen', '--no-first-run', '--no-default-browser-check',
             '--hide-crash-restore-bubble', '--password-store=basic']
     if not manager.get('DISPLAY') and manager.get('WAYLAND_DISPLAY'):
         args.append('--ozone-platform=wayland')
+    if supervised:
+        from .display_health import RECOVERY_URL
+        return args + ['--remote-debugging-pipe', RECOVERY_URL]
     return args + [config.url]
 
 
@@ -583,9 +586,17 @@ def _check_user(config, home, host, paths):
         return {'exit_code':2, 'state':'pending', 'reason':str(exc),
                 'next_action':'다음 GNOME 로그인 또는 유지보수 재부팅 후 화면 환경을 다시 확인하세요.'}
     legacy = _unit_state(host, LEGACY)
+    state = _unit_state(host)
+    if legacy.get('QueryError') or state.get('QueryError'):
+        results.append(_result('chrome.runtime','unknown','기존·현재 표시 서비스 상태 조회',
+                               {'legacy':legacy.get('QueryError'),'current':state.get('QueryError')},
+                               '사용자 systemd 연결·권한을 확인한 뒤 다시 조회하세요.'))
+        results.append(_result('chrome.health','unknown','서비스와 연결된 유효한 감시 상태',
+                               '서비스 상태 조회가 실패하여 정상 판정을 보류했습니다.',
+                               'Chrome 로그와 사용자 서비스 연결을 확인하세요.'))
+        return Report(results).to_dict() | {'state':'unknown','service':state}
     if legacy.get('ActiveState') in {'active','activating'}:
         results.append(_result('chrome.legacy','pending','새 표시 서비스','기존 did-chrome 실행 중','ala chrome restart 또는 다음 GNOME 로그인에서 전환'))
-    state = _unit_state(host)
     if state.get('ActiveState') == 'failed':
         results.append(_result('chrome.runtime','error','Chrome 실행',state.get('Result'),'ala chrome logs 확인 후 ala chrome restart'))
         return Report(results).to_dict() | {'state':'error', 'service':state}
@@ -602,29 +613,66 @@ def _check_user(config, home, host, paths):
         if int(uid_line.split()[1]) != os.getuid():
             raise ValueError('다른 사용자 소유 프로세스입니다.')
         arguments = (process/'cmdline').read_bytes().decode().rstrip('\0').split('\0')
-        if '_chrome-run' in arguments:
-            results.append(_result('chrome.runtime','pending','DID URL 준비 후 Chrome 실행','네트워크/사이트 응답 대기','ala chrome logs'))
-            return Report(results).to_dict() | {'state':'waiting_site', 'service':state}
-        required = chrome_arguments(config, home, _manager(host))[1:]
+        supervised = '_chrome-run' in arguments
+        health = None
+        if supervised:
+            from .display_health import read_health
+            entry = Path(arguments[2]) if len(arguments) == 4 else None
+            if (entry is None or arguments[1] != '-I' or arguments[-1] != '_chrome-run'
+                    or entry.name != 'entry.py'
+                    or not (entry.parent in {RELEASE, Path('/opt/ala/current')}
+                            or entry.parent.is_relative_to('/opt/ala/releases'))):
+                raise ValueError('예상한 ala 감독 프로세스의 실행 인자가 아닙니다.')
+            health = read_health(home, paths, int(pid), config.url)
+            health_state = health['state']
+            if health_state == 'healthy' and not health.get('target_matches_config'):
+                health_state = 'unknown'
+            check_state = {'healthy':'ok','waiting_site':'pending','recovering':'pending',
+                           'failed':'error','unknown':'unknown'}[health_state]
+            results.append(_result('chrome.health',check_state,'관리 탭 주 문서·HTTP 지속 감시',health,
+                                   health.get('next_action',''),
+                                   'HTTP 응답·관리 탭의 문서 관측입니다. 앱 내부 데이터·실제 모니터 표시는 보증하지 않습니다.'))
+            browser_pid = health.get('browser_pid')
+            if type(browser_pid) is not int or browser_pid < 1 or health_state in {'unknown','failed'}:
+                return Report(results).to_dict() | {'state':health_state, 'service':state, 'health':health}
+            process = paths.at('/proc') / str(browser_pid)
+            supervisor_cgroup = (paths.at('/proc')/pid/'cgroup').read_text()
+            if not supervisor_cgroup.strip() or (process/'cgroup').read_text() != supervisor_cgroup:
+                raise ValueError('Chrome 자식과 감독 서비스의 cgroup이 다릅니다.')
+            uid_line = next(line for line in (process/'status').read_text().splitlines() if line.startswith('Uid:'))
+            if int(uid_line.split()[1]) != os.getuid():
+                raise ValueError('Chrome 자식의 소유자가 다릅니다.')
+            arguments = (process/'cmdline').read_bytes().decode().rstrip('\0').split('\0')
+        else:
+            results.append(_result('chrome.health','pending','사이트 지속 감시','기존 단독 Chrome 실행을 유지했습니다.',
+                                   '화면 관리에서 명시적으로 다시 시작하거나 다음 GNOME 로그인에서 지속 감시로 전환하세요.'))
+        required = chrome_arguments(config, home, _manager(host),supervised=supervised)[1:]
+        from .display_health import RECOVERY_URL
+        launch_url = RECOVERY_URL if supervised else config.url
         for expected in required:
             if expected is None:
                 results.append(_result('chrome.url','pending','DID URL','입력 대기','ala config edit'))
             else:
-                label = 'chrome.url' if expected == config.url else 'chrome.option.' + expected.split('=',1)[0].lstrip('-')
-                if expected == config.url:
+                label = 'chrome.url' if expected == launch_url else 'chrome.option.' + expected.split('=',1)[0].lstrip('-')
+                if expected == launch_url:
                     valid=arguments.count(expected)==1
                 else:
                     key=expected.split('=',1)[0]
                     valid=[arg for arg in arguments if arg.split('=',1)[0]==key]==[expected]
-                results.append(_result(label,'ok' if valid else 'error', expected, '일치' if valid else '없음/중복/다른 값','ala chrome restart' if not valid else ''))
-        for bad in ('--kiosk','--no-sandbox'):
+                results.append(_result(label,'ok' if valid else 'error', '로컬 복구 안내로 시작' if expected == RECOVERY_URL else expected,
+                                       '일치' if valid else '없음/중복/다른 값','ala chrome restart' if not valid else ''))
+        forbidden = ('--kiosk','--no-sandbox','--remote-debugging-port','--remote-debugging-address')
+        if not supervised:
+            forbidden += ('--remote-debugging-pipe',)
+        for bad in forbidden:
             if any(arg.split('=',1)[0]==bad for arg in arguments):
                 results.append(_result('chrome.forbidden','error','허용된 실행 옵션',bad,'ala chrome restart'))
     except (OSError, ValueError, StopIteration) as exc:
         results.append(_result('chrome.process','unknown','프로세스 확인',str(exc)))
     report=Report(results)
     return report.to_dict() | {'state':{0:'running',1:'error',2:'pending'}[report.exit_code], 'service':state,
-                                        'limits':'실행 인자 검사입니다. 실제 창·팝업·현재 탭 내용은 별도 확인합니다.'}
+                                        'health':health if 'health' in locals() else None,
+                                        'limits':'프로세스·감시 기록 검사입니다. 실제 창·팝업·앱 내용은 별도 확인합니다.'}
 
 
 def user_action(action, *, config=None, home=None, host=None, paths=None):
@@ -756,15 +804,11 @@ def session_start(*, config=None, home=None, host=None, paths=None, environment=
 
 
 def url_ready(url, *, opener=None):
-    opener=opener or urllib.request.urlopen
-    try:
-        with opener(urllib.request.Request(url,headers={'User-Agent':'ala-display-readiness/1'}),timeout=5) as response:
-            return 200 <= response.status < 400
-    except (urllib.error.URLError, OSError, ValueError):
-        return False
+    from .display_health import probe_url
+    return probe_url(url,opener=opener).ok
 
 
-def run_chrome(*, config=None, home=None, host=None, paths=None, sleeper=None, opener=None, execute=None):
+def run_chrome(*, config=None, home=None, host=None, paths=None, opener=None, supervisor_factory=None):
     host, paths = host or Host(), paths or Paths()
     if config is None:
         config,home=_load_user_config(paths)
@@ -788,16 +832,6 @@ def run_chrome(*, config=None, home=None, host=None, paths=None, sleeper=None, o
     os.chmod(profile,0o700)
     if not marker.exists():
         atomic_write(marker,'ala display profile v1\n',0o600)
-    sleeper=sleeper or time.sleep
-    attempts=0
-    while not url_ready(config.url,opener=opener):
-        if attempts % 6 == 0:
-            print('DID URL 응답 대기: TLS 검증을 유지하며 10초 후 재시도합니다.',flush=True)
-        attempts+=1
-        sleeper(10)
-    args=chrome_arguments(config,home,manager)
-    if execute is not None:
-        execute(args)
-        return 0
-    os.execv(args[0],args)
-    return 0
+    from .display_health import Supervisor
+    args=chrome_arguments(config,home,manager,supervised=True)
+    return (supervisor_factory or Supervisor)(config,home,args,paths=paths,opener=opener).run()

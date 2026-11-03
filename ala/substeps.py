@@ -86,6 +86,7 @@ STAGE_TASKS = {
         task('service', 'Chrome 자동 시작 등록', 'chrome.unit', 'chrome.autostart'),
         task('session', '로그인·Chrome 실행 상태 확인', 'display.session*', 'display.login_screen', 'display.gdm_runtime', 'display.gdm_diagnostics', 'chrome.runtime*', 'chrome.url', 'chrome.environment', 'chrome.legacy', 'chrome.process'),
         task('policy', 'Chrome 실행 옵션·실제 화면 정책 확인', 'display.live.*', 'chrome.option.*', '!chrome.option.user-data-dir', 'chrome.forbidden'),
+        task('health', '표시 사이트 감시·자동 복구', 'chrome.health*'),
     ],
 }
 

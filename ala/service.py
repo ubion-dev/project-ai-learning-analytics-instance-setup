@@ -35,7 +35,12 @@ class Operations:
             from .update import submit
             if type(payload.get('prerelease', False)) is not bool:
                 raise ValueError('시험판 선택은 boolean이어야 합니다.')
-            return submit(self.release, payload.get('prerelease', False))
+            return submit(self.release, payload.get('prerelease', False), paths=self.paths, host=self.host)
+        if action == 'update-status':
+            if payload.get('run_id') is not None and not isinstance(payload['run_id'], str):
+                raise ValueError('업데이트 실행 ID는 문자열이어야 합니다.')
+            from .update import status
+            return status(paths=self.paths, host=self.host, run_id=payload.get('run_id'))
         if action == 'config-show':
             return {'config': self.config().to_dict(), 'exists': self.paths.config.exists()}
         if action == 'config-save':
@@ -142,7 +147,7 @@ class Service:
 
     def authenticate(self):
         if os.geteuid() != 0:
-            if not sys.stdin.isatty():
+            if not (sys.stdin.isatty() and sys.stdout.isatty()):
                 result = subprocess.run(['sudo', '-n', '-v'], check=False)
             else:
                 result = subprocess.run(['sudo', '-v'], check=False)

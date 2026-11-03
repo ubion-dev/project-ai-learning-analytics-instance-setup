@@ -24,6 +24,14 @@ def test_long_runtime_evidence_does_not_push_its_next_action_out_of_view():
     assert report['results'][0]['actual'] == actual
 
 
+def test_site_monitoring_has_separate_actual_health_evidence():
+    rows, _ = children('chrome', report=checks(('chrome.runtime', 'ok'), ('chrome.health', 'pending')))
+    assert rows['session']['state'] == 'ok'
+    assert rows['health']['state'] == 'pending' and rows['health']['evidence'] == 'check'
+    rows, _ = children('chrome', report=checks(('chrome.runtime', 'ok')))
+    assert rows['health']['evidence'] == 'missing'
+
+
 def test_catalog_is_known_safe_and_every_install_stage_has_details():
     assert len(STAGE_TASKS) == 11
     for parent, tasks in STAGE_TASKS.items():
