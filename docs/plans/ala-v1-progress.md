@@ -473,3 +473,13 @@
 - 독립 refresh 회귀32개, TUI29개, 관련 통합227개를 검증했다. 최종 로컬 전체797 passed +54 subtests(160.41초), diff검사·고정 wheel 빌드·manifest62개 검증을 통과했다.
 - Linux opt-in 스모크에 실제 로컬 HTTP 정적 페이지와 JavaScript 동일주소 재로딩을 추가했다. 격리 namespace의 loopback만 활성화해 실제 Linux 신원과 Chrome/private CDP·반복 HTTPprobe를 대조하며 sandbox/외부 통신 차단을 유지한다. 로컬 Mac의3개opt-in skip을 실제Linux성공으로 기록하지 않으며 CI 결과가 남았다.
 - RC19 버전·설치/운영 안내를 준비했다. 실제 서버/Chrome과 기존 RC18은 변경하지 않았다. 다음 행동은 공개검사/CI의 실제Linux3시나리오/새PR/배포대조와RC19후보다. 사용자 장비의 실제 재탐색 주체는 여전히 미확정이다.
+
+## ALA-30 RC19 후보 완료
+
+- 최종 코드75ef09e00fdfb372239358e365ed5948c8599f65의 push CI41602769037 / PR CI41602877918 모두 성공했다. Python3.12 전체797 passed +54 subtests, 실제 Linux Chrome3개도 통과했다.
+- 실제 Linux 일반 사용자·sandbox·외부 인터페이스 없는 namespace에서 기존 제목 형식과 새 정적/JS 동일주소 재로딩을 검증했다. 실제 Linux 프로세스 신원·로컬 HTTP·private CDP를 사용하며, 가속 HTTP probe는 정상 화면의 추가 탐색을 만들지 않고 JS재로딩은 ala요청 증가 없이 브라우저 관측만 증가했다. 실제 Rocky GNOME/모니터 수용과는 구분한다.
+- 공개 이력/Bash/고정 의존성/빌드/진입점 검사를 통과했다. CI/로컬/익명 공개 다운로드의 byte 일치와 SHA-256·manifest62개 파일을 검증했다. SHA-256: f4809afd3687c44d48188fd35d352572fcb5a5146dda18a7e4b0923bb49a1c5a.
+- PR #8: https://github.com/ubion-dev/project-ai-learning-analytics-instance-setup/pull/8
+- 시험판: https://github.com/ubion-dev/project-ai-learning-analytics-instance-setup/releases/tag/v0.1.0-rc.19
+- RC19은 재현된 초기 복구 안내 누락과 값 없는 탐색 진단을 보완한 것이다. 사용자 장비의 실제 재로딩 원인은 아직 확정하지 않았으며 해당 증상의 해결 완료로 표시하지 않는다. 기존 RC18/실제 서버/현재 Chrome은 변경하지 않았다.
+- 후속은 CLI 업데이트 완료 후 화면 관리에서 명시적으로 한 번 재시작해 새 감독 코드를 적용하고, 재로딩 전후 표시/복구 요청과 브라우저 문서 이동 카운터를 비교하는 것이다. 기록이 없던 이전 실행을0회로 추정하지 않는다. 간편 설정 재적용은 필요하지 않다.
