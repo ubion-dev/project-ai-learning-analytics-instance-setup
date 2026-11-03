@@ -366,3 +366,10 @@
 - 기존 PR #6 설명을 최종 자동 설정/진행 상태 범위로 갱신했다: https://github.com/ubion-dev/project-ai-learning-analytics-instance-setup/pull/6
 - 시험판: https://github.com/ubion-dev/project-ai-learning-analytics-instance-setup/releases/tag/v0.1.0-rc.15
 - 진행 중 설정 작업이 끝난 뒤 ala update --prerelease로 갱신하고 다시 실행해 간편 설정을 한 번 적용한다. 실제 서버 변경·재부팅·Docker/GDM 재시작은 수행하지 않았다. 후속은 PR 검토·병합과 실기기 수용이다.
+
+## ALA-25 요구 확인 시작
+
+- 사용자는 Chrome 시작 명령도 직접 입력하지 않고 TUI에서 표시 대상/URL과 실행을 관리하려 함을 명확히 했다. 현재 Config와 실행기는 단일 URL·프로필·service이며 기본 두 탭에는 화면 편집/제어가 없는 것을 확인했다.
+- 코드 읽기 검토를 분담하고, GNOME 공식 물리/논리 출력 및 복제/확장 구분을 확인했다. 패널 수만으로 독립 출력이나 배치 가능 여부를 확정하지 않는다.
+- 출력 조사와 지원 판정을 먼저 수행하고 검증 가능한 배치 방식·구성 호환·TUI 제어 순서로 확장하는 요구를 계획에 기록했다. 연결/입력 구조가 아직 불확실하므로 임의 모니터 타깃이나 위치 플래그 기반의 배치 코드는 추가하지 않았다.
+- 런타임 코드·실제 서버·게시된 RC15는 변경하지 않았다. 다음 행동은 장비 입력 구조 확인과 PC가 인식하는 출력 조회 방식 확정이다.
