@@ -85,6 +85,6 @@ README는 설치 / 간편 설정 / 화면 관리 / 업데이트 / 문제 확인�
 ## 참고
 
 - https://raw.githubusercontent.com/GNOME/mutter/gnome-47/data/dbus-interfaces/org.gnome.Mutter.DisplayConfig.xml
-- GNOME Mutter의 Window.move_to_monitor 공식 API, Sigstore 공식 서명 검증 설명,
-  HTTPWG RFC9111을 설계 근거로 확인했다. 공식 문서 호스트는 후속 공개 검사에서
-  좁은 허용 목록과 회귀를 함께 추가한다.
+- https://gnome.pages.gitlab.gnome.org/mutter/meta/method.Window.move_to_monitor.html
+- https://docs.sigstore.dev/cosign/verifying/verify/
+- https://httpwg.org/specs/rfc9111.html

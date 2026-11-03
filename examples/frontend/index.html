@@ -1,0 +1,14 @@
+<!doctype html>
+<html lang="ko">
+<meta charset="utf-8">
+<meta name="ala-build-id" content="example-build-42">
+<meta name="ala-app-ready" content="false">
+<title>ala 합성 프론트 계약 예제</title>
+<main id="display">합성 화면 준비 중</main>
+<script>
+// This fixture has no remote data. Production code must finish its own required
+// initialization and data loading before changing the readiness signal.
+document.querySelector('#display').textContent = '합성 화면 준비 완료';
+document.querySelector('meta[name="ala-app-ready"]').content = 'true';
+</script>
+</html>

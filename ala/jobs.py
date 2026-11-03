@@ -99,6 +99,10 @@ class JobStore:
         if operation not in {"setup", "prepare"}:
             raise ValueError("허용되지 않은 설치 작업입니다.")
         with change_lock(self.paths):
+            from .runtime import RuntimeStore
+            runtimes = RuntimeStore(self.paths, self.host)
+            if any(runtimes.active(state) for state in runtimes.selections()):
+                raise RuntimeError('화면 적용·갱신 작업 중에는 설치를 시작하지 않습니다. 완료 후 다시 실행하세요.')
             config = config() if callable(config) else config
             if expected_config is not None and config != Config.from_dict(expected_config):
                 raise RuntimeError('검토 후 구성이 변경되었습니다. 변경 계획을 다시 확인하세요.')

@@ -31,6 +31,13 @@ def test_host_allowlist_does_not_allow_suffix_spoofing():
     assert 'unapproved URL host' in policy.findings(('https://' + host).encode())
 
 
+def test_new_official_display_signature_and_cache_sources_are_narrowly_allowed():
+    for host in ('gnome.pages.gitlab.gnome.org', 'httpwg.org', 'docs.sigstore.dev',
+                 'token.actions.githubusercontent.com'):
+        assert policy.findings(('https://' + host + '/documentation').encode()) == []
+        assert 'unapproved URL host' in policy.findings(('https://' + host + '.invalid/').encode())
+
+
 @pytest.fixture
 def repository(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)

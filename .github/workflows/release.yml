@@ -1,0 +1,88 @@
+name: signed ala release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ala-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  signed-release:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    # Administrators must protect this environment and release tag rules before
+    # automatic enrollment. A workflow file cannot configure those protections.
+    environment: ala-release
+    permissions:
+      contents: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v7.1.0
+        with:
+          python-version: '3.12'
+      - uses: ./.github/actions/install-gitleaks
+      - name: Require the protected main lineage and exact package version
+        env:
+          ALA_RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          git fetch origin main
+          git merge-base --is-ancestor HEAD origin/main
+          python - <<'PY'
+          import os, re, tomllib
+          tag = os.environ['ALA_RELEASE_TAG']
+          if not re.fullmatch(r'v\d+\.\d+\.\d+(?:-rc\.\d+)?', tag):
+              raise SystemExit('Unsupported release tag')
+          expected = re.sub(r'-rc\.(\d+)$', r'rc\1', tag[1:])
+          version = tomllib.load(open('pyproject.toml', 'rb'))['project']['version']
+          if version != expected:
+              raise SystemExit('Tag and package version differ')
+          with open(os.environ['GITHUB_ENV'], 'a') as out:
+              out.write('ALA_VERSION=' + version + '\n')
+          PY
+      - name: Inspect public history and test the exact release code
+        run: |
+          python scripts/check-public.py --history
+          python -m pip install --require-hashes -r requirements-dev.lock
+          bash -n install.sh
+          find scripts/rocky-linux -name '*.sh' -exec bash -n {} \;
+          python -m pytest -q --tb=no --show-capture=no --ignore=tests/test_linux_chrome_smoke.py
+      - name: Real Linux Chrome private pipe and sandbox smoke
+        run: |
+          ALA_SMOKE_USER="$(id -un)"
+          ALA_SMOKE_PYTHON="$(command -v python)"
+          sudo unshare --net -- sh -ec 'ip link set lo up; exec "$@"' ala-linux-smoke runuser -u "$ALA_SMOKE_USER" -- env \
+            PATH="$PATH" ALA_LINUX_CHROME_SMOKE=1 \
+            "$ALA_SMOKE_PYTHON" -m pytest tests/test_linux_chrome_smoke.py -q --tb=no --show-capture=no
+      - name: Build immutable bundle and bootstrap pinned verifier
+        run: |
+          python scripts/build-release.py
+          python - <<'PY'
+          from pathlib import Path
+          from ala.signature import bootstrap
+          from ala.system import Paths
+          bootstrap(paths=Paths(Path.cwd() / 'build/verifier'))
+          PY
+      - name: Sign the bundle with this tag workflow identity
+        run: |
+          "build/verifier/opt/ala-verifier/cosign-3.1.4" sign-blob --yes \
+            --bundle "dist/ala-${ALA_VERSION}.tar.gz.sigstore.json" \
+            "dist/ala-${ALA_VERSION}.tar.gz"
+      - name: Publish a new release without replacing existing files
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ALA_RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          ALA_PRERELEASE=()
+          if [[ "$ALA_RELEASE_TAG" == *-rc.* ]]; then ALA_PRERELEASE=(--prerelease); fi
+          gh release create "$ALA_RELEASE_TAG" --verify-tag --generate-notes "${ALA_PRERELEASE[@]}" \
+            "dist/ala-${ALA_VERSION}.tar.gz" \
+            "dist/ala-${ALA_VERSION}.tar.gz.sha256" \
+            "dist/ala-${ALA_VERSION}.tar.gz.sigstore.json"

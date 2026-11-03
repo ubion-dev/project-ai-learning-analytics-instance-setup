@@ -211,3 +211,37 @@ def test_chrome_logs_missing_user_journal_calls_the_same_account_root_fallback(m
     result = display.chrome_action('logs', Config(user='user'), host=host, paths=Paths())
     assert calls == [(host, UID)]
     assert result == fallback
+
+
+def test_named_target_journal_query_and_each_record_use_exact_scope():
+    unit='ala-chrome@'+'display-2.service'
+    host=JournalHost(Command(0,record('named event',_SYSTEMD_USER_UNIT=unit)),Command(0,''))
+    result=display_journal.read_display_journal(host,UID,unit=unit)
+    assert result['exit_code']==0 and 'named event' in result['log']
+    args=host.calls[0][0]
+    assert '_SYSTEMD_USER_UNIT='+unit in args and 'USER_UNIT='+unit in args
+    assert not any('*' in arg for arg in args)
+
+
+@pytest.mark.parametrize('unit',[None,'','*','ala-chrome@*.service','other.service','ala-chrome@../escape.service',
+                                'ala-chrome@'+'Default.service','ala-chrome@'+'display.service + _UID=0'])
+def test_unsafe_named_journal_scope_is_rejected_without_query(unit):
+    host=JournalHost()
+    result=display_journal.read_display_journal(host,UID,unit=unit)
+    assert result['exit_code']==1 and not host.calls
+
+
+def test_named_target_cannot_return_default_or_another_target_partial_log():
+    host=JournalHost(Command(0,runtime('default must remain hidden')),Command(0,''))
+    result=display_journal.read_display_journal(host,UID,unit='ala-chrome@'+'display-2.service')
+    assert result['state']=='unknown' and result['log']=='' and 'hidden' not in str(result)
+
+
+def test_named_target_user_journal_empty_uses_the_named_root_fallback(monkeypatch):
+    config=Config(schema_version=2,user='user',screens=[{'id':'display-2'}]).for_screen('display-2')
+    calls=[]
+    monkeypatch.setattr(display,'_account',lambda *_:(UID,UID,Path('/home/user')))
+    monkeypatch.setattr(display,'_user_call',lambda *_:{'exit_code':0,'log':''})
+    monkeypatch.setattr(display_journal,'read_display_journal',lambda h,u,**kw:calls.append((u,kw)) or {'exit_code':0,'log':'named'})
+    assert display.chrome_action('logs',config,host=JournalHost())['log']=='named'
+    assert calls==[(UID,{'unit':'ala-chrome@'+'display-2.service'})]

@@ -178,3 +178,119 @@ def test_real_linux_display_probe_and_page_reload_are_distinguished(tmp_path, mo
         server.shutdown()
         server.server_close()
         worker.join(timeout=2)
+
+
+def test_real_linux_frontend_manifest_private_reload_and_readiness_postconditions(tmp_path):
+    if sys.platform != 'linux':
+        pytest.skip('Linux frontend smoke is unavailable on this OS; Mac is not Linux validation.')
+    require(os.geteuid() != 0, 'Linux frontend smoke requires an ordinary sandboxed browser user.')
+    interfaces = [line.split(':', 1)[0].strip()
+                  for line in Path('/proc/self/net/dev').read_text().splitlines()[2:] if ':' in line]
+    require(bool(interfaces) and all(name == 'lo' for name in interfaces),
+            'Linux frontend smoke requires an isolated loopback-only network namespace.')
+    chrome = shutil.which('google-chrome-stable') or shutil.which('google-chrome')
+    require(bool(chrome), 'Linux frontend smoke requires official Google Chrome.')
+
+    import json
+    import threading
+    import time
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    from ala import display_health as health, frontend
+    from ala.cdp import PipeBrowser
+    from ala.config import Config
+
+    deployment = {'schema_version': 1, 'deployment_seq': 1, 'build_id': 'build-a', 'ready': True}
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            if self.path == '/deployment.json':
+                body, kind = json.dumps(deployment).encode(), 'application/json'
+            else:
+                body = ('<!doctype html><meta name="ala-build-id" content="' + deployment['build_id'] + '">'
+                        '<meta name="ala-app-ready" content="false"><p>synthetic display</p>'
+                        '<script>setTimeout(()=>document.querySelector(\'meta[name="ala-app-ready"]\').content="true",200)</script>').encode()
+                kind = 'text/html'
+            self.send_response(200)
+            self.send_header('Content-Type', kind)
+            self.send_header('Cache-Control', 'no-store')
+            self.send_header('Content-Length', str(len(body)))
+            self.end_headers()
+            try:
+                self.wfile.write(body)
+            except (BrokenPipeError, ConnectionResetError):
+                pass
+        def log_message(self, *_):
+            pass
+
+    server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+    worker = threading.Thread(target=server.serve_forever, daemon=True)
+    worker.start()
+    supervisor = None
+    try:
+        origin = 'http://127.0.0.1:' + str(server.server_port)
+        manifest_url = origin + '/deployment.json'
+        config = Config(user='user', url=origin + '/display')
+        arguments = [chrome, '--headless=new', '--disable-background-networking',
+                     '--disable-component-update', '--disable-default-apps', '--disable-extensions',
+                     '--disable-sync', '--metrics-recording-only', '--no-first-run',
+                     '--no-default-browser-check', '--password-store=basic', '--remote-debugging-pipe',
+                     '--user-data-dir=' + str(tmp_path / 'frontend-profile'), health.RECOVERY_URL]
+        supervisor = health.Supervisor(config, tmp_path, arguments,
+            transport_factory=lambda argv: PipeBrowser(argv, spawn=quiet_spawn),
+            config_revision='c' * 64, frontend=frontend.FrontendConfig(True, manifest_url))
+        def pump(until):
+            deadline = time.monotonic() + 10
+            while time.monotonic() < deadline:
+                event = supervisor.browser.next_event(timeout=0.05)
+                if event is not None:
+                    supervisor.event(event)
+                supervisor.control_tick()
+                if until():
+                    return
+            pytest.fail('Linux frontend document/build/readiness postcondition timed out.', pytrace=False)
+        supervisor.start()
+        supervisor.probe()
+        pump(lambda: supervisor.value['state'] == 'healthy')
+        pump(lambda: supervisor.observe_frontend()['app_ready'] is True)
+        coordinator = frontend.Coordinator({}, save=lambda _: None)
+        def observe(_):
+            current = supervisor.observe_frontend()
+            return {'running': True, 'build_id': current['build_id'], 'app_ready': current['app_ready']}
+        def reload(target, current, token):
+            response = frontend.request_reload(target, 'c' * 64, tmp_path,
+                expected_build_id=current.build_id, deployment_seq=current.deployment_seq, source='frontend')
+            require(response.get('state') == 'pending', 'Linux private reload request was not accepted.')
+            pump(lambda: (supervisor.value.get('control') or {}).get('nonce') == response['nonce'] and
+                         supervisor.value['control'].get('state') in {'completed', 'failed'})
+            state = supervisor.value['control']['state']
+            return {'exit_code': 0 if state == 'completed' else 1, 'state': state}
+        def poll():
+            return coordinator.poll(manifest_url, ['default'], observe=observe,
+                reserve=lambda *_: {'revision': 'c' * 64}, check=lambda _: True,
+                reload=reload, finish=lambda *_: None)
+        poll()
+        require(poll()['state'] == 'completed' and supervisor.value['navigation']['display_requests'] == 1,
+                'An already loaded ready build was unnecessarily navigated.')
+        # A SPA may change only its fragment. The following explicit deployment
+        # control must still load one new document rather than accept that
+        # same-document move as a reload or crash on its missing loader ID.
+        supervisor._call('Runtime.evaluate', {'expression': "location.hash='synthetic-route'"})
+        deployment.update(deployment_seq=2, build_id='build-b')
+        require(poll()['state'] == 'pending', 'A new deployment did not wait for a second ready observation.')
+        require(poll()['state'] == 'completed', 'A new frontend deployment did not satisfy private CDP postconditions.')
+        require(supervisor.value['control'].get('build_id') == 'build-b' and supervisor.value['control'].get('app_ready') is True,
+                'Linux reload completion did not confirm the requested build and app readiness.')
+        for _ in range(3):
+            supervisor.probe()
+            poll()
+        require(supervisor.value['navigation']['display_requests'] == 2 and supervisor.value['navigation']['recovery_requests'] == 0,
+                'Repeated deployment checks or healthy HTTP probes caused an extra navigation.')
+        print('Linux frontend private reload validated: deployment_once_and_ready')
+    except Exception:
+        pytest.fail('Linux frontend private reload smoke failed.', pytrace=False)
+    finally:
+        if supervisor is not None and supervisor.browser is not None:
+            supervisor.browser.close()
+        server.shutdown()
+        server.server_close()
+        worker.join(timeout=2)

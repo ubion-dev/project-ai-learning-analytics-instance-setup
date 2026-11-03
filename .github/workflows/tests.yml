@@ -39,6 +39,8 @@ jobs:
         run: |
           bash -n install.sh
           find scripts/rocky-linux -name '*.sh' -exec bash -n {} \;
+      - name: GNOME extension module syntax (actual GNOME acceptance remains separate)
+        run: node --input-type=module --check < assets/gnome-extension/ala-display@example.com/extension.js
       - name: Real Linux Chrome proc smoke; sandbox enabled and network isolated
         timeout-minutes: 2
         run: |

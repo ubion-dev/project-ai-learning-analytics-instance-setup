@@ -50,7 +50,7 @@ def test_update_menu_requires_explicit_channel_and_start_then_tracks_completion(
         app = SimpleApp(service=service)
         async with app.run_test(size=(80, 24)) as pilot:
             await pilot.pause()
-            assert len(app.query_one('#tabs', Tabs).query('Tab')) == 2
+            assert len(app.query_one('#tabs', Tabs).query('Tab')) == 3
             await pilot.press('u')
             await pilot.pause()
             screen = app.screen

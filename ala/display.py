@@ -19,6 +19,7 @@ from .system import Host, Paths, atomic_json, atomic_write
 UNIT = 'ala-chrome.service'
 LEGACY = 'did-chrome.service'
 RELEASE = Path(__file__).resolve().parents[1]
+EXTENSION_SOURCE = Path(__file__).resolve().parents[1] / 'assets/gnome-extension'
 DISPLAY_LAUNCHER = Path('/usr/local/bin/ala')
 MARKER = '# ala managed automatic login'
 DESKTOP_MARKER = '# ala managed display autostart'
@@ -65,8 +66,23 @@ def _quote(value):
     return '"' + str(value).replace('\\', '\\\\').replace('"', '\\"').replace('%', '%%') + '"'
 
 
-def unit_text():
-    command = ' '.join(_quote(v) for v in (DISPLAY_LAUNCHER, '_chrome-run'))
+def unit_name(target='default'):
+    from .config import ScreenConfig
+    ScreenConfig(id=target)
+    return UNIT if target=='default' else f'ala-chrome@{target}.service'
+
+
+def _context(config,target=None):
+    target=config.target_id if target is None else target
+    return config if config.target_id==target and hasattr(config,'_target_id') else config.for_screen(target,revision=config.config_revision)
+
+
+def _autostart_enabled(config):
+    return config.display and any(t.autostart for t in config.screen_targets())
+
+
+def unit_text(target='default'):
+    command = ' '.join(_quote(v) for v in (DISPLAY_LAUNCHER, '_runtime-dispatch',target))
     return f'''{UNIT_MARKER}
 [Unit]
 Description=ala DID Chrome display
@@ -198,8 +214,14 @@ def _user_call(config, host, paths, action):
     environment = [f'HOME={home}', 'PATH=/usr/sbin:/usr/bin:/sbin:/bin', 'LANG=C.UTF-8']
     if has_runtime:
         environment += [f'XDG_RUNTIME_DIR={path}', f'DBUS_SESSION_BUS_ADDRESS=unix:path={path}/bus']
+    if config.runtime_pin:
+        pin=config.runtime_pin.get('config_path')
+        if not isinstance(pin,str) or not pin.startswith('/'):
+            return {'exit_code':1,'state':'unknown','reason':'root 실행 스냅샷 경로를 확인하지 못했습니다.'}
+        environment += ['ALA_RUNTIME_CONFIG='+pin,'ALA_RUNTIME_TARGET='+config.target_id]
+    target_args=[] if config.target_id=='default' else ['--target',config.target_id]
     result = host.run(['runuser', '-u', config.user, '--', 'env', '-i', *environment, str(RELEASE / '.venv/bin/python'),
-                       '-I', str(RELEASE / 'entry.py'), '_chrome-user', action], timeout=30)
+                       '-I', str(RELEASE / 'entry.py'), '_chrome-user', action,*target_args], timeout=30)
     try:
         value = json.loads(result.stdout)
     except (ValueError, TypeError):
@@ -210,6 +232,53 @@ def _user_call(config, host, paths, action):
         value.update(exit_code=1, state='error')
     return value
 
+
+
+class BudgetHost:
+    """Clamp every external call to one monotonic operation budget."""
+    def __init__(self,host,timeout):
+        if not isinstance(timeout,(int,float)) or isinstance(timeout,bool) or timeout<=0:
+            raise ValueError('양수의 작업 제한 시간이 필요합니다.')
+        self.host,self.deadline=host,time.monotonic()+timeout
+    def run(self,argv,**kwargs):
+        from .system import Command
+        remaining=self.deadline-time.monotonic()
+        if remaining<=0:return Command(124,'','작업 제한 시간 초과')
+        kwargs['timeout']=min(kwargs.get('timeout',10),remaining)
+        return self.host.run(argv,**kwargs)
+
+
+def _install_extension(paths):
+    from .monitors import UUID
+    source=EXTENSION_SOURCE/UUID
+    destination=paths.at('/usr/share/gnome-shell/extensions/'+UUID)
+    for name in ('metadata.json','extension.js'):
+        _write_managed(destination/name,(source/name).read_text(),paths.backups)
+
+
+def _extension_activation(host,*,apply=False):
+    import ast
+    from .monitors import UUID
+    disabled=host.run(['gsettings','get','org.gnome.shell','disable-user-extensions'])
+    enabled=host.run(['gsettings','get','org.gnome.shell','enabled-extensions'])
+    if disabled.returncode or enabled.returncode:
+        return {'state':'pending','reason':'GNOME 확장 설정을 아직 조회하지 못했습니다.'}
+    if disabled.stdout.strip()=='true':
+        return {'state':'blocked','reason':'외부 GNOME 확장 차단 정책이 활성화되어 있습니다.'}
+    try:
+        text=enabled.stdout.strip()
+        if text.startswith('@as '):text=text[4:]
+        values=ast.literal_eval(text)
+        if not isinstance(values,list) or any(not isinstance(item,str) for item in values):raise ValueError()
+    except (ValueError,SyntaxError,TypeError):
+        return {'state':'unknown','reason':'GNOME 확장 목록의 형식을 확인하지 못했습니다.'}
+    if UUID not in values:
+        if not apply:return {'state':'change_required','reason':'화면 관리 확장 활성화 등록이 필요합니다.'}
+        response=host.run(['gsettings','set','org.gnome.shell','enabled-extensions',repr(values+[UUID])])
+        if response.returncode:return {'state':'unknown','reason':'GNOME 확장 활성화 등록을 확인하지 못했습니다.'}
+        confirmed=_extension_activation(host)
+        if confirmed['state']!='ok':return {'state':'pending','reason':'GNOME 확장 목록 저장을 재확인하지 못했습니다. 사용자 bus 연결 후 다시 설정하세요.'}
+    return {'state':'ok','reason':'GNOME 확장 활성화가 등록되었습니다. 새 설치는 재로그인 후 로드됩니다.'}
 
 def _gdm_diagnostics(host):
     """Summarize current-boot evidence without exporting raw authentication logs."""
@@ -280,11 +349,19 @@ def inspect_display_parts(config: Config, host=None, paths=None, *, include_runt
                     results.append(_file_result('display.autologin', gdm, candidate, os.geteuid()))
                 else:
                     results.append(_result('display.autologin', 'not_applicable', False, '자동 로그인 미관리'))
-            unit_path=paths.at('/etc/systemd/user/' + UNIT)
-            if unit_path.is_file() and not unit_path.is_symlink() and UNIT_MARKER not in unit_path.read_text():
-                results.append(_result('chrome.unit','blocked','ala 관리 unit','관리되지 않은 동명 unit','기존 파일을 직접 확인하세요.'))
-            else:
-                results.append(_file_result('chrome.unit', unit_path, unit_text(), os.geteuid()))
+            for target in config.screen_targets():
+                unit_path=paths.at('/etc/systemd/user/' + unit_name(target.id))
+                id='chrome.unit' if target.id=='default' else 'chrome.unit.'+target.id
+                if unit_path.is_file() and not unit_path.is_symlink() and UNIT_MARKER not in unit_path.read_text():
+                    results.append(_result(id,'blocked','ala 관리 unit','관리되지 않은 동명 unit','기존 파일을 직접 확인하세요.'))
+                else:
+                    results.append(_file_result(id, unit_path, unit_text(target.id), os.geteuid()))
+            if config.display:
+                from .monitors import UUID
+                for name in ('metadata.json','extension.js'):
+                    results.append(_file_result('display.extension.'+name,
+                        paths.at('/usr/share/gnome-shell/extensions/'+UUID+'/'+name),
+                        (EXTENSION_SOURCE/UUID/name).read_text(),os.geteuid()))
             marker = paths.at(str(home / '.config/gnome-initial-setup-done'))
             good = marker.is_file() and not marker.is_symlink() and marker.stat().st_uid == uid
             results.append(_result('display.initial_setup', 'ok' if good else 'change_required', '첫 실행 완료 마커', '있음' if good else '없음/소유자 차이', 'ala setup --apply' if not good else ''))
@@ -296,18 +373,24 @@ def inspect_display_parts(config: Config, host=None, paths=None, *, include_runt
                     results.append(_result(id, state, expected, value.stdout.strip() or value.stderr.strip(), 'ala setup --apply' if state != 'ok' else ''))
         if config.display:
             results.append(_configuration_readiness(results))
-        if config.display and config.autostart:
+        if _autostart_enabled(config):
             results.append(_file_result('chrome.autostart', autostart, desktop_text(), uid))
         elif autostart.exists() or autostart.is_symlink():
             state = 'blocked' if autostart.is_symlink() or DESKTOP_MARKER not in autostart.read_text() else 'change_required'
             results.append(_result('chrome.autostart', state, '자동 시작 등록 없음', '등록 있음', 'ala setup --apply'))
         else:
             results.append(_result('chrome.autostart', 'ok', False, False))
-        if config.display and config.autostart and not config.url:
-            results.append(_result('chrome.url', 'pending', '로그인 없는 DID URL', '입력 대기', 'ala config edit'))
+        for target in config.screen_targets():
+            if config.display and target.autostart and not target.url:
+                results.append(_result('chrome.url' if target.id=='default' else 'chrome.url.'+target.id, 'pending', '로그인 없는 DID URL', '입력 대기', 'ala config edit'))
     except (OSError, ValueError) as exc:
         results.append(_result('display.inspect', 'blocked' if isinstance(exc, ValueError) else 'unknown', '표시 구성 조회', str(exc)))
         return results, []
+    try:
+        schedule=_frontend_schedule(config,host,paths)
+        if schedule:results.append(schedule)
+    except (OSError,ValueError,RuntimeError):
+        results.append(_result('frontend.timer','unknown','배포 감시 timer 조회','조회 실패'))
     if not include_runtime:
         return results, []
     configuration, results = results, []
@@ -336,16 +419,22 @@ def inspect_display_parts(config: Config, host=None, paths=None, *, include_runt
                                    '잠금 해제된 세션', locked or '잠금 상태 조회 불가',
                                    '잠금 정책 적용 후 재부팅하여 자동 로그인 확인' if locked == 'yes' else '',
                                    '잠금 힌트는 실제 화면 표시를 검증하지 않습니다.'))
-            if config.autostart and config.url:
-                runtime = _user_call(config, host, paths, 'check')
-                if isinstance(runtime.get('results'), list):
-                    results.extend(CheckResult(**item) for item in runtime['results'])
+            for target in config.screen_targets():
+                if target.autostart and target.url:
+                    runtime = _user_call(config.for_screen(target.id), host, paths, 'check')
+                    if config.schema_version==2 and (runtime.get('service') or {}).get('ActiveState') in {'active','activating'}:
+                        window=_user_call(config.for_screen(target.id),host,paths,'windows')
+                        results.append(_result('chrome.window.'+target.id,window.get('state','unknown'),'실제 관리 창·출력 배치',window,window.get('next_action','화면 관리에서 실제 배치를 확인하세요.')))
+                    if isinstance(runtime.get('results'), list):
+                        for item in runtime['results']:
+                            if target.id!='default':item=item | {'id':item['id']+'.'+target.id}
+                            results.append(CheckResult(**item))
+                    else:
+                        results.append(_result('chrome.runtime' if target.id=='default' else 'chrome.runtime.'+target.id, runtime.get('state', 'unknown'), 'Chrome 실행 확인',
+                                               runtime.get('reason', '응답 없음'), runtime.get('next_action', '')))
                 else:
-                    results.append(_result('chrome.runtime', runtime.get('state', 'unknown'), 'Chrome 실행 확인',
-                                           runtime.get('reason', '응답 없음'), runtime.get('next_action', '')))
-            else:
-                results.append(_result('chrome.runtime', 'not_applicable', '자동 시작 요구 없음',
-                                       '자동 시작 꺼짐' if not config.autostart else '주소 입력 대기'))
+                    results.append(_result('chrome.runtime' if target.id=='default' else 'chrome.runtime.'+target.id, 'not_applicable', '자동 시작 요구 없음',
+                                           '자동 시작 꺼짐' if not target.autostart else '주소 입력 대기'))
             settings = _user_call(config, host, paths, 'settings')
             for schema, key, expected in SETTINGS:
                 name = schema + '.' + key
@@ -401,7 +490,7 @@ def _prepare_user_files(config, home: Path):
     """Called with the target UID, so user-controlled home paths never grant root writes."""
     desktop = home / '.config/autostart/ala-display.desktop'
     changed = False
-    if config.display and config.autostart:
+    if _autostart_enabled(config):
         if desktop.exists() and DESKTOP_MARKER not in desktop.read_text():
             raise ValueError('관리되지 않은 ala-display.desktop이 있습니다.')
         # Root provisioning backed up any previous managed file before delegating.
@@ -424,6 +513,34 @@ def _prepare_user_files(config, home: Path):
             changed |= _write_managed(marker,marker.read_text())
     return changed
 
+
+
+def _frontend_schedule(config,host,paths,*,apply=False):
+    enabled=any(target.frontend.enabled for target in config.screen_targets())
+    timer='ala-frontend.timer'
+    path=paths.at('/etc/systemd/system/'+timer)
+    if not enabled and not path.exists() and not path.is_symlink():return None
+    if path.exists() or path.is_symlink():
+        from .auto_update import MARKER as schedule_marker
+        if path.is_symlink() or not path.is_file() or schedule_marker not in path.read_text():
+            return _result('frontend.timer','blocked','ala 관리 timer','외부 동명 timer','기존 timer를 직접 확인하세요.')
+    if apply and enabled:
+        from .auto_update import register_units
+        register_units(paths=paths,host=host)
+    registered=host.run(['systemctl','is-enabled',timer])
+    active=host.run(['systemctl','is-active',timer])
+    if registered.returncode in {124,127} or active.returncode in {124,127}:
+        return _result('frontend.timer','unknown','배포 감시 timer 상태','조회 실패','systemd 연결 확인')
+    current=registered.returncode==0 and registered.stdout.strip()=='enabled'
+    running=active.returncode==0 and active.stdout.strip()=='active'
+    changed=(enabled and not (current and running)) or (not enabled and (current or running))
+    if changed and apply:
+        command=['systemctl','enable','--now',timer] if enabled else ['systemctl','disable','--now',timer]
+        response=host.run(command)
+        if response.returncode:return _result('frontend.timer','unknown',enabled,'등록 변경 확인 실패','systemd timer 상태 확인')
+        return _frontend_schedule(config,host,paths)
+    return _result('frontend.timer','change_required' if changed else 'ok',enabled,
+                   {'enabled':current,'active':running},'ala setup --apply' if changed else '')
 
 def apply_display(config: Config, host=None, paths=None):
     host, paths = host or Host(), paths or Paths()
@@ -449,7 +566,13 @@ def apply_display(config: Config, host=None, paths=None):
             if candidate != original or (config.display and config.autologin):
                 _write_managed(gdm, candidate, paths.backups)
         if config.display:
-            _write_managed(unit_path, unit_text(), paths.backups)
+            for target in config.screen_targets():
+                path=paths.at('/etc/systemd/user/'+unit_name(target.id))
+                _safe_parents(path)
+                if path.exists() and (not path.is_file() or UNIT_MARKER not in path.read_text()):
+                    raise ValueError('관리되지 않은 대상 unit을 덮어쓰지 않습니다.')
+                _write_managed(path, unit_text(target.id), paths.backups)
+            _install_extension(paths)
             if config.autologin:
                 current = host.run(['systemctl','is-enabled','gdm.service'])
                 if current.stdout.strip() != 'enabled':
@@ -463,7 +586,7 @@ def apply_display(config: Config, host=None, paths=None):
             _safe_parents(desktop)
             if not desktop.is_file() or DESKTOP_MARKER not in desktop.read_text():
                 raise ValueError('관리되지 않은 자동 실행 파일을 변경하지 않습니다.')
-            desired=desktop_text() if config.display and config.autostart else None
+            desired=desktop_text() if _autostart_enabled(config) else None
             info=desktop.stat()
             if desktop.read_text()!=desired or info.st_uid!=uid or stat.S_IMODE(info.st_mode)!=0o644:
                 _backup_file(desktop,paths.backups)
@@ -475,6 +598,8 @@ def apply_display(config: Config, host=None, paths=None):
         prepared = _user_call(config, host, paths, 'prepare')
         if prepared.get('exit_code', 1):
             return [_result('display.prepare', prepared.get('state','pending'), '사용자 자동 시작 준비', prepared.get('reason','사용자 runtime 필요'), 'GNOME 로그인 후 재실행')]
+        schedule=_frontend_schedule(config,host,paths,apply=True)
+        if schedule and schedule.state not in {'ok','not_applicable'}:return [schedule]
         # Setup only provisions registration. Boot autostart and explicit screen
         # management own the Chrome lifecycle, independently of installation.
         return inspect_display(config, host, paths, configuration_only=True)
@@ -484,7 +609,8 @@ def apply_display(config: Config, host=None, paths=None):
 
 def chrome_action(action, config: Config, host=None, paths=None):
     host, paths = host or Host(), paths or Paths()
-    if action not in {'start','stop','restart','status','logs','check'}:
+    config=_context(config)
+    if action not in {'start','stop','restart','status','logs','check','outputs','windows','place','reload'}:
         raise ValueError('허용되지 않은 Chrome 명령입니다.')
     if action in {'start','restart'} and (not config.display or not config.url):
         return {'exit_code': 2, 'state':'pending', 'reason':'화면 설정과 DID URL을 먼저 지정하세요.'}
@@ -505,11 +631,11 @@ def chrome_action(action, config: Config, host=None, paths=None):
                        any(line.strip() and line.strip() not in empty_markers for line in log.splitlines()))
         if result.get('exit_code') != 0 or not has_entries:
             from .display_journal import read_display_journal
-            return read_display_journal(host, uid)
+            return read_display_journal(host, uid) if config.target_id=='default' else read_display_journal(host, uid,unit=unit_name(config.target_id))
     return result
 
 
-def _load_user_config(paths=Paths()):
+def _load_user_config(paths=Paths(),target='default',*,runtime=False):
     if os.getuid() == 0:
         raise PermissionError('Chrome은 일반 사용자로 실행하세요.')
     p = paths.config
@@ -517,10 +643,17 @@ def _load_user_config(paths=Paths()):
     if p.is_symlink() or not p.is_file() or info.st_uid != 0 or info.st_mode & 0o022:
         raise PermissionError('root 소유의 쓰기 보호된 ala 구성이 필요합니다.')
     config = Config.load(p)
+    revision=''
+    if runtime or os.environ.get('ALA_RUNTIME_CONFIG'):
+        from .runtime import load_user_selection
+        selected=load_user_selection(target or os.environ.get('ALA_RUNTIME_TARGET','default'),paths=paths)
+        if selected:
+            config=Config.from_dict(selected['config'])
+            revision=selected['revision']
     identity = pwd.getpwuid(os.getuid())
     if config.user != identity.pw_name:
         raise PermissionError('지정한 화면 사용자로 실행하세요.')
-    return config, Path(identity.pw_dir)
+    return (config if target is None else config.for_screen(target,revision=revision)), Path(identity.pw_dir)
 
 
 def _manager(host):
@@ -550,14 +683,16 @@ def _confirmed_unit_state(value):
         'active','activating','inactive','failed','deactivating','reloading'}
 
 
-def _profile(home):
-    return home / '.config/ala/chrome-display'
+def _profile(home,target='default'):
+    unit_name(target)
+    return home / ('.config/ala/chrome-display' if target=='default' else '.config/ala/chrome-displays/'+target)
 
 
 def chrome_arguments(config, home, manager, *, supervised=False):
-    args = ['/usr/bin/google-chrome-stable', '--user-data-dir=' + str(_profile(home)),
-            '--start-fullscreen', '--no-first-run', '--no-default-browser-check',
+    args = ['/usr/bin/google-chrome-stable', '--user-data-dir=' + str(_profile(home,config.target_id)),
+            '--no-first-run', '--no-default-browser-check',
             '--hide-crash-restore-bubble', '--password-store=basic']
+    if config.layout=='fullscreen':args.insert(2,'--start-fullscreen')
     if not manager.get('DISPLAY') and manager.get('WAYLAND_DISPLAY'):
         args.append('--ozone-platform=wayland')
     if supervised:
@@ -611,6 +746,8 @@ def _observe_chrome_process(process, expected_arguments, *, raw=None):
 
 
 def _check_user(config, home, host, paths):
+    config=_context(config)
+    unit=unit_name(config.target_id)
     results = []
     try:
         _manager(host)
@@ -618,8 +755,8 @@ def _check_user(config, home, host, paths):
     except RuntimeError as exc:
         return {'exit_code':2, 'state':'pending', 'reason':str(exc),
                 'next_action':'다음 GNOME 로그인 또는 유지보수 재부팅 후 화면 환경을 다시 확인하세요.'}
-    legacy = _unit_state(host, LEGACY)
-    state = _unit_state(host)
+    legacy = _unit_state(host, LEGACY) if config.target_id=='default' else {'ActiveState':'inactive'}
+    state = _unit_state(host,unit)
     if legacy.get('QueryError') or state.get('QueryError'):
         results.append(_result('chrome.runtime','unknown','기존·현재 표시 서비스 상태 조회',
                                {'legacy':legacy.get('QueryError'),'current':state.get('QueryError')},
@@ -652,13 +789,16 @@ def _check_user(config, home, host, paths):
         supervised = '_chrome-run' in arguments
         if supervised:
             from .display_health import read_health
-            entry = Path(arguments[2]) if len(arguments) == 4 else None
-            if (entry is None or arguments[1] != '-I' or arguments[-1] != '_chrome-run'
+            entry = Path(arguments[2]) if len(arguments) in {4,6} else None
+            suffix=arguments[3:]
+            allowed=[['_chrome-run','--target',config.target_id]]
+            if config.target_id=='default':allowed.append(['_chrome-run'])
+            if (entry is None or arguments[1] != '-I' or suffix not in allowed
                     or entry.name != 'entry.py'
                     or not (entry.parent in {RELEASE, Path('/opt/ala/current')}
                             or entry.parent.is_relative_to('/opt/ala/releases'))):
                 raise ValueError('예상한 ala 감독 프로세스의 실행 인자가 아닙니다.')
-            health = read_health(home, paths, int(pid), config.url)
+            health = read_health(home, paths, int(pid), config.url,target_id=config.target_id)
             health_state = health['state']
             if health_state == 'healthy' and not health.get('target_matches_config'):
                 health_state = 'unknown'
@@ -714,21 +854,132 @@ def _check_user(config, home, host, paths):
                                     health['next_action'])
         if health_result is not None:
             results.append(health_result)
+    process_verified=not any(item.state in {'error','unknown','blocked'} for item in results)
     report=Report(results)
-    return report.to_dict() | {'state':{0:'running',1:'error',2:'pending'}[report.exit_code], 'service':state,
+    return report.to_dict() | {'process_verified':process_verified,'state':{0:'running',1:'error',2:'pending'}[report.exit_code], 'service':state,
                                         'health':health,
                                         'limits':'프로세스·감시 기록 검사입니다. 실제 창·팝업·앱 내용은 별도 확인합니다.'}
 
 
-def user_action(action, *, config=None, home=None, host=None, paths=None):
+
+def _stop_evidence(config,home,host,paths,state):
+    pid=state.get('MainPID','0')
+    if not re.fullmatch(r'[1-9][0-9]*',pid):
+        # A stopped supervisor can leave a browser in a separate GNOME scope.
+        # Repeat stop must not turn that pending result into a false success.
+        if _foreign_profile_pid(paths,_profile(home,config.target_id)):
+            return {'state':'unknown','reason':'중지된 서비스와 별도로 표시 프로필을 사용하는 프로세스가 남아 있습니다.'}
+        from .display_health import state_path,_read_json,boot_id
+        path=state_path(home,config.target_id)
+        if not path.exists() and not path.is_symlink():return None
+        try:
+            record=_read_json(path)
+            if record.get('boot_id')!=boot_id(paths):return None
+            if record.get('target_id','default')!=config.target_id:raise ValueError()
+            windows=(record.get('placement') or {}).get('windows')
+            if (not isinstance(windows,list) or len(windows)>32
+                    or any(not isinstance(w,dict) or type(w.get('id')) is not int or w['id']<1 for w in windows)):
+                raise ValueError()
+            return {'state':'previous_windows','window_ids':[w['id'] for w in windows]}
+        except (OSError,ValueError,TypeError,AttributeError):
+            return {'state':'unknown','reason':'중지된 서비스의 마지막 관리 창 소멸을 확인할 증거가 없습니다.'}
+    checked=_check_user(config,home,host,paths)
+    from .display_health import process_identity,verify_direct_child
+    from .monitors import ownership,bridge
+    health=checked.get('health') or {}
+    evidence=ownership(health)
+    if not checked.get('process_verified'):
+        try:
+            if not evidence:raise ValueError()
+            arguments=(paths.at('/proc')/pid/'cmdline').read_bytes().decode().rstrip('\0').split('\0')
+            suffix=[['_chrome-run','--target',config.target_id]]
+            if config.target_id=='default':suffix.append(['_chrome-run'])
+            entry=Path(arguments[2])
+            if (arguments[1]!='-I' or arguments[3:] not in suffix or entry.name!='entry.py'
+                    or not (entry.parent in {RELEASE,Path('/opt/ala/current')} or entry.parent.is_relative_to('/opt/ala/releases'))):
+                raise ValueError()
+            verify_direct_child(paths,int(pid),health['browser_pid'],health)
+            # Profile/private control ownership is independent of the desired
+            # site's URL and of a requested fullscreen/half-screen change.
+            expected=[arg for arg in chrome_arguments(config,home,{},supervised=True)[1:]
+                      if arg!='--start-fullscreen']
+            observed=list(_observe_chrome_process(paths.at('/proc')/str(health['browser_pid']),expected).arguments)
+            for arg in expected:
+                key=arg.split('=',1)[0]
+                if [item for item in observed if item.split('=',1)[0]==key]!=[arg]:raise ValueError()
+            if any(arg.split('=',1)[0] in {'--no-sandbox','--kiosk','--remote-debugging-port','--remote-debugging-address'} for arg in observed):
+                raise ValueError()
+        except (OSError,ValueError,IndexError,KeyError,StopIteration):
+            return {'state':'unknown','reason':'중지 전 Chrome 자식의 소유권·시작 식별자를 확인하지 못했습니다.'}
+
+    browser_pid=health.get('browser_pid') if evidence else int(pid)
+    try:
+        ticks=process_identity(paths,browser_pid)
+    except (OSError,ValueError,IndexError,KeyError,StopIteration):
+        return {'state':'unknown','reason':'중지 전 Chrome의 시작 식별자를 확인하지 못했습니다.'}
+    window_ids=None
+    if evidence:
+        observed=bridge('Inspect',evidence | {'target':config.target_id,'layout':config.layout},host=host)
+        values=observed.get('windows')
+        if (observed.get('state')=='ok' and isinstance(values,list) and len(values)<=32
+                and all(isinstance(w,dict) and type(w.get('id')) is int and w['id']>0 for w in values)):
+            window_ids=[w['id'] for w in values]
+    return {'state':'verified','browser_pid':browser_pid,'ticks':ticks,'window_ids':window_ids}
+
+
+def _stop_postcondition(config,home,host,paths,evidence):
+    if evidence is None:return None
+    if evidence.get('state') not in {'verified','previous_windows'}:
+        return {'state':'unknown','exit_code':1,'reason':evidence['reason'],
+                'service_stopped':True,'next_action':'서비스는 중지했습니다. Chrome 프로세스와 실제 창의 종료는 다시 확인하세요.'}
+    if evidence['state']=='verified':
+        from .display_health import process_identity
+        process=paths.at('/proc')/str(evidence['browser_pid'])
+        try:
+            ticks=process_identity(paths,evidence['browser_pid'])
+            if ticks==evidence['ticks']:
+                return {'state':'pending','exit_code':2,'service_stopped':True,
+                        'reason':'서비스는 중지됐지만 같은 Chrome 자식이 아직 살아 있습니다. 외부 PID를 종료하지 않았습니다.',
+                        'next_action':'잠시 후 프로세스와 창을 다시 확인하세요.'}
+        except FileNotFoundError:
+            pass
+        except (OSError,ValueError,IndexError,KeyError,StopIteration):
+            return {'state':'unknown','exit_code':1,'service_stopped':True,
+                    'reason':'서비스 중지 후 Chrome 프로세스 소멸을 확인하지 못했습니다.'}
+    if _foreign_profile_pid(paths,_profile(home,config.target_id)):
+        return {'state':'unknown','exit_code':1,'service_stopped':True,
+                'reason':'서비스 중지 후에도 같은 표시 프로필을 사용하는 프로세스가 있습니다. 자동 종료하지 않았습니다.'}
+    ids=evidence['window_ids']
+    if ids is None:
+        return {'state':'unknown','exit_code':1,'service_stopped':True,'browser_stopped':True,
+                'reason':'Chrome 프로세스는 종료됐으나 실제 관리 창의 소멸은 확인하지 못했습니다.',
+                'next_action':'GNOME 화면 확장과 실제 창 상태를 확인하세요.'}
+    if ids:
+        from .monitors import bridge
+        observed=bridge('Closed',{'target':config.target_id,'windows':ids},host=host)
+        count=observed.get('remaining_window_count')
+        if observed.get('state')!='ok' or type(count) is not int or count<0:
+            return {'state':'unknown','exit_code':1,'service_stopped':True,'browser_stopped':True,
+                    'reason':'Chrome 종료 후 실제 창의 소멸 관측을 완료하지 못했습니다.'}
+        if count:
+            return {'state':'pending','exit_code':2,'service_stopped':True,'browser_stopped':True,
+                    'reason':'Chrome 프로세스는 종료됐으며 GNOME 관리 창이 사라지기를 기다립니다.'}
+    return None
+
+def user_action(action, *, target='default', config=None, home=None, host=None, paths=None):
     host, paths = host or Host(), paths or Paths()
     if config is None:
-        config, home = _load_user_config(paths)
+        config, home = _load_user_config(paths,None if action in {'prepare','settings','outputs','extension-status','environment'} else target)
     elif os.getuid() == 0:
         raise PermissionError('Chrome은 일반 사용자로 실행하세요.')
+    if action not in {'prepare','settings','outputs','extension-status','environment'}:
+        config=_context(config,target if not hasattr(config,'_target_id') else config.target_id)
+    unit=unit_name(target if action=='environment' else config.target_id)
     home = Path(home)
     if action == 'prepare':
         changed = _prepare_user_files(config, home)
+        extension=_extension_activation(host,apply=True) if config.display else None
+        if extension and extension['state']!='ok':return extension | {'exit_code':2 if extension['state']=='pending' else 1}
         result = host.run(['systemctl','--user','daemon-reload'])
         return {'exit_code':0, 'state':'ok', 'changed':changed,
                 'reason':result.stderr.strip() if result.returncode else '',
@@ -740,8 +991,48 @@ def user_action(action, *, config=None, home=None, host=None, paths=None):
             if value.returncode == 0:
                 settings[schema+'.'+key] = value.stdout.strip()
         return {'exit_code':0 if len(settings)==len(SETTINGS) else 1,'settings':settings}
+    if action == 'environment':
+        try:
+            _manager(host)
+        except RuntimeError:
+            return {'exit_code':2,'state':'pending','reason':'사용자 manager의 실제 화면 환경을 기다립니다.'}
+        response=host.run(['systemctl','--user','show',unit,'--property=FragmentPath',
+                           '--property=LoadState','--property=NeedDaemonReload'])
+        values=_properties(response.stdout)
+        if response.returncode or values.get('LoadState')!='loaded':
+            return {'exit_code':2,'state':'pending','reason':'표시 서비스의 로드된 등록을 확인하지 못했습니다.'}
+        if values.get('FragmentPath')!='/etc/systemd/user/'+unit:
+            return {'exit_code':1,'state':'blocked','reason':'사용자 서비스가 예상한 root 관리 등록과 다릅니다.'}
+        if values.get('NeedDaemonReload')!='no':
+            return {'exit_code':2,'state':'pending','reason':'서비스 등록 재읽기가 필요합니다. 간편 설정을 확인하세요.'}
+        return {'exit_code':0,'state':'ready','environment_ready':True,'registration_ready':True}
+    if action == 'extension-status':
+        value=_extension_activation(host)
+        return value | {'exit_code':0 if value['state']=='ok' else 2}
+    if action == 'outputs':
+        from .monitors import topology
+        value=topology(host=host)
+        return value | {'exit_code':0 if value.get('state')=='ok' else 2}
+    if action in {'windows','place'}:
+        from .monitors import placement
+        value=_check_user(config,home,host,paths)
+        if (not value.get('process_verified') or (value.get('service') or {}).get('ActiveState') not in {'active','activating'}
+                or (value.get('health') or {}).get('state') in {'unknown','failed'}):
+            return {'exit_code':value.get('exit_code',2),'state':'unknown' if value.get('state') in {'unknown','error'} else 'pending',
+                    'reason':'관리 Chrome의 프로세스·감시 소유권 검증을 먼저 완료해야 합니다.','confirmed_window_count':None}
+        health=value.get('health') or {}
+        observed=placement(config,health,host=host,apply=action=='place')
+        return observed | {'exit_code':0 if observed.get('state') in {'ok','not_applicable'} else 2}
+    if action == 'reload':
+        from .frontend import request_reload
+        checked=_check_user(config,home,host,paths)
+        if checked.get('state')!='running':return checked
+        health=checked.get('health') or {}
+        revision=health.get('config_revision','')
+        if not revision:return {'state':'pending','exit_code':2,'reason':'현재 화면의 적용 구성 식별자를 확인하지 못했습니다.'}
+        return request_reload(config.target_id,revision,home,paths=paths)
     if action == 'logs':
-        value=host.run(['journalctl','--user','--boot','-u',UNIT,'-n','100','--no-pager'])
+        value=host.run(['journalctl','--user','--boot','-u',unit,'-n','100','--no-pager'])
         return {'exit_code':0 if value.returncode==0 else 1,'log':value.stdout,'reason':value.stderr.strip()}
     if action in {'check','status'}:
         value = _check_user(config,home,host,paths)
@@ -752,21 +1043,24 @@ def user_action(action, *, config=None, home=None, host=None, paths=None):
     if action not in {'start','stop','restart','ensure-start'}:
         raise ValueError('허용되지 않은 사용자 Chrome 작업입니다.')
     if action == 'stop':
-        state = _unit_state(host)
+        state = _unit_state(host,unit)
         if not _confirmed_unit_state(state):
             return {'exit_code':1,'state':'unknown','reason':'표시 서비스 상태를 확실히 조회하지 못해 중지하지 않았습니다.',
                     'next_action':'사용자 서비스 연결·권한을 확인한 뒤 다시 요청하세요.'}
+        evidence=_stop_evidence(config,home,host,paths,state)
         if state.get('ActiveState') != 'inactive':
-            result=host.run(['systemctl','--user','stop',UNIT],timeout=35)
+            result=host.run(['systemctl','--user','stop',unit],timeout=35)
             if result.returncode:
                 return {'exit_code':1,'state':'error','reason':result.stderr.strip()}
-            after = _unit_state(host)
+            after = _unit_state(host,unit)
             if not _confirmed_unit_state(after):
                 return {'exit_code':1,'state':'unknown','reason':'중지 요청 후 서비스 상태를 조회하지 못해 종료를 확인할 수 없습니다.',
                         'next_action':'사용자 서비스 연결과 Chrome 상태를 다시 확인하세요.'}
             if after.get('ActiveState') != 'inactive':
                 return {'exit_code':1,'state':'blocked','reason':'중지 요청 후 서비스가 중지 상태로 전환되지 않았습니다.',
                         'next_action':'Chrome 로그와 서비스 상태를 확인하세요.'}
+        postcondition=_stop_postcondition(config,home,host,paths,evidence)
+        if postcondition:return postcondition
         reason = '현재 실행을 중지했습니다.'
         if config.display and config.autostart and config.url:
             reason += ' 다음 그래픽 로그인에는 자동 실행됩니다.'
@@ -792,8 +1086,8 @@ def user_action(action, *, config=None, home=None, host=None, paths=None):
     if action == 'ensure-start' and sessions[0][1].get('LockedHint') == 'yes':
         return {'exit_code':2,'state':'pending','reason':'현재 그래픽 세션이 잠겨 있습니다.',
                 'next_action':'잠금 정책 적용 후 다음 GNOME 로그인 또는 유지보수 재부팅으로 확인하세요.'}
-    old = _unit_state(host,LEGACY)
-    current = _unit_state(host)
+    old = _unit_state(host,LEGACY) if config.target_id=='default' else {'ActiveState':'inactive'}
+    current = _unit_state(host,unit)
     if not _confirmed_unit_state(old) or not _confirmed_unit_state(current):
         return {'exit_code':1,'state':'unknown','reason':'기존 Chrome 서비스 상태를 확실히 조회하지 못해 실행 요청을 진행하지 않았습니다.',
                 'next_action':'사용자 서비스 연결·권한을 확인한 뒤 다시 요청하세요.'}
@@ -808,7 +1102,7 @@ def user_action(action, *, config=None, home=None, host=None, paths=None):
     if action == 'ensure-start' and current.get('ActiveState') != 'inactive':
         return {'exit_code':2,'state':'pending','reason':'표시용 Chrome 서비스 상태 변경을 기다립니다: ' + current.get('ActiveState','unknown')}
     if action == 'restart':
-        for unit, state in ((LEGACY,old),(UNIT,current)):
+        for unit, state in ((LEGACY,old),(unit,current)):
             if state.get('ActiveState') != 'inactive':
                 stopped=host.run(['systemctl','--user','stop',unit],timeout=35)
                 if stopped.returncode:
@@ -819,14 +1113,14 @@ def user_action(action, *, config=None, home=None, host=None, paths=None):
                             'next_action':'사용자 서비스 연결과 Chrome 상태를 확인하세요. 새 실행을 시작하지 않았습니다.'}
                 if after.get('ActiveState') not in {'inactive','failed'}:
                     return {'exit_code':1,'state':'blocked','reason':f'{unit} 종료를 확인할 수 없습니다.'}
-    foreign = _foreign_profile_pid(paths,_profile(home))
+    foreign = _foreign_profile_pid(paths,_profile(home,config.target_id))
     if foreign:
         return {'exit_code':1,'state':'blocked','reason':f'관리 밖 프로세스 {foreign}가 표시 프로필을 사용 중입니다. 잠금 파일을 삭제하지 않았습니다.',
                 'next_action':'해당 PID와 프로필 사용 여부를 직접 확인하세요. 외부 Chrome을 자동 종료하지 않습니다.'}
     if action == 'restart' and (current.get('ActiveState') == 'failed' or current.get('Result') == 'start-limit-hit'):
-        reset=host.run(['systemctl','--user','reset-failed',UNIT])
+        reset=host.run(['systemctl','--user','reset-failed',unit])
         if reset.returncode:
-            after = _unit_state(host)
+            after = _unit_state(host,unit)
             cleared = (not after.get('QueryError') and after.get('LoadState') == 'loaded'
                        and after.get('ActiveState') == 'inactive' and after.get('Result') == 'success')
             if not cleared:
@@ -834,7 +1128,7 @@ def user_action(action, *, config=None, home=None, host=None, paths=None):
     reloaded=host.run(['systemctl','--user','daemon-reload'])
     if reloaded.returncode:
         return {'exit_code':1,'state':'error','reason':reloaded.stderr.strip()}
-    start=host.run(['systemctl','--user','start','--no-block',UNIT])
+    start=host.run(['systemctl','--user','start','--no-block',unit])
     return {'exit_code':0 if start.returncode==0 else 1, 'state':'starting' if start.returncode==0 else 'error',
             'reason':'비동기 실행 요청 완료. status/logs로 사이트 준비 상태를 확인하세요.' if start.returncode==0 else start.stderr.strip()}
 
@@ -899,13 +1193,13 @@ def session_start(*, config=None, home=None, host=None, paths=None, environment=
     log('entry','entered')
     try:
         if config is None:
-            config,home=_load_user_config(paths)
+            config,home=_load_user_config(paths,None)
         elif os.getuid()==0:
             raise PermissionError('일반 사용자 세션에서 실행하세요.')
     except Exception:
         log('configuration','rejected',1)
         raise
-    if not config.display or not config.autostart or not config.url:
+    if not config.display or not any(t.autostart and t.url for t in config.screen_targets()):
         log('configuration','disabled')
         return 0
     log('configuration','accepted')
@@ -934,7 +1228,17 @@ def session_start(*, config=None, home=None, host=None, paths=None, environment=
         log('environment','imported')
     else:
         log('environment','manager_retained')
-    old, current = _unit_state(host,LEGACY), _unit_state(host)
+    codes=[]
+    for target in config.screen_targets():
+        if target.autostart and target.url:
+            codes.append(_session_target_start(config.for_screen(target.id),home,host,paths,log))
+    return 1 if 1 in codes else 2 if 2 in codes else 0
+
+
+def _session_target_start(config,home,host,paths,log):
+    unit=unit_name(config.target_id)
+    old = _unit_state(host,LEGACY) if config.target_id=='default' else {'ActiveState':'inactive'}
+    current = _unit_state(host,unit)
     if not _confirmed_unit_state(old) or not _confirmed_unit_state(current):
         log('unit_state','unknown',1)
         return 1
@@ -963,14 +1267,14 @@ def session_start(*, config=None, home=None, host=None, paths=None, environment=
             log('legacy_stop','unconfirmed',1)
             return 1
         log('legacy_stop','confirmed')
-    if _foreign_profile_pid(paths,_profile(Path(home))):
+    if _foreign_profile_pid(paths,_profile(Path(home),config.target_id)):
         log('profile','in_use',1)
         return 1
     reloaded = host.run(['systemctl','--user','daemon-reload'])
     if reloaded.returncode:
         log('reload','failed',reloaded.returncode)
         return 1
-    started = host.run(['systemctl','--user','start','--no-block',UNIT])
+    started = host.run(['systemctl','--user','start','--no-block',unit])
     log('start','requested' if started.returncode == 0 else 'request_failed',started.returncode)
     return 0 if started.returncode == 0 else 1
 
@@ -1039,13 +1343,14 @@ def url_ready(url, *, opener=None):
     return probe_url(url,opener=opener).ok
 
 
-def run_chrome(*, config=None, home=None, host=None, paths=None, opener=None, supervisor_factory=None,
+def run_chrome(*, target='default', config=None, home=None, host=None, paths=None, opener=None, supervisor_factory=None,
                clock=None, sleeper=None, stop_requested=None):
     host, paths = host or Host(), paths or Paths()
     if config is None:
-        config,home=_load_user_config(paths)
+        config,home=_load_user_config(paths,target,runtime=True)
     elif os.getuid()==0:
         raise PermissionError('Chrome은 일반 사용자로 실행하세요.')
+    config=_context(config,target if not hasattr(config,'_target_id') else config.target_id)
     if not config.display or not config.url:
         return 2
     home=Path(home)
@@ -1055,7 +1360,15 @@ def run_chrome(*, config=None, home=None, host=None, paths=None, opener=None, su
     except _ReadinessCanceled:
         _autostart_log('readiness','canceled',78)
         return 78
-    profile=_profile(home)
+    if config.schema_version==2:
+        from .monitors import topology,resolve_output
+        resolved=resolve_output(topology(host=host),config.output,auto=config.target_id=='default')
+        if resolved['state']!='ok':
+            _autostart_log('output','unresolved',78)
+            return 78
+        if config.output is None:
+            object.__setattr__(config,'_output',resolved['selector'])
+    profile=_profile(home,config.target_id)
     _safe_parents(profile)
     if _foreign_profile_pid(paths,profile,allowed=(os.getpid(),)):
         raise RuntimeError('관리 밖 Chrome이 표시 프로필을 사용 중입니다.')
@@ -1068,4 +1381,10 @@ def run_chrome(*, config=None, home=None, host=None, paths=None, opener=None, su
         atomic_write(marker,'ala display profile v1\n',0o600)
     from .display_health import Supervisor
     args=chrome_arguments(config,home,manager,supervised=True)
-    return (supervisor_factory or Supervisor)(config,home,args,paths=paths,opener=opener).run()
+    options={}
+    if config.target_id!='default' or config.config_revision or config.frontend.enabled or config.schema_version==2:
+        options={'target_id':config.target_id,'config_revision':config.config_revision,'frontend':config.frontend}
+    if config.schema_version==2 or config.output is not None:
+        from .monitors import placement
+        options['placement_callback']=lambda value:placement(config,value,host=host,apply=True)
+    return (supervisor_factory or Supervisor)(config,home,args,paths=paths,opener=opener,**options).run()

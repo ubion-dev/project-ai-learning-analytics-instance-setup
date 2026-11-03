@@ -20,7 +20,7 @@ def parser():
     p = Parser(prog='ala', description='AI 학습 분석실 DID 인스턴스 환경 관리')
     p.add_argument('--version', action='version', version=__version__)
     sub = p.add_subparsers(dest='command')
-    sub.add_parser('tui', help='간편 설정·상태 확인 화면')
+    sub.add_parser('tui', help='간편 설정·상태 확인·화면 관리')
     sub.add_parser('console', help='텍스트 콘솔 (선택)')
     config = sub.add_parser('config', help='기대 구성').add_subparsers(dest='action', required=True)
     config.add_parser('edit')
@@ -37,6 +37,12 @@ def parser():
     update_mode = update.add_mutually_exclusive_group()
     update_mode.add_argument('--check', action='store_true', help='설치 없이 새 버전 확인')
     update_mode.add_argument('--status', action='store_true', help='마지막 갱신의 완료·실패 확인')
+    update_mode.add_argument('--policy', action='store_true', help='자동 운영 준비·현재 정책 확인')
+    update_mode.add_argument('--bootstrap', action='store_true', help='서명 검증기·현재 배포·자동 운영 등록 준비')
+    update_mode.add_argument('--enable-auto', action='store_true', help='수용 확인 후 정식판 자동 운영 활성화')
+    update_mode.add_argument('--disable-auto', action='store_true', help='실행 중 화면을 유지하며 자동 운영 중지')
+    update_mode.add_argument('--apply-runtime', metavar='TARGET', help='지정 화면의 새 관리 코드를 명시적으로 적용')
+    update.add_argument('--confirm-acceptance', action='store_true', help='실제 장비의 화면·야간 적용 수용 확인 (--enable-auto)')
     update.add_argument('--run', dest='run_id', help='조회할 갱신 실행 ID (--status)')
     update.add_argument('--detach', action='store_true', help='갱신 시작 후 완료를 기다리지 않고 반환')
     update.add_argument('--prerelease', action='store_true', help='시험판 포함')
@@ -48,8 +54,12 @@ def parser():
     for name in ('status', 'check'):
         sub.add_parser(name).add_argument('--json', action='store_true')
     chrome = sub.add_parser('chrome')
-    chrome.add_argument('action', nargs='?', choices=['start','stop','restart','status','logs','check'])
+    chrome.add_argument('action', nargs='?', choices=['start','stop','restart','reload','status','logs','check'])
+    chrome.add_argument('--target', help='표시 대상 ID (생략하면 기존 기본 대상)')
     chrome.add_argument('--json', action='store_true')
+    display = sub.add_parser('display', help='연결된 출력·관리 창·사이트 상태')
+    display.add_argument('action', nargs='?', choices=['list', 'status'], default='status')
+    display.add_argument('--json', action='store_true')
     runs = sub.add_parser('runs').add_subparsers(dest='action', required=True)
     runs.add_parser('list').add_argument('--json', action='store_true')
     show = runs.add_parser('show')
@@ -94,7 +104,7 @@ def update_result(result):
 
 
 def update_phase(phase):
-    return {'queued':'작업 접수', 'checking':'업데이트 조건 확인',
+    return {'queued':'작업 접수', 'checking':'업데이트 조건 확인', 'signature':'배포 서명·발행자 검증',
             'downloading':'배포 파일 다운로드', 'checksum':'다운로드 해시 검사',
             'manifest':'배포 파일 검증', 'installing':'새 버전 설치',
             'rechecking':'설치 버전·실행 재검사', 'completed':'완료', 'failed':'실패'}.get(phase, str(phase))
@@ -103,8 +113,57 @@ def update_phase(phase):
 def main(argv=None, *, service=None):
     argv = list(sys.argv[1:] if argv is None else argv)
     # Not part of the public command grammar. Root-owned installed entry only.
-    if argv and argv[0] in {'_privileged','_worker','_session','_chrome-run','_chrome-user','_update-worker'}:
+    if argv and argv[0] in {'_privileged','_worker','_session','_chrome-run','_chrome-user','_update-worker', '_runtime-dispatch', '_auto-update', '_frontend-worker', '_frontend-control', '_auto-bootstrap', '_runtime-worker', '_screen-worker'}:
         try:
+            if argv[0] == '_screen-worker' and len(argv) == 2:
+                from .screen_control import run_worker
+                from .jobs import trusted_release
+                from .system import platform_error
+                if os.geteuid() != 0 or platform_error():
+                    raise PermissionError('Rocky Linux root 작업입니다.')
+                trusted_release(Path(__file__).resolve().parents[1])
+                return run_worker(argv[1])
+            if argv[0] in {'_auto-bootstrap', '_runtime-worker'}:
+                from .jobs import trusted_release
+                from .system import platform_error
+                if os.geteuid() != 0 or platform_error():
+                    raise PermissionError('Rocky Linux root 작업입니다.')
+                trusted_release(Path(__file__).resolve().parents[1])
+                if argv[0] == '_auto-bootstrap' and len(argv) == 2:
+                    from .auto_update import run_bootstrap
+                    return run_bootstrap(argv[1])
+                if argv[0] == '_runtime-worker' and len(argv) == 2:
+                    from .runtime import run_worker
+                    return run_worker(argv[1])
+                return 64
+            if argv[0] == '_frontend-control' and len(argv) == 2:
+                from .frontend import control_request
+                value = control_request(json.loads(argv[1]))
+                print(json.dumps(value, ensure_ascii=False))
+                return value.get('exit_code', 1)
+            if argv[0] == '_frontend-worker' and len(argv) in {1, 2}:
+                from .frontend import run_worker
+                from .jobs import trusted_release
+                from .system import platform_error
+                if os.geteuid() != 0 or platform_error():
+                    raise PermissionError('Rocky Linux root 작업입니다.')
+                trusted_release(Path(__file__).resolve().parents[1])
+                payload = {} if len(argv) == 1 else json.loads(argv[1])
+                if not isinstance(payload, dict) or set(payload) - {'retry', 'target_id', 'manifest_url'}:
+                    raise ValueError('허용되지 않은 프론트 작업입니다.')
+                return run_worker(**payload)
+            if argv[0] == '_auto-update' and len(argv) == 2:
+                from .auto_update import run_scheduled
+                from .jobs import trusted_release
+                from .system import platform_error
+                if os.geteuid() != 0 or platform_error():
+                    raise PermissionError('Rocky Linux root 작업입니다.')
+                trusted_release(Path(__file__).resolve().parents[1])
+                return run_scheduled(argv[1])
+            if argv[0] == '_runtime-dispatch' and len(argv) in {1, 2}:
+                from .runtime import dispatch
+                from .display import run_chrome
+                return dispatch(argv[1] if len(argv) == 2 else 'default', fallback=run_chrome)
             if argv[0] == '_privileged' and len(argv) == 2:
                 print(json.dumps(privileged(argv[1]), ensure_ascii=False))
                 return 0
@@ -123,12 +182,20 @@ def main(argv=None, *, service=None):
                     raise PermissionError('Rocky Linux root 작업입니다.')
                 trusted_release(Path(__file__).resolve().parents[1])
                 return run_worker(argv[1])
-            if argv[0] in {'_session','_chrome-run'} and len(argv) == 1:
+            if argv[0] in {'_session','_chrome-run'} and len(argv) in {1, 2, 3}:
                 from .display import session_start, run_chrome
-                return session_start() if argv[0] == '_session' else run_chrome()
-            if argv[0] == '_chrome-user' and len(argv) == 2:
+                if argv[0] == '_session':
+                    return session_start() if len(argv) == 1 else 64
+                target = 'default' if len(argv) == 1 else argv[1] if len(argv) == 2 else argv[2] if argv[1] == '--target' else None
+                if target is None:
+                    return 64
+                return run_chrome() if target == 'default' else run_chrome(target=target)
+            if argv[0] == '_chrome-user' and len(argv) in {2, 3, 4}:
                 from .display import user_action
-                value = user_action(argv[1])
+                target = None if len(argv) == 2 else argv[2] if len(argv) == 3 else argv[3] if argv[2] == '--target' else None
+                if len(argv) > 2 and target is None:
+                    return 64
+                value = user_action(argv[1]) if target is None or target == 'default' else user_action(argv[1], target=target)
                 print(json.dumps(value, ensure_ascii=False))
                 return value.get('exit_code', 0)
             return 64
@@ -140,6 +207,11 @@ def main(argv=None, *, service=None):
     if args.command in {'setup', 'prepare'} and args.detach and not args.apply:
         p.error('--detach는 --apply와 함께 사용하세요.')
     if args.command == 'update':
+        policy_mode = args.policy or args.bootstrap or args.enable_auto or args.disable_auto or args.apply_runtime is not None
+        if args.confirm_acceptance and not args.enable_auto:
+            p.error('--confirm-acceptance는 --enable-auto와 함께 사용하세요.')
+        if policy_mode and (args.prerelease or args.run_id or args.detach):
+            p.error('자동 운영 정책·전환 명령에는 --prerelease/--run/--detach를 사용하지 않습니다.')
         if args.detach and (args.check or args.status):
             p.error('--detach는 갱신 실행에만 사용하세요.')
         if args.run_id and not args.status:
@@ -156,9 +228,12 @@ def main(argv=None, *, service=None):
             if args.command == 'console':
                 from .console import run_console
                 return run_console(svc)
-            if args.command is None or args.command == 'tui':
+            if args.command is None or args.command == 'tui' or args.command == 'chrome':
                 from .simple_tui import SimpleApp
-                SimpleApp(service=svc).run()
+                if args.command == 'chrome':
+                    SimpleApp(service=svc, initial_section='screens').run()
+                else:
+                    SimpleApp(service=svc).run()
                 return 0
             from .tui import AlaApp
             section = 'config' if args.command == 'config' else 'chrome' if args.command == 'chrome' else 'home'
@@ -167,6 +242,14 @@ def main(argv=None, *, service=None):
         if service is None and not (args.command == 'update' and args.check):
             svc.enter_admin(argv)
         if args.command == 'update':
+            if args.policy or args.bootstrap or args.enable_auto or args.disable_auto or args.apply_runtime is not None:
+                svc.authenticate()
+                action, payload = ('auto-update-status', {}) if args.policy else ('auto-update-bootstrap', {}) if args.bootstrap else (
+                    'auto-update-enable', {'accepted': args.confirm_acceptance}) if args.enable_auto else (
+                    'auto-update-disable', {}) if args.disable_auto else ('runtime-apply', {'target': args.apply_runtime})
+                result = svc.request(action, payload)
+                emit(result, args.json)
+                return result.get('exit_code', 0)
             from .update import check
             if args.check:
                 result = check(args.prerelease)
@@ -253,7 +336,13 @@ def main(argv=None, *, service=None):
                 summarize(result)
             return result.get('exit_code', 1) if args.command == 'check' else 0
         if args.command == 'chrome':
-            result = svc.request('chrome', {'action': args.action}); emit(result, as_json)
+            payload = {'action': args.action}
+            if args.target is not None:
+                payload['target'] = args.target
+            result = svc.request('chrome', payload); emit(result, as_json)
+            return result.get('exit_code', 0)
+        if args.command == 'display':
+            result = svc.request('screens-inspect'); emit(result, as_json)
             return result.get('exit_code', 0)
         if args.command == 'runs':
             result = svc.request('runs-list' if args.action == 'list' else 'runs-show', {} if args.action == 'list' else {'run_id': args.run_id})

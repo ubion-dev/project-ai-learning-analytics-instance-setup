@@ -4,6 +4,7 @@ from __future__ import annotations
 from collections import deque
 import json
 import os
+import re
 
 CHROME_UNIT = 'ala-chrome.service'
 HELPER_PREFIX = '[ala-autostart]'
@@ -18,7 +19,7 @@ class _JournalError(ValueError):
     pass
 
 
-def _messages(response, uid, *, helper):
+def _messages(response, uid, *, helper, unit=CHROME_UNIT):
     if not isinstance(response.stdout, str) or not isinstance(response.stderr, str):
         raise _JournalError('로그 조회 응답 형식을 확인하지 못했습니다.')
     output = response.stdout.strip()
@@ -50,8 +51,8 @@ def _messages(response, uid, *, helper):
             raise _JournalError('로그 조회 응답 형식을 확인하지 못했습니다.') from None
         if not isinstance(record, dict) or record.get('_UID') != str(uid):
             raise _JournalError('로그 기록의 대상 사용자 범위를 확인하지 못했습니다.')
-        if not helper and not (record.get('_SYSTEMD_USER_UNIT') == CHROME_UNIT or
-                               record.get('USER_UNIT') == CHROME_UNIT):
+        if not helper and not (record.get('_SYSTEMD_USER_UNIT') == unit or
+                               record.get('USER_UNIT') == unit):
             raise _JournalError('로그 기록의 대상 서비스 범위를 확인하지 못했습니다.')
         message = record.get('MESSAGE')
         if not isinstance(message, str):
@@ -86,7 +87,7 @@ def _bounded_log(groups):
     return '\n'.join(lines)
 
 
-def read_display_journal(host, uid):
+def read_display_journal(host, uid, *, unit=CHROME_UNIT):
     """Read two fixed current-boot scopes, never change a service or journal.
 
     _SYSTEMD_USER_UNIT identifies the emitting process's unit; USER_UNIT is
@@ -100,13 +101,15 @@ def read_display_journal(host, uid):
     if type(uid) is not int or not 0 < uid < 2**32 - 1:
         return {'exit_code': 1, 'state': 'error', 'log': '',
                 'reason': '로그 조회에는 유효한 일반 사용자 UID가 필요합니다.'}
+    if not isinstance(unit,str) or (unit!=CHROME_UNIT and not re.fullmatch(r'ala-chrome@[a-z][a-z0-9_-]{0,31}\.service',unit)):
+        return {'exit_code':1,'state':'error','log':'','reason':'허용된 화면 서비스 이름이 필요합니다.'}
     base = ['journalctl', '--boot', '--no-pager', '--output=json',
             '--output-fields=MESSAGE,_UID,_SYSTEMD_USER_UNIT,USER_UNIT',
             '--lines=' + str(MAX_ENTRIES)]
     target = '_UID=' + str(uid)
     queries = [
-        (False, base + [target, '_SYSTEMD_USER_UNIT=' + CHROME_UNIT,
-                        '+', target, 'USER_UNIT=' + CHROME_UNIT]),
+        (False, base + [target, '_SYSTEMD_USER_UNIT=' + unit,
+                        '+', target, 'USER_UNIT=' + unit]),
         (True, base + [r'--grep=^\[ala-autostart\]', target]),
     ]
     environment = {'PATH': '/usr/sbin:/usr/bin:/sbin:/bin', 'LC_ALL': 'C',
@@ -115,7 +118,7 @@ def read_display_journal(host, uid):
     for helper, argv in queries:
         try:
             response = host.run(argv, timeout=QUERY_TIMEOUT, env=environment)
-            messages = _messages(response, uid, helper=helper)
+            messages = _messages(response, uid, helper=helper, unit=unit)
             groups.append(('[로그인 자동 시작]' if helper else '[Chrome 서비스]', messages))
         except (OSError, ValueError, TypeError, AttributeError) as exc:
             reason = str(exc) if isinstance(exc, _JournalError) else '대상 로그 조회를 실행하지 못했습니다.'

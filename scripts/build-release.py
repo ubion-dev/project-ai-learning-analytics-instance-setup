@@ -19,6 +19,12 @@ import tomllib
 import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
+REQUIRED_DISPLAY_FILES = (
+    'assets/gnome-extension/ala-display@example.com/extension.js',
+    'assets/gnome-extension/ala-display@example.com/metadata.json',
+    'docs/frontend-contract.md', 'docs/DISPLAY.md', 'docs/UPDATES.md',
+    'examples/screens.json', 'examples/frontend/deployment.json', 'examples/frontend/index.html',
+)
 
 
 def digest(path: Path):
@@ -66,6 +72,7 @@ def source_files(root: Path):
     # A deny-list is insufficient: the original repository contains customer data.
     files = [root / name for name in ('entry.py', 'pyproject.toml', 'requirements.lock', 'install.sh')]
     files += list((root / 'ala').rglob('*.py'))
+    files += [root / name for name in REQUIRED_DISPLAY_FILES]
     legacy = root / 'scripts/rocky-linux'
     files += list(legacy.glob('*.sh')) + list((legacy / 'lib').glob('*.py')) + [legacy / 'bin/chrome-did']
     files += [root / name for name in ('README.md', 'docs/INSTALL.md', 'docs/OPERATIONS.md', 'docs/PREPARATION.md', 'docs/DRIVERS.md', 'docs/SOURCE.md',
@@ -97,6 +104,10 @@ def build(output: Path, wheelhouse: Path | None = None, root=ROOT):
                             '-r', str(root / 'requirements.lock')], check=True)
         copy_wheels(wheelhouse, stage / 'wheels', locked)
         (stage / 'VERSION').write_text(version + '\n')
+        (stage / 'COMPATIBILITY.json').write_text(json.dumps({
+            'schema_version': 1, 'runtime_protocol': 1, 'config_schemas': [1, 2],
+            'extension_protocol': 1, 'frontend_protocol': 1,
+        }, sort_keys=True, indent=2) + '\n')
         files = {str(p.relative_to(stage)): digest(p) for p in sorted(stage.rglob('*')) if p.is_file()}
         (stage / 'MANIFEST.json').write_text(json.dumps({'schema_version': 1, 'version': version, 'files': files}, sort_keys=True, indent=2) + '\n')
         archive_path = output / f'ala-{version}.tar.gz'

@@ -39,6 +39,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import time
 import uuid
 
 ROOT = Path("/")
@@ -131,6 +132,62 @@ def busy_jobs():
         if age <= 15:
             fail('설치 작업 시작 중입니다. 잠시 후 상태를 확인하세요.')
 
+def busy_display_operations():
+    targets = ROOT / 'var/lib/ala-runtime/targets'
+    if not targets.exists():
+        return
+    secure_directory(targets)
+    boot = (ROOT / 'proc/sys/kernel/random/boot_id').read_text().strip()
+    for target in targets.iterdir():
+        if not target.is_dir() or target.is_symlink():
+            fail('화면 작업 기록 경로를 확인하세요.')
+        secure_directory(target)
+        path = target / 'state.json'
+        info = path.lstat()
+        if (not stat.S_ISREG(info.st_mode) or info.st_uid != OWNER
+                or info.st_mode & 0o022 or info.st_size > 1024 * 1024):
+            fail('화면 작업 기록의 소유자·권한을 확인하세요.')
+        value = json.loads(path.read_text())
+        operation = value.get('operation') or {}
+        if (operation.get('boot_id') == boot and operation.get('generation') == value.get('generation')
+                and operation.get('expires_monotonic', 0) > time.monotonic()):
+            fail('화면 코드 전환 또는 프론트 갱신 완료 후 CLI를 갱신하세요. 현재 화면은 유지합니다.')
+
+def automatic_compatibility():
+    # Recheck while holding the configuration writer's lock: a schema-2 save
+    # between the download preflight and this installer must not be missed.
+    if os.environ.get('ALA_REQUIRE_COMPATIBILITY') != '1':
+        return
+    metadata = json.loads((SOURCE / 'COMPATIBILITY.json').read_text())
+    protocols = ('schema_version', 'runtime_protocol', 'frontend_protocol', 'extension_protocol')
+    supported = metadata.get('config_schemas') if isinstance(metadata, dict) else None
+    if (not isinstance(metadata, dict) or any(type(metadata.get(key)) is not int or metadata[key] != 1 for key in protocols)
+            or not isinstance(supported, list) or not supported
+            or any(type(schema) is not int or schema not in {1, 2} for schema in supported)
+            or len(set(supported)) != len(supported)):
+        fail('자동 갱신 관리 프로토콜이 호환되지 않습니다.')
+    configs = [ROOT / 'etc/ala/config.json']
+    snapshots = ROOT / 'var/lib/ala-runtime/configs'
+    if snapshots.exists():
+        secure_directory(snapshots)
+        configs.extend(snapshots.iterdir())
+    required = {1}
+    for path in configs:
+        if not path.exists() and not path.is_symlink():
+            continue
+        secure_directory(path.parent)
+        info = path.lstat()
+        if (not stat.S_ISREG(info.st_mode) or info.st_uid != OWNER
+                or info.st_mode & 0o022 or info.st_size > 1024 * 1024):
+            fail('자동 갱신 전 구성 소유자·권한·크기를 확인하세요.')
+        value = json.loads(path.read_text())
+        schema = value.get('schema_version', 1) if isinstance(value, dict) else None
+        if type(schema) is not int or schema not in {1, 2}:
+            fail('자동 갱신 전 구성 schema를 확인하세요.')
+        required.add(schema)
+    if not required.issubset(supported):
+        fail('자동 갱신 후보가 현재·보관된 구성 schema를 모두 지원하지 않습니다.')
+
 def atomic_text(path, value, mode):
     if path.is_symlink():
         fail(f'진입점이 심볼릭 링크입니다: {path}')
@@ -188,6 +245,8 @@ def install():
         except BlockingIOError:
             fail('다른 설치 또는 도구 변경 작업이 진행 중입니다.')
         busy_jobs()
+        busy_display_operations()
+        automatic_compatibility()
         destination = ROOT / 'opt/ala'
         releases = destination / 'releases'
         secure_directory(releases)
@@ -257,7 +316,9 @@ def install():
             if created:
                 sync_release(release)
                 sync_directory(releases)
-            wrapper = f'#!/usr/bin/env bash\n# ala managed launcher v1\nset -e\nexec "{current}/.venv/bin/python" -I "{current}/entry.py" "$@"\n'
+            # Resolve once: a simultaneous current switch must not pair one
+            # release's interpreter/site-packages with another release's entry.
+            wrapper = f'#!/usr/bin/env bash\n# ala managed launcher v1\nset -e\nALA_RELEASE_PATH=$(cd -- "{current}" && pwd -P)\nexec "$ALA_RELEASE_PATH/.venv/bin/python" -I "$ALA_RELEASE_PATH/entry.py" "$@"\n'
             atomic_text(launcher, wrapper, 0o755)
             if not current.is_symlink() or current.resolve() != release:
                 link = destination / ('.current-' + uuid.uuid4().hex)

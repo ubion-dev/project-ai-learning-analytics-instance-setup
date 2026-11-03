@@ -20,6 +20,10 @@ PUBLIC_HOSTS = {
     'dnf.readthedocs.io', 'help.gnome.org', 'www.intel.com',
     'networkmanager.pages.freedesktop.org', 'dbus.freedesktop.org',
     'www.freedesktop.org', 'textual.textualize.io',
+    # Official GNOME compositor API, HTTP caching standard, Sigstore verifier
+    # documentation and GitHub Actions OIDC issuer used by signed releases.
+    'gnome.pages.gitlab.gnome.org', 'httpwg.org', 'docs.sigstore.dev',
+    'token.actions.githubusercontent.com',
 }
 EMAIL = re.compile(r'[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}')
 IPV4 = re.compile(r'(?<![\w.])(?:\d{1,3}\.){3}\d{1,3}(?![\w.])')

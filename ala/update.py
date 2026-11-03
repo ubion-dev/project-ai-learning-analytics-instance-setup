@@ -27,7 +27,7 @@ UNIT = 'ala-update.service'
 ACTIVE = {'queued', 'running'}
 STATES = ACTIVE | {'completed', 'failed', 'interrupted', 'unknown', 'idle'}
 PHASES = {'queued', 'checking', 'downloading', 'checksum', 'manifest', 'installing',
-          'rechecking', 'completed', 'failed'}
+          'signature', 'rechecking', 'rollback', 'completed', 'failed'}
 
 
 def now():
@@ -313,7 +313,41 @@ def unpack(archive, destination, version):
     return bundle
 
 
-def install_release(tag, *, on_phase=None):
+def check_bundle_compatibility(bundle, *, paths=None, host=None):
+    """Read-only gate before any code from an automatic candidate is executed."""
+    from .config import Config
+    from .runtime import RuntimeStore
+    paths = paths or Paths()
+    metadata = Path(bundle) / 'COMPATIBILITY.json'
+    if metadata.is_symlink() or not metadata.is_file() or metadata.stat().st_size > 65536:
+        raise ValueError('자동 갱신 후보의 명시적 호환성 자료가 필요합니다.')
+    value = json.loads(metadata.read_text())
+    protocols = ('schema_version', 'runtime_protocol', 'frontend_protocol', 'extension_protocol')
+    supported = value.get('config_schemas') if isinstance(value, dict) else None
+    if (not isinstance(value, dict) or any(type(value.get(key)) is not int or value[key] != 1 for key in protocols)
+            or not isinstance(supported, list) or not supported
+            or any(type(schema) is not int or schema not in {1, 2} for schema in supported)
+            or len(set(supported)) != len(supported)):
+        raise ValueError('자동 갱신 후보의 관리·화면·프론트 프로토콜이 호환되지 않습니다.')
+    required = {1}  # Existing schema-1 installations remain a supported baseline.
+    store = RuntimeStore(paths, host)
+    store._safe(paths.config)
+    if paths.config.exists():
+        if not paths.config.is_file() or paths.config.stat().st_size > 1024 * 1024:
+            raise ValueError('현재 구성의 형식·크기를 확인하세요.')
+        required.add(Config.load(paths.config).schema_version)
+    for state in store.selections():
+        selections = [state.get('committed'), state.get('desired'), (state.get('operation') or {}).get('candidate')]
+        for selected in selections:
+            if selected is not None:
+                required.add(Config.from_dict(store._validate_selection(selected)).schema_version)
+    if not required.issubset(supported):
+        raise ValueError('자동 갱신 후보가 현재 구성과 보관된 화면 구성 schema를 모두 지원하지 않습니다.')
+    return {'state': 'compatible', 'required_config_schemas': sorted(required)}
+
+
+def install_release(tag, *, on_phase=None, require_signature=False, paths=None, host=None):
+    paths = paths or Paths()
     def phase(name):
         if on_phase:
             on_phase(name)
@@ -337,15 +371,31 @@ def install_release(tag, *, on_phase=None):
             raise ValueError('다운로드 SHA-256 불일치')
         archive = directory / name
         archive.write_bytes(data)
+        verified = None
+        if require_signature:
+            phase('signature')
+            from .signature import verify_blob
+            signature = directory / (name + '.sigstore.json')
+            signature.write_bytes(fetch(base + name + '.sigstore.json', 1024 * 1024))
+            verified = verify_blob(archive, signature, tag, paths=paths, host=host)
         phase('manifest')
         bundle = unpack(archive, directory, version)
+        if require_signature:
+            check_bundle_compatibility(bundle, paths=paths, host=host)
         # The existing installer owns the common lock and atomic current switch.
         phase('installing')
-        subprocess.run(['bash', str(bundle / 'install.sh')], check=True,
-                       env=dict(os.environ, ALA_UPDATE_ONLY='1'))
+        environment = dict(os.environ, ALA_UPDATE_ONLY='1')
+        if require_signature:
+            environment['ALA_REQUIRE_COMPATIBILITY'] = '1'
+        subprocess.run(['bash', str(bundle / 'install.sh')], check=True, env=environment)
+        if verified:
+            from .signature import record_verified
+            record_verified(verified | {'version': version, 'sha256': match.group(1)}, paths=paths)
 
 
-def submit(release, prerelease=False, paths=None, host=None):
+def submit(release, prerelease=False, paths=None, host=None, *, require_signature=False):
+    if type(require_signature) is not bool or (require_signature and prerelease):
+        raise ValueError('자동 실행은 서명된 정식판만 허용합니다.')
     store = UpdateStore(paths, host, release)
     result = check(prerelease, paths=store.paths)
     if not result['exit_code'] and not result['available']:
@@ -355,6 +405,10 @@ def submit(release, prerelease=False, paths=None, host=None):
     with change_lock(store.paths):
         if any(r['state'] in ACTIVE for r in JobStore(store.paths, store.host).list()):
             raise RuntimeError('설치 작업 완료 후 갱신하세요.')
+        from .runtime import RuntimeStore
+        runtimes = RuntimeStore(store.paths, store.host)
+        if any(runtimes.active(row) for row in runtimes.selections()):
+            raise RuntimeError('화면 코드 전환 또는 프론트 갱신 완료 후 CLI를 갱신하세요.')
         previous = store.latest()
         if previous and previous['state'] in ACTIVE:
             existing = status(store.paths, store.host, previous['run_id'])
@@ -366,6 +420,7 @@ def submit(release, prerelease=False, paths=None, host=None):
                      boot_id=boot_id(store.paths), state='queued', phase='queued',
                      tag=result.get('tag'), target_version=result.get('latest'),
                      before_version=before, installed_version=before, runtime_version=__version__,
+                     require_signature=require_signature,
                      started_at=now(), ended_at=None, reason='갱신 서비스를 시작하고 있습니다.',
                      next_action='ala update --status로 진행 상태를 확인하세요.')
         if result['exit_code']:
@@ -426,7 +481,10 @@ def run_worker(run_id, paths=None, host=None, release=None):
         if before is not None and version_key(value['target_version']) <= version_key(before):
             raise ValueError('이미 같거나 더 새로운 버전이 설치되어 있습니다.')
         phase('checking')
-        install_release(value['tag'], on_phase=phase)
+        if value.get('require_signature'):
+            install_release(value['tag'], on_phase=phase, require_signature=True, paths=store.paths, host=store.host)
+        else:
+            install_release(value['tag'], on_phase=phase)
         phase('rechecking')
         after = installed_version(store.paths)
         value['installed_version'] = after
@@ -438,16 +496,32 @@ def run_worker(run_id, paths=None, host=None, release=None):
             raise PermissionError('설치 진입점 소유자·권한을 확인하세요.')
         current = store.paths.at('/opt/ala/current')
         expected = f'#!/usr/bin/env bash\n# ala managed launcher v1\nset -e\nexec "{current}/.venv/bin/python" -I "{current}/entry.py" "$@"\n'
-        if launcher.read_text() != expected:
+        pinned = f'#!/usr/bin/env bash\n# ala managed launcher v1\nset -e\nALA_RELEASE_PATH=$(cd -- "{current}" && pwd -P)\nexec "$ALA_RELEASE_PATH/.venv/bin/python" -I "$ALA_RELEASE_PATH/entry.py" "$@"\n'
+        if launcher.read_text() not in {expected, pinned}:
             raise ValueError('고정 ala 진입점이 현재 설치 경로를 실행하지 않습니다.')
         actual = store.host.run([str(current / '.venv/bin/python'), '-I', '-B', str(current / 'entry.py'), '--version'])
         if actual.returncode or actual.stdout.strip() != value['target_version']:
             raise ValueError('고정 ala 진입점의 실제 실행 버전 검증에 실패했습니다.')
         value.update(state='completed', phase='completed', ended_at=now(), reason='ala 갱신을 완료했습니다.',
                      next_action='ala를 다시 실행하여 새 버전을 사용하세요.')
+        if value.get('require_signature'):
+            try:
+                from .auto_update import stage_installed_candidate
+                value['runtime_staging'] = stage_installed_candidate(paths=store.paths, host=store.host)
+            except (OSError, ValueError, RuntimeError):
+                # A busy target cannot turn a validated CLI update into a
+                # display restart or an unrelated CLI rollback.
+                value['runtime_staging'] = {'state': 'pending', 'reason': '화면 후보 등록을 다시 확인해야 합니다. 현재 화면은 유지합니다.'}
         store.save(value)
         return 0
     except Exception as exc:
+        rollback = None
+        if value.get('before_version') and value.get('target_version'):
+            try:
+                rollback = rollback_current(value['target_version'], value['before_version'], paths=store.paths, host=store.host)
+                value['rollback'] = rollback
+            except (OSError, ValueError, RuntimeError):
+                value['rollback'] = {'state': 'unknown'}
         try:
             after = installed_version(store.paths)
             value['installed_version'] = after
@@ -464,3 +538,39 @@ def run_worker(run_id, paths=None, host=None, release=None):
                      next_action='실패 원인과 현재 설치 버전을 확인한 뒤 다시 실행하세요.')
         store.save(value)
         return 1
+
+
+def rollback_current(expected_version, previous_version, *, paths=None, host=None):
+    """Restore only this attempt's pointer; never restart a display or OS."""
+    paths, host = paths or Paths(), host or Host()
+    version_key(expected_version)
+    version_key(previous_version)
+    old = paths.at('/opt/ala/releases') / previous_version
+    owner = 0 if paths.root == Path('/') else os.geteuid()
+    for path in (old, old / 'VERSION', old / 'entry.py'):
+        if path.is_symlink() or not path.exists() or path.stat().st_uid != owner or path.stat().st_mode & 0o022:
+            return {'state': 'blocked', 'reason': '이전 release 검증 자료를 확인하지 못했습니다.'}
+    if (old / 'VERSION').read_text().strip() != previous_version:
+        return {'state': 'blocked', 'reason': '이전 release 버전이 일치하지 않습니다.'}
+    actual = host.run([str(old / '.venv/bin/python'), '-I', '-B', str(old / 'entry.py'), '--version'])
+    if actual.returncode or actual.stdout.strip() != previous_version:
+        return {'state': 'blocked', 'reason': '이전 release 실행 검증에 실패했습니다.'}
+    with change_lock(paths):
+        if installed_version(paths) != expected_version:
+            return {'state': 'superseded', 'reason': '현재 포인터가 이 작업의 후보와 달라 복원하지 않았습니다.'}
+        current = paths.at('/opt/ala/current')
+        temporary = current.parent / ('.rollback-' + uuid.uuid4().hex)
+        try:
+            temporary.symlink_to(old)
+            os.replace(temporary, current)
+            fd = os.open(current.parent, os.O_RDONLY)
+            try:
+                os.fsync(fd)
+            finally:
+                os.close(fd)
+        finally:
+            if temporary.is_symlink():
+                temporary.unlink()
+        if installed_version(paths) != previous_version:
+            raise RuntimeError('이전 CLI 포인터 복원을 확인하지 못했습니다.')
+    return {'state': 'completed', 'version': previous_version}

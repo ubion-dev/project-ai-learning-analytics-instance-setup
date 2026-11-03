@@ -1,0 +1,6 @@
+{
+  "schema_version": 1,
+  "deployment_seq": 42,
+  "build_id": "example-build-42",
+  "ready": true
+}
