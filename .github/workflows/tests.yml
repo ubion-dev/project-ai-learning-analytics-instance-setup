@@ -44,7 +44,7 @@ jobs:
         run: |
           ALA_SMOKE_USER="$(id -un)"
           ALA_SMOKE_PYTHON="$(command -v python)"
-          sudo unshare --net -- runuser -u "$ALA_SMOKE_USER" -- env \
+          sudo unshare --net -- sh -ec 'ip link set lo up; exec "$@"' ala-linux-smoke runuser -u "$ALA_SMOKE_USER" -- env \
             PATH="$PATH" ALA_LINUX_CHROME_SMOKE=1 \
             "$ALA_SMOKE_PYTHON" -m pytest tests/test_linux_chrome_smoke.py -q -s --tb=short --show-capture=no
       - name: Regression and isolated CLI/TUI/installer tests

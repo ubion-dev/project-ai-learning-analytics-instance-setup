@@ -107,6 +107,24 @@ def user_fixture(setup):
     return config,paths,host,paths.at('/home/user')
 
 
+class ReadinessClock:
+    def __init__(self):self.value=0.0
+    def __call__(self):return self.value
+    def sleep(self,seconds):self.value+=seconds
+
+
+def _ready_run(config,paths,host,home,clock,*,sleeper=None,stop_requested=None):
+    launches=[]
+    class Supervisor:
+        def __init__(self,actual_config,actual_home,argv,**kwargs):
+            launches.append((actual_config,actual_home,argv))
+        def run(self):return 0
+    result=display.run_chrome(config=config,home=home,host=host,paths=paths,clock=clock,
+                              sleeper=sleeper or clock.sleep,stop_requested=stop_requested,
+                              supervisor_factory=Supervisor)
+    return result,launches
+
+
 def test_gdm_preserves_unrelated_lines_and_is_idempotent():
     config=Config(user='user')
     original='# keep\n[daemon]\nWaylandEnable=true\nAutomaticLoginEnable=False\n\n[security]\nDisallowTCP=true\n'
@@ -221,6 +239,8 @@ def test_unit_uses_graphical_session_and_bounded_crash_recovery():
     assert 'PartOf=graphical-session.target' in unit
     assert 'Restart=always' in unit
     assert 'RestartSec=5' in unit
+    assert 'SuccessExitStatus=78' in unit
+    assert 'RestartPreventExitStatus=78' in unit
     assert 'StartLimitIntervalSec=300' in unit
     assert 'StartLimitBurst=5' in unit
     assert '_chrome-run' in unit
@@ -343,6 +363,276 @@ def test_actual_session_environment_import_is_allowlisted(setup):
     assert 'DISPLAY' not in imported[0]
     assert imported[1]['env']['WAYLAND_DISPLAY']=='wayland-0'
     assert _started_commands(host)==[['systemctl','--user','start','--no-block',display.UNIT]]
+
+
+def test_ala31_login_queues_once_without_display_and_does_not_clear_manager(setup,capsys):
+    config,paths,host,home=user_fixture(setup)
+    host.sessions=0;host.manager='XDG_CURRENT_DESKTOP=GNOME\n'
+    assert display.session_start(config=config,home=home,host=host,paths=paths,environment={})==0
+    assert len(_started_commands(host))==1
+    assert not any('unset-environment' in argv or 'import-environment' in argv or 'reset-failed' in argv for argv,_ in host.calls)
+    assert not any(argv[:2]==['loginctl','list-sessions'] for argv,_ in host.calls)
+    assert display.session_start(config=config,home=home,host=host,paths=paths,environment={})==0
+    assert len(_started_commands(host))==1
+    assert 'outcome=already_running' in capsys.readouterr().out
+
+
+@pytest.mark.parametrize('state,result',[('failed','exit-code'),('inactive','start-limit-hit')])
+def test_ala31_login_preserves_failed_service_without_reset_or_legacy_stop(setup,state,result,capsys):
+    config,paths,host,home=user_fixture(setup)
+    host.states[display.UNIT].update(ActiveState=state,Result=result)
+    host.states[display.LEGACY]['ActiveState']='active'
+    assert display.session_start(config=config,home=home,host=host,paths=paths,environment={})==1
+    assert not _started_commands(host)
+    assert not any('reset-failed' in argv or argv[:3]==['systemctl','--user','stop'] for argv,_ in host.calls)
+    assert 'outcome=failed_preserved' in capsys.readouterr().out
+
+
+def test_ala31_login_legacy_migration_stops_only_known_old_unit_before_start(setup):
+    config,paths,host,home=user_fixture(setup)
+    host.states[display.LEGACY]['ActiveState']='active'
+    assert display.session_start(config=config,home=home,host=host,paths=paths,environment={})==0
+    commands=[argv for argv,_ in host.calls]
+    stop=['systemctl','--user','stop',display.LEGACY]
+    start=['systemctl','--user','start','--no-block',display.UNIT]
+    assert commands.index(stop)<commands.index(start)
+    assert not any('reset-failed' in argv for argv in commands)
+
+
+def test_ala31_login_preserves_both_services_and_reports_legacy_conflict(setup,capsys):
+    config,paths,host,home=user_fixture(setup)
+    host.states[display.LEGACY]['ActiveState']='active'
+    host.states[display.UNIT]['ActiveState']='active'
+    assert display.session_start(config=config,home=home,host=host,paths=paths,environment={})==1
+    assert host.states[display.LEGACY]['ActiveState']==host.states[display.UNIT]['ActiveState']=='active'
+    assert not any('reset-failed' in argv or argv[:3] in (['systemctl','--user','stop'],['systemctl','--user','start'])
+                   for argv,_ in host.calls)
+    assert 'phase=unit_state outcome=legacy_conflict rc=1' in capsys.readouterr().out
+
+
+def test_ala31_login_never_starts_after_unconfirmed_legacy_stop(setup,capsys):
+    config,paths,host,home=user_fixture(setup)
+    host.states[display.LEGACY]['ActiveState']='active'
+    original=host.run;stopped=False
+    def run(argv,**kwargs):
+        nonlocal stopped
+        if argv[:3]==['systemctl','--user','stop']:
+            result=original(argv,**kwargs);stopped=True;return result
+        if stopped and argv[:4]==['systemctl','--user','show',display.LEGACY]:
+            return Command(1,'','private command error must not appear')
+        return original(argv,**kwargs)
+    host.run=run
+    assert display.session_start(config=config,home=home,host=host,paths=paths,environment={})==1
+    assert not _started_commands(host)
+    output=capsys.readouterr().out
+    assert 'phase=legacy_stop outcome=unconfirmed' in output and 'private command' not in output
+
+
+def test_ala31_explicit_restart_of_normal_unit_does_not_reset_failed(setup):
+    config,paths,host,home=user_fixture(setup)
+    host.states[display.UNIT]['ActiveState']='active'
+    assert display.user_action('restart',config=config,home=home,host=host,paths=paths)['exit_code']==0
+    assert not any('reset-failed' in argv for argv,_ in host.calls)
+
+
+@pytest.mark.parametrize('condition',['cleared','still_failed','unknown','not_found','unknown_result'])
+def test_ala31_failed_restart_rechecks_only_exact_already_cleared_state_after_reset_failure(setup,condition):
+    config,paths,host,home=user_fixture(setup)
+    host.states[display.UNIT].update(ActiveState='failed',Result='exit-code')
+    original=host.run
+    def run(argv,**kwargs):
+        if argv[:3]==['systemctl','--user','reset-failed']:
+            host.calls.append((argv,kwargs))
+            if condition=='cleared':host.states[display.UNIT].update(ActiveState='inactive',Result='success',LoadState='loaded')
+            if condition=='still_failed':host.states[display.UNIT].update(ActiveState='failed',Result='exit-code')
+            if condition=='unknown':host.show_failures[display.UNIT]=Command(124,'','synthetic timeout')
+            if condition=='not_found':host.states[display.UNIT].update(ActiveState='inactive',Result='success',LoadState='not-found')
+            if condition=='unknown_result':host.states[display.UNIT].update(ActiveState='inactive',Result='unknown',LoadState='loaded')
+            return Command(1,'','synthetic reset failure')
+        return original(argv,**kwargs)
+    host.run=run
+    value=display.user_action('restart',config=config,home=home,host=host,paths=paths)
+    assert len(_started_commands(host))==(1 if condition=='cleared' else 0)
+    if condition=='cleared':assert value['state']=='starting'
+    else:assert value['state']=='error' and value['reason']=='synthetic reset failure'
+
+
+def test_ala31_foreign_profile_prevents_failure_reset_even_for_explicit_restart(setup):
+    config,paths,host,home=user_fixture(setup)
+    host.states[display.UNIT].update(ActiveState='failed',Result='exit-code')
+    process=paths.at('/proc/999');process.mkdir(parents=True)
+    (process/'status').write_text(f'Uid:\t{os.getuid()}\n')
+    args=['chrome','--user-data-dir='+str(display._profile(home))]
+    (process/'cmdline').write_bytes(('\0'.join(args)+'\0').encode())
+    value=display.user_action('restart',config=config,home=home,host=host,paths=paths)
+    assert value['state']=='blocked'
+    assert not any('reset-failed' in argv for argv,_ in host.calls)
+
+
+@pytest.mark.parametrize('condition',['session_delay','environment_delay'])
+def test_ala31_service_waits_for_actual_readiness_then_launches_once(setup,condition):
+    config,paths,host,home=user_fixture(setup)
+    clock=ReadinessClock()
+    if condition=='session_delay':host.sessions=0
+    else:host.manager='XDG_CURRENT_DESKTOP=GNOME\n'
+    def sleep(seconds):
+        clock.sleep(seconds)
+        if clock.value>=2:
+            host.sessions=1;host.manager='WAYLAND_DISPLAY=wayland-test\n'
+    result,launches=_ready_run(config,paths,host,home,clock,sleeper=sleep)
+    assert result==0 and len(launches)==1 and clock.value==2
+    assert not _started_commands(host)
+
+
+def test_ala31_readiness_timeout_is_45_seconds_and_creates_no_profile(setup,capsys):
+    config,paths,host,home=user_fixture(setup)
+    host.sessions=0;clock=ReadinessClock()
+    with pytest.raises(RuntimeError,match='45초'):
+        _ready_run(config,paths,host,home,clock)
+    assert clock.value==45
+    assert not display._profile(home).exists()
+    assert not _started_commands(host)
+    assert 'phase=readiness outcome=timed_out' in capsys.readouterr().out
+
+
+@pytest.mark.parametrize('condition',['stop','logout','session_changed'])
+def test_ala31_readiness_cancellation_cannot_later_launch_browser(setup,condition,capsys):
+    config,paths,host,home=user_fixture(setup)
+    clock=ReadinessClock();host.manager='XDG_CURRENT_DESKTOP=GNOME\n'
+    stopped=False;original=host.run
+    def run(argv,**kwargs):
+        if condition=='session_changed' and clock.value>0 and argv[:2]==['loginctl','list-sessions']:
+            return Command(0,f'other-session {os.getuid()} user seat0\n')
+        return original(argv,**kwargs)
+    host.run=run
+    def sleep(seconds):
+        nonlocal stopped
+        clock.sleep(seconds)
+        if condition=='stop':stopped=True
+        if condition=='logout':host.sessions=0
+    result,launches=_ready_run(config,paths,host,home,clock,sleeper=sleep,stop_requested=lambda:stopped)
+    assert result==78 and launches==[]
+    host.sessions=1;host.manager='WAYLAND_DISPLAY=wayland-test\n'
+    clock.sleep(60)
+    assert launches==[] and not _started_commands(host)
+    assert not display._profile(home).exists()
+    assert 'phase=readiness outcome=canceled' in capsys.readouterr().out
+
+
+@pytest.mark.parametrize('condition',['multiple_sessions','session_permission','manager_permission'])
+def test_ala31_readiness_never_bypasses_ambiguous_session_or_permission_failure(setup,condition):
+    config,paths,host,home=user_fixture(setup)
+    clock=ReadinessClock();original=host.run
+    if condition=='multiple_sessions':host.sessions=2
+    def run(argv,**kwargs):
+        if condition=='session_permission' and argv[:2]==['loginctl','show-session']:
+            return Command(1,'','synthetic denied')
+        if condition=='manager_permission' and argv[:3]==['systemctl','--user','show-environment']:
+            return Command(1,'','synthetic denied')
+        return original(argv,**kwargs)
+    host.run=run
+    with pytest.raises(RuntimeError):_ready_run(config,paths,host,home,clock)
+    assert clock.value==0 and not display._profile(home).exists()
+
+
+def test_ala31_login_logs_have_fixed_fields_and_never_include_values(setup,capsys):
+    import re
+    config,paths,host,home=user_fixture(setup)
+    host.show_failures[display.UNIT]=Command(1,'','private-account https://example.com/private')
+    assert display.session_start(config=config,home=home,host=host,paths=paths,environment={})==1
+    lines=capsys.readouterr().out.splitlines()
+    assert lines and all(re.fullmatch(r'\[ala-autostart\] phase=[a-z_]+ outcome=[a-z_]+ rc=-?\d+',line) for line in lines)
+    assert not any('private-account' in line or config.url in line for line in lines)
+
+
+def test_ala31_syslog_receives_identical_fixed_message_only_for_real_session_context(setup,monkeypatch,capsys):
+    import sys
+    from types import SimpleNamespace
+    calls=[]
+    module=SimpleNamespace(LOG_INFO=6,openlog=lambda name:calls.append(('open',name)),
+                           syslog=lambda level,message:calls.append(('message',level,message)))
+    monkeypatch.setitem(sys.modules,'syslog',module)
+    display._autostart_log('entry','entered',journal=True)
+    message='[ala-autostart] phase=entry outcome=entered rc=0'
+    assert calls==[('open','ala-autostart'),('message',6,message)]
+    assert capsys.readouterr().out.strip()==message
+    config,paths,fake,home=user_fixture(setup)
+    calls.clear()
+    assert display.session_start(config=config,home=home,host=fake,paths=paths,environment={})==0
+    assert calls==[]
+    real=display.Host()
+    fake.states[display.UNIT]['ActiveState']='inactive'
+    monkeypatch.setattr(real,'run',fake.run)
+    monkeypatch.setattr(display,'_foreign_profile_pid',lambda *args,**kwargs:None)
+    assert display.session_start(config=config,home=home,host=real,paths=Paths(),environment={})==0
+    records=[call[2] for call in calls if call[0]=='message']
+    assert records and records[-1]=='[ala-autostart] phase=start outcome=requested rc=0'
+
+
+def test_ala31_syslog_import_and_connection_failures_are_fixed_nonfatal_messages(monkeypatch,capsys):
+    import builtins
+    from types import SimpleNamespace
+    original=builtins.__import__
+    for failure in (ImportError,OSError):
+        def importing(name,*args,**kwargs):
+            if name=='syslog':
+                if failure is ImportError:raise ImportError('private import details')
+                def unavailable(*args):raise OSError('private connection details')
+                return SimpleNamespace(LOG_INFO=6,openlog=unavailable)
+            return original(name,*args,**kwargs)
+        monkeypatch.setattr(builtins,'__import__',importing)
+        display._autostart_log('entry','entered',journal=True)
+        output=capsys.readouterr().out
+        assert output.splitlines()==['[ala-autostart] phase=entry outcome=entered rc=0',
+                                     '[ala-autostart] phase=journal outcome=unavailable rc=1']
+        assert 'private' not in output
+
+
+@pytest.mark.parametrize('failure',[None,'unsafe_directory','non_socket','socket_symlink','wrong_owner','connection_failed'])
+def test_ala31_missing_bus_context_uses_only_verified_current_user_socket(failure,monkeypatch,capsys):
+    import stat
+    import tempfile
+    with tempfile.TemporaryDirectory(prefix='ala-bus-',dir=str(Path('/tmp').resolve())) as temporary:
+        paths=Paths(Path(temporary));config=Config(user='user',url='https://example.com/display')
+        home=paths.at('/home/user');home.mkdir(parents=True)
+        runtime=paths.at('/run/user/test');runtime.mkdir(parents=True,mode=0o700)
+        bus=runtime/'bus'
+        try:
+            if failure=='non_socket':bus.write_text('not a socket')
+            elif failure=='socket_symlink':bus.symlink_to(runtime/'other')
+            else:bus.write_text('synthetic socket inode')
+            if failure=='unsafe_directory':runtime.chmod(0o777)
+            # Inject kernel inode metadata; unit tests never open a bus/listener.
+            original_stat=Path.lstat
+            def observed_stat(path,*args,**kwargs):
+                info=original_stat(path,*args,**kwargs);fields=list(info)
+                if path==bus and failure not in {'non_socket','socket_symlink'}:fields[0]=stat.S_IFSOCK|0o600
+                if path==runtime and failure=='wrong_owner':fields[4]=os.getuid()+1
+                return os.stat_result(fields)
+            monkeypatch.setattr(Path,'lstat',observed_stat)
+            monkeypatch.setenv('DBUS_SESSION_BUS_ADDRESS','unverified incoming context')
+            host=FakeHost(paths,config);original=host.run
+            def run(argv,**kwargs):
+                if argv[:3]==['systemctl','--user','show-environment']:
+                    address=(kwargs.get('env') or {}).get('DBUS_SESSION_BUS_ADDRESS')
+                    if failure=='connection_failed' or address!='unix:path=/run/user/test/bus':
+                        host.calls.append((argv,kwargs))
+                        return Command(1,'','private connection failure must not leak')
+                return original(argv,**kwargs)
+            host.run=run
+            result=display.session_start(config=config,home=home,host=host,paths=paths,
+                                         environment={'WAYLAND_DISPLAY':'wayland-test'})
+            assert result==(0 if failure is None else 1)
+            if failure is None:
+                assert len(_started_commands(host))==1
+                calls=[kwargs for argv,kwargs in host.calls if 'import-environment' in argv or argv[:3]==['systemctl','--user','start']]
+                assert calls and all(item['env']['DBUS_SESSION_BUS_ADDRESS']=='unix:path=/run/user/test/bus' for item in calls)
+            else:
+                assert not _started_commands(host)
+            output=capsys.readouterr().out
+            assert 'private connection' not in output and 'unverified incoming' not in output
+        finally:
+            monkeypatch.setattr(Path,'lstat',original_stat)
 
 
 def test_user_runtime_check_checks_real_arguments_and_failure_state(setup):

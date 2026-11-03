@@ -456,3 +456,73 @@
 - 시험판: https://github.com/ubion-dev/project-ai-learning-analytics-instance-setup/releases/tag/v0.1.0-rc.18
 - PR 설명을 최종 검사 수정과 화면 관리 분리 범위로 갱신했다. GitHub 연결 앱은 PR 수정 권한이 없어 기존 gh 인증으로 반영했다. 기존 릴리스와 실제 서버/Chrome은 변경하지 않았다.
 - 후속은 ala 갱신 완료 후 새 CLI에서 실행 상태를 재조회하고 실제 Rocky 재부팅·GNOME·화면 수용을 확인하는 것이다. 현재 Chrome을 자동 재시작하지 않으며 옵션 누락 경고가 실제로 남을 때 다음 조치를 확인한다. 정식 완료나 GPU/다중 출력 수용으로 기록하지 않는다.
+
+## ALA-30 시작·읽기 조사
+
+- PR #7 병합 573a212ac2f66e2a0ff8e9b29ca61b9e874eb291을 확인해 origin/main 기준 codex/chrome-refresh-observation을 준비했다. 사용자 실제 계정/주소/PID/운영 시각은 공개 기록에 저장하지 않는다.
+- 사용자 두 상태 관측에서 PID 변화 없이 healthy/HTTP 정상이었다. Chrome 자체 재시작의 증거는 없으며 페이지 재탐색의 주체는 미확정이다. 외부 사이트 사용 사실만으로 사이트 책임을 단정하지 않는다.
+- 독립 합성 회귀는 5 passed / 2 failed로 errorText/isDownload 때 실제 복구 안내 탐색이 빠지는 경계를 재현했다. 정상 probe 추가 명령0, 실제 PipeBrowser 큐 순서3종, 이전 요청 실패 무시는 통과했다.
+- 격리 로컬 HTTP/임시 프로필/실제 Mac headless Chrome 7시나리오를 실측했다. 정상 probe8회에 최초 표시 탐색1회뿐, JS/meta 동일주소 재로딩은 추가 ala 탐색 없이 브라우저에서 발생했다. 페이지 내부 경로 변경 뒤 재로딩은 기존 제어의 실패로 이어지는 별도 후보였지만 실제 장비의 PID 관측과는 다르다. Linux 프로세스 신원은 이 Mac 시험에서만 대체했으며 Rocky 수용을 대신하지 않는다.
+- 다음은 재현된 복구 안내 누락과 값 없는 명령/브라우저 탐색 진단을 구현하고 실제 원인은 후속 관측으로 확인하는 것이다. 실제 서버·현재 Chrome·기존 릴리스는 변경하지 않았다.
+
+## ALA-30 구현·로컬 검증
+
+- 초기 탐색의 errorText/isDownload에도 실제 복구 안내를 요청하도록 탐색 시작 표시를 앞당겼다. 중복 안내 억제/정상 HTTP probe 탐색0/기존 TLS·복구 간격·타깃 범위는 유지했다.
+- 버전/탐색 진단을 현재 감독 프로세스의 상태에 추가했다. 직접 보낸 표시/복구 요청과 새 허용 주 문서의 브라우저 관측을 나눠 세고, 마지막 오류/명령/관측은 고정 범주와 시각만 기록한다. matching Network.loadingFailed도 원문 없이 분류하고 다른 요청/세션·하위 리소스·이전 요청 실패는 제외한다.
+- 화면 관리 상세에 같은 진단을 읽기 전용으로 표시한다. 구버전 기록 부재와 실제0, 잘못된 값·범주·시각을 구분하고 사용자 입력/사이트/브라우저 중 원인을 확정했다고 표현하지 않는다. 기존 제어 버튼과 건강 판정은 유지한다.
+- 독립 refresh 회귀32개, TUI29개, 관련 통합227개를 검증했다. 최종 로컬 전체797 passed +54 subtests(160.41초), diff검사·고정 wheel 빌드·manifest62개 검증을 통과했다.
+- Linux opt-in 스모크에 실제 로컬 HTTP 정적 페이지와 JavaScript 동일주소 재로딩을 추가했다. 격리 namespace의 loopback만 활성화해 실제 Linux 신원과 Chrome/private CDP·반복 HTTPprobe를 대조하며 sandbox/외부 통신 차단을 유지한다. 로컬 Mac의3개opt-in skip을 실제Linux성공으로 기록하지 않으며 CI 결과가 남았다.
+- RC19 버전·설치/운영 안내를 준비했다. 실제 서버/Chrome과 기존 RC18은 변경하지 않았다. 다음 행동은 공개검사/CI의 실제Linux3시나리오/새PR/배포대조와RC19후보다. 사용자 장비의 실제 재탐색 주체는 여전히 미확정이다.
+
+## ALA-30 RC19 후보 완료
+
+- 최종 코드75ef09e00fdfb372239358e365ed5948c8599f65의 push CI41602769037 / PR CI41602877918 모두 성공했다. Python3.12 전체797 passed +54 subtests, 실제 Linux Chrome3개도 통과했다.
+- 실제 Linux 일반 사용자·sandbox·외부 인터페이스 없는 namespace에서 기존 제목 형식과 새 정적/JS 동일주소 재로딩을 검증했다. 실제 Linux 프로세스 신원·로컬 HTTP·private CDP를 사용하며, 가속 HTTP probe는 정상 화면의 추가 탐색을 만들지 않고 JS재로딩은 ala요청 증가 없이 브라우저 관측만 증가했다. 실제 Rocky GNOME/모니터 수용과는 구분한다.
+- 공개 이력/Bash/고정 의존성/빌드/진입점 검사를 통과했다. CI/로컬/익명 공개 다운로드의 byte 일치와 SHA-256·manifest62개 파일을 검증했다. SHA-256: f4809afd3687c44d48188fd35d352572fcb5a5146dda18a7e4b0923bb49a1c5a.
+- PR #8: https://github.com/ubion-dev/project-ai-learning-analytics-instance-setup/pull/8
+- 시험판: https://github.com/ubion-dev/project-ai-learning-analytics-instance-setup/releases/tag/v0.1.0-rc.19
+- RC19은 재현된 초기 복구 안내 누락과 값 없는 탐색 진단을 보완한 것이다. 사용자 장비의 실제 재로딩 원인은 아직 확정하지 않았으며 해당 증상의 해결 완료로 표시하지 않는다. 기존 RC18/실제 서버/현재 Chrome은 변경하지 않았다.
+- 후속은 CLI 업데이트 완료 후 화면 관리에서 명시적으로 한 번 재시작해 새 감독 코드를 적용하고, 재로딩 전후 표시/복구 요청과 브라우저 문서 이동 카운터를 비교하는 것이다. 기록이 없던 이전 실행을0회로 추정하지 않는다. 간편 설정 재적용은 필요하지 않다.
+
+## ALA-31 읽기 조사·구현 시작
+
+- 현재 be585e2/codex/chrome-refresh-observation, PR #8 OPEN을 확인했다. 실제 로그/계정/주소/장비 식별값은 공개 기록에 저장하지 않는다. LAN/VPN의 기존 승인 대상으로 엄격한 호스트키 검증을 유지한 읽기 조회를 시도했으나 연결 시간이 초과되어 장비를 변경하지 않았다.
+- 제공된 진단에서 등록/현재 그래픽 환경은 준비됐고 GNOME의 자동 시작 진입점 호출은 확인됐다. Chrome의 지속 실행으로 이어지지 않았으며 진입점이 단계별 실패 이유를 출력하지 않아 구체 원인은 미확정이다. 사용자 저널 파일은 없었으나 시스템 저널에서 로그인 진입점 호출을 볼 수 있었다.
+- 공식 systemd v257에서 reset-failed는 unloaded unit을 자동 load하지 않는다. 직전 show가 unit을 load해도 GC로 사라질 수 있으므로 항상 reset-failed를 선행하는 코드는 취약점 후보다. 반대로 loaded/inactive이면 reset은 성공하므로 fresh 상태 자체가 항상 실패한다는 가설은 기각했다. 현재 start timestamp0만으로 부팅 전체에서 실행하지 않았다고 단정한 해석도 정정했다.
+- 기존 `_session`은 환경/활성 세션/import 실패 시 단발 종료하며 재시작 정책은 서비스 접수 뒤에만 적용된다. Chrome 관리 탭의 준비 조회도 짧은 횟수 제한이 있다. 정상 환경을 고정한 기존 테스트는 실제 로그인 지연을 보증하지 않는다.
+- Docker의 기존 비특권/네트워크 차단/read-only 일회 이미지에 systemd/dbus가 없어 실제 user-manager GC 재현은 하지 못했다. 공식 소스·합성 경계와 실제 재현을 구분하며 불필요한 host 설치나 privileged 실행은 하지 않았다.
+- 다음은 서비스 안의 제한된 준비 대기와 idempotent 로그인 연결·고정 단계 로그·UID 제한 시스템 저널 fallback을 구현한다. 현재 Chrome/GDM/장비 설정은 변경하지 않으며 실기기 원인 확정과 다음 부팅 수용은 남아 있다.
+
+## ALA-31 취소 정책 결정
+
+- 코드 리뷰에서 준비 대기 취소를0으로 반환하면 Restart=always가 다시 실행할 수 있는 경계를 확인했다. 자기unit중지나무한대기우회대신 private코드78과 unit의 SuccessExitStatus=78 / RestartPreventExitStatus=78로정상취소·재시작억제를명시한다. 일반실패재시작은유지한다.
+- 이에따라 등록문자열을바꾸지않는선호를좁게변경했다. RC20의기존설치는도구갱신후간편설정1회로unit정책을반영해야하며, setup은현재Chrome이나GDM을재시작하지않는다. 현재/legacy둘다active인모순상태는성공keep대신고정충돌로기록하고둘다보존한다.
+
+## ALA-31 구현·첫 로컬 검증
+
+- 로그인 진입점은 화면 준비를 미리 요구하지 않고 한 번 no-block 서비스 시작으로 연결한다. 실제 GNOME 화면 값이 있으면 allowlist로 가져오며 없으면 manager환경을 지우지 않는다. bus연결이없을때만 logind의 실제동일UID runtime/socket을 검증해사용한다. 기존실행/실패제한은보존하고 legacy모순상태는고정충돌로남긴다.
+- 실제서비스안의45초준비대기는단일동일세션·활성·manager화면환경을확인한다. 중지/로그아웃/세션교체취소78은unit정책으로자동재시작하지않는다. fresh시작의불필요reset을없앴고명시restart의reset실패도현재확실히실패가해제된상태만재검사후수용한다.
+- Chrome생성/응답/관리탭연결/초기화를30초공유예산으로검증한다. 완전히전송된read-only target조회응답timeout만재시도하고부분전송·프로토콜/자식종료·다중탭은실패를유지한다.
+- 동일UID·고정서비스/부팅접두사의시스템저널fallback을기존로그조회에연결했다. 사용자저널에유효데이터가있으면보존하고빈기록/권한실패·부분응답을구분한다. root전용·JSON범위재검사·행/문자상한·기존인증로그표시보호를유지한다.
+- 관련통합302개, 첫전체로컬895 passed +54 subtests(168.40초), diff검사를통과했다. 이후로그인진입점의고정단계를stdout외명시syslog로도전달하는작은보완과회귀를추가한다. 실제GNOME로그출력연결에의존해기록을잃지않게하기위함이며아직실기기수용완료로주장하지않는다.
+- RC20버전/설치·운영안내를준비했다. 기존RC19·실제장비·현재Chrome/GDM은변경하지않았고, 다음행동은최종로그회귀/공개검사/CI/후보다. 배포후간편설정1회와실제재부팅관찰이필요하다.
+
+## ALA-31 최종 로그 보강·후보 준비
+
+- 진입점의고정[ala-autostart]단계는stdout과명시syslog양쪽에전달한다. GNOME일반앱의stdout연결유무만으로기록가용성을가정하지않는다. 실제Host/실제경로에서만syslog를사용하고모의경로는외부로그를쓰지않는다. 전송실패는고정범주만남기고서비스연결을막지않는다.
+- 해당표시/저널통합198개(추가로그2개포함), diff검사를통과했다. 첫전체895개는로그전달보완전결과이며나머지코드는동일하다. 최종897개전체및실제Linux3시나리오는CI에서다시확인한다. 고정wheel후보빌드와manifest63개해시검증을통과했다.
+- 공개검사후기존PR #8에통합해최종CI/RC20후보를진행한다. 특정실기기중단단계는여전히미확정이며배포와실제재부팅수용을분리한다.
+
+## ALA-31 저널 JSON 빈 응답 경계 보완
+
+- 최종공식소스검토에서 journalctl의JSON출력이quiet를내포하므로grep무매치가Noentries문구없이rc1/완전빈stdout·stderr로반환될수있음을확인했다. 고정helper조회에만이정확한형식을정상빈기록으로인정하도록보완했다. runtime조회실패·부분JSON·권한stderr·다른반환코드는계속실패한다.
+- 저널통합43개와diff검사를통과했다. 이전커밋7f18f96의검증을최종코드전체통과로대체하지않고이후커밋의전체CI를확인한다. 수정된후보는게시전이며RC20기게시파일을덮어쓰지않는다.
+
+## ALA-31 RC20 후보 완료
+
+- 최종코드4df926f6bd282ff75b430806429caa99ca8da4b9의 push CI41624105616 / PR CI41624111968 모두성공했다. Python3.12 전체904 passed +54 subtests, 실제Linux Chrome3개를통과했고공개이력/Bash/고정의존성/빌드/진입점/업로드까지성공했다.
+- CI/로컬/익명공개다운로드 파일의byte일치와SHA-256·manifest63개파일을검증했다. SHA-256: 03ea77b497dd52f354ae6d9389062e4f4a63eace4c16bde59db00b73179cd5eb.
+- PR #8 범위/제목/검증을최종부팅연결·실행진단으로갱신했다: https://github.com/ubion-dev/project-ai-learning-analytics-instance-setup/pull/8
+- 시험판: https://github.com/ubion-dev/project-ai-learning-analytics-instance-setup/releases/tag/v0.1.0-rc.20
+- 사용자장비의원래세부실패단계는기존로그만으로확정하지못했다. 이번후보는확인된준비대기/단발연결/불필요초기화/로그공백의취약점을보완하며실제Rocky GNOME부팅·모니터수용을대체하지않는다. 기존릴리스/실제서버/현재Chrome·GDM은변경하지않았다.
+- 후속은도구업데이트완료/버전확인→간편설정1회로unit취소정책반영→사용자가직접정상재부팅→SSH재접속·모니터자동표시/상태/로그확인이다. 적용은현재Chrome이나GDM을재시작하지않으며재부팅을자동수행하지않는다. 실제수용후에만해결완료로표시한다.

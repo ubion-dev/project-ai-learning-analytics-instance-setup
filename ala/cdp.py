@@ -14,6 +14,14 @@ class CDPError(RuntimeError):
     pass
 
 
+class CDPResponseTimeout(CDPError):
+    """The complete command was sent, but its matching response did not arrive.
+
+    Sending failures deliberately remain CDPError: retrying a partially sent
+    JSON/NUL command would corrupt this same private pipe's framing.
+    """
+
+
 class PipeBrowser:
     MAX_MESSAGE = 4 * 1024 * 1024
     MAX_EVENTS = 1024
@@ -119,7 +127,7 @@ class PipeBrowser:
         while True:
             response = self._receive(deadline)
             if response is None:
-                raise CDPError('브라우저 제어 명령 응답 시간이 초과되었습니다.')
+                raise CDPResponseTimeout('브라우저 제어 명령 응답 시간이 초과되었습니다.')
             if type(response.get('id')) is int and response['id'] == self._serial:
                 if 'error' in response or not isinstance(response.get('result'), dict):
                     raise CDPError('브라우저 제어 명령이 실패했습니다.')

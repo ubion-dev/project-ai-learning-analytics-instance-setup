@@ -1,6 +1,7 @@
 """Single managed display controls with separate configuration/run/site evidence."""
 from __future__ import annotations
 
+from datetime import datetime, timezone
 import re
 
 from rich.text import Text
@@ -17,10 +18,70 @@ PREPARATION_IDS = {'display.configuration', 'display.autologin', 'display.gdm_en
                    'display.default_target', 'display.initial_setup', 'chrome.unit', 'chrome.autostart'}
 HEALTH_LABELS = {'healthy': '주 문서·HTTP 연결 확인', 'waiting_site': '사이트 응답 대기',
                  'recovering': '연결 복구 중', 'failed': '감시 실패', 'unknown': '감시 확인 불가'}
+NAVIGATION_LABELS = {
+    'last_command': ('마지막 ala 명령', {'display': '표시 주소 요청', 'recovery': '복구 안내 요청'}),
+    'last_browser_navigation': ('마지막 브라우저 이동', {
+        'script': '스크립트 관련 관측', 'parser': '문서 파서 관련 관측',
+        'other': '기타 관측', 'unknown': '구분 불가'}),
+    'last_error': ('마지막 탐색 오류', {
+        'aborted': '탐색 취소', 'download': '다운로드 전환', 'navigation_error': '탐색 오류'}),
+}
 
 
 def safe_text(value):
     return str(redact(value)) if value is not None else '확인 불가'
+
+
+def navigation_details(health, *, running=False):
+    """Present only bounded diagnostic fields; never infer a missing counter."""
+    if not isinstance(health, dict):
+        health = {}
+    version = health.get('supervisor_version')
+    valid_version = (isinstance(version, str) and len(version) <= 64 and
+                     re.fullmatch(r'[0-9]+(?:\.[0-9]+){1,3}(?:[-.]?(?:a|b|rc|dev|post)[0-9]+)?', version))
+    lines = [('실행 중 감시 버전 · ' if running else '감시 기록 버전 · ') +
+             (version if valid_version else '확인 불가')]
+    if 'navigation' not in health:
+        lines.append('실행 중 감시에 탐색 기록 없음 · 화면 관리에서 명시적 재시작 후 진단'
+                     if running else '탐색 진단 · 실행 후 기록 확인')
+        return lines
+    navigation = health['navigation']
+    if not isinstance(navigation, dict):
+        lines.append('탐색 진단 · 기록 형식 확인 필요')
+        return lines
+
+    def count(key):
+        value = navigation.get(key)
+        return str(value) + '회' if type(value) is int and 0 <= value <= 2**63 - 1 else '확인 불가'
+
+    lines.append('탐색 · ala 표시 요청 ' + count('display_requests') +
+                 ' / 복구 안내 요청 ' + count('recovery_requests') +
+                 ' / 브라우저 문서 이동 ' + count('browser_navigations'))
+    for key, (label, choices) in NAVIGATION_LABELS.items():
+        if key not in navigation:
+            description = '확인 불가'
+        elif navigation[key] is None:
+            description = '기록 없음'
+        elif isinstance(navigation[key], dict):
+            item = navigation[key]
+            category = item.get('initiator' if key == 'last_browser_navigation' else 'kind')
+            description = choices.get(category, '범주 확인 불가') if isinstance(category, str) else '범주 확인 불가'
+            when = item.get('at')
+            try:
+                if not isinstance(when, str) or len(when) > 64:
+                    raise ValueError('invalid time')
+                moment = datetime.fromisoformat(when)
+                if moment.tzinfo is None:
+                    raise ValueError('missing timezone')
+                when = moment.astimezone(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')
+            except (ValueError, OverflowError):
+                when = '시각 확인 불가'
+            description += ' · ' + when
+        else:
+            description = '확인 불가'
+        lines.append(label + ' · ' + description)
+    lines.append('브라우저 관측 범주는 사용자 입력·브라우저 동작도 포함하며 원인 확정이 아닙니다.')
+    return lines
 
 
 def safe_logs(value):
@@ -155,6 +216,8 @@ class ChromeScreen(ModalScreen):
             details.append('설치·갱신 작업의 종료와 상태를 확인한 뒤 화면을 제어하세요.')
         if active == 'inactive' and config.get('autostart'):
             details.append('현재는 중지 상태입니다. 다음 그래픽 로그인에는 자동 시작합니다.')
+        if active == 'active' or health:
+            details.extend(navigation_details(health, running=active == 'active'))
         for label, item in (('원인', value.get('reason')), ('다음', value.get('next_action')),
                             ('감시 원인', health.get('reason')), ('감시 다음', health.get('next_action')),
                             ('마지막 검사', health.get('last_checked'))):
