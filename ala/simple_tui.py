@@ -218,7 +218,11 @@ class SimpleApp(App[None]):
         self.call_after_refresh(self._fit_setup_table)
 
     def refresh_query_label(self):
-        label = self.query_one('#query-status', Static)
+        # A queued timer may run while the screen's children are unmounting.
+        labels = self.query('#query-status')
+        if not labels:
+            return
+        label = labels.first(Static)
         label.display = self._loading
         if self._loading:
             mode = '갱신 중 · 아래는 이전 조회 결과' if self._setup_report is not None else '환경 상태 확인 중'

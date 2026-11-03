@@ -142,3 +142,15 @@ def test_fresh_status_clears_the_old_job_panel_color():
             assert '검사 결과' in str(app.query_one('#setup-progress', Static).render())
             assert not any(action == 'submit' for action, _ in service.calls)
     asyncio.run(scenario())
+
+
+def test_loading_timer_tolerates_the_label_unmounting_during_shutdown():
+    async def scenario():
+        app = SimpleApp(service=FakeService())
+        async with app.run_test(size=(80, 24)) as pilot:
+            await pilot.pause()
+            await app.query_one('#query-status').remove()
+            app.refresh_query_label()
+            await pilot.press('q')
+        assert not any(action == 'submit' for action, _ in app.service.calls)
+    asyncio.run(scenario())
