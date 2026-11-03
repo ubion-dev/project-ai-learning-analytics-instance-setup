@@ -415,3 +415,13 @@
 - 읽기 검토에서 시작/중지/재시작의 서비스 조회 실패 오인과 길이 제한으로 잘린 인증 로그 행 노출을 재현·보완했다. 단독 제어 요청과 실제 종료 확인을 분리하고 상태가 불명확하면 성공으로 표시하지 않는다.
 - 첫 전체 로컬은 699 passed + 54 subtests와 새 inspect 인자를 받지 못한 테스트 더블 실패 1건이었다. 테스트 더블을 새 계약에 맞추되 스트리밍/종료 검증 의도는 유지했다. 이후 관련 대상 재검증을 진행한다. 표시/health 155개, 엔진/설정·기존 UI 통합 173개+15 subtests, 최종 Chrome UI 16개 검증을 통과했다.
 - 80×24/120×36 합성 TUI를 렌더링해 설정/중지/실행 상태와 버튼을 확인했다. 작은 화면의 URL 줄 숨김도 실제 SVG 회귀로 보완했다. 실제 서버·재부팅·기존 브라우저·RC16은 변경하지 않았다. 다음 행동은 최종 공개 검사·CI·새 PR·RC17 후보 검증이다.
+
+## ALA-28 RC17 후보 완료
+
+- 최종 구현 597202ad913b2011edf5c255ec66f7159134cbc7. push CI 41580266419와 PR CI 41580341485 모두 성공. Python 3.12 전체 705 passed + 54 subtests (132.12초), 공개 이력·Bash·고정 의존성·빌드·CLI smoke 통과.
+- CI/로컬 고정 wheel 빌드/인증 없는 다운로드 byte 일치, SHA-256과 manifest 61개 파일 해시 검증 완료. SHA-256: eb591d499d933e7f1e2a0128f6385d5c8ca3e0dd1285d684e350bc68b4190900.
+- PR #7: https://github.com/ubion-dev/project-ai-learning-analytics-instance-setup/pull/7
+- 시험판: https://github.com/ubion-dev/project-ai-learning-analytics-instance-setup/releases/tag/v0.1.0-rc.17
+- 간편 설정은 등록만 적용하고 현재 실행은 c/화면 관리에서 제어한다. 기존의 GDM 자동 로그인·GNOME autostart·사용자 서비스 복구는 유지했다. 현재 중지와 다음 로그인 자동 시작을 별도로 표시한다.
+- cgroup 문자열 차이 경고를 독립적인 자식 관계 증거로 보완했으며 실제 장비의 cgroup/재부팅 원인까지 직접 검증했다고 기록하지 않는다. 설정 준비·모의 체인 검증과 실제 다른 부팅 ID/모니터 관찰 수용은 구분한다.
+- 실제 서버·현재 Chrome·기존 릴리스는 변경하지 않았다. 후속은 PR 검토·병합, 대상 장비에서 새 CLI 확인과 명시적 재부팅 수용, ALA-25 다중 출력 연결 구조 확인이다.
