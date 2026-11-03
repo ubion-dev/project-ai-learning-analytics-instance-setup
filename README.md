@@ -3,7 +3,7 @@
 Rocky Linux 서버의 기본 환경·Docker·GPU 드라이버·Chrome DID 화면을 설치하고 검사하는 CLI/TUI입니다.
 
 - 대상: **Rocky Linux 10 x86_64 + GNOME/GDM + 기존 sudo 사용자**
-- 현재 배포 후보: **0.1.0rc19**. 실제 장비의 설치·GPU·화면·재부팅 수용은 아직 완료하지 않았습니다.
+- 현재 배포 후보: **0.1.0rc20**. 실제 장비의 설치·GPU·화면·재부팅 수용은 아직 완료하지 않았습니다.
 - **공개 릴리스에서 바로 다운로드합니다. Git·GitHub 로그인·토큰·Mac 파일 전송은 필요 없습니다.**
 
 ## 1. 설치 — Rocky 터미널
@@ -14,8 +14,8 @@ SSH로 서버에 접속한 일반 사용자 터미널에서 실행합니다. `cu
 ```bash
 (
   set -e
-  VERSION='0.1.0rc19'
-  RELEASE='v0.1.0-rc.19'
+  VERSION='0.1.0rc20'
+  RELEASE='v0.1.0-rc.20'
   BASE_URL="https://github.com/ubion-dev/project-ai-learning-analytics-instance-setup/releases/download/${RELEASE}"
   mkdir -p "$HOME/ala-downloads/$VERSION"
   cd "$HOME/ala-downloads/$VERSION"
@@ -33,7 +33,7 @@ SSH로 서버에 접속한 일반 사용자 터미널에서 실행합니다. `cu
 )
 ```
 
-`0.1.0rc19`가 나오면 도구 설치 완료입니다. **서버 설정은 다음 단계에서 별도로 적용합니다.**
+`0.1.0rc20`가 나오면 도구 설치 완료입니다. **서버 설정은 다음 단계에서 별도로 적용합니다.**
 GitHub의 `Source code` 압축이나 `scripts/rocky-linux` 폴더만으로는 ala를 설치할 수 없습니다.
 서버가 GitHub에 접속할 수 없으면 [Mac에서 받아 SCP로 전달](docs/INSTALL.md#mac에서-받아-scp로-전달)할 수 있습니다.
 
@@ -82,7 +82,7 @@ ala update --prerelease   # 시험판 포함 갱신
 ala update --status       # 마지막 갱신의 완료·실패와 설치 버전
 ```
 
-`ala update`는 완료·실패까지 추적합니다. SSH나 표시를 종료해도 접수된 작업은 계속되며, 다시 접속한 뒤 `ala update --status`로 확인합니다. 즉시 반환하려면 `--detach`를 사용합니다. TUI에서는 `u`로 업데이트 관리창을 열어 확인·갱신·결과 조회를 할 수 있습니다. 새 버전 설치가 끝나면 ala를 다시 실행합니다.
+`ala update`는 완료·실패까지 추적합니다. SSH나 표시를 종료해도 접수된 작업은 계속되며, 다시 접속한 뒤 `ala update --status`로 확인합니다. 즉시 반환하려면 `--detach`를 사용합니다. TUI에서는 `u`로 업데이트 관리창을 열어 확인·갱신·결과 조회를 할 수 있습니다. 새 버전 설치가 끝나면 ala를 다시 실행합니다. RC20의 부팅 연결 보완은 이후 간편 설정을 한 번 실행해 서비스 정책도 반영합니다. 설정 적용은 현재 Chrome·GDM을 재시작하지 않으며, 다음 부팅의 실제 화면을 별도로 확인합니다.
 
 기존 구성과 실행 기록은 유지합니다. RC15 이하의 업데이트 화면은 journal에 의존하므로 이번 버전으로 최초 갱신할 때는 `sudo journalctl -u ala-update -f`에서 완료를 확인하고 다시 실행하세요. 정기 자동 적용·서명 검증은 아직 제공하지 않습니다.
 

@@ -16,7 +16,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-from .cdp import CDPError, PipeBrowser
+from .cdp import CDPError, CDPResponseTimeout, PipeBrowser
 from . import __version__
 from .system import Paths, atomic_json
 
@@ -25,6 +25,7 @@ TIMEOUT = 5
 FAILURES = 3
 SUCCESSES = 2
 NAVIGATION_TIMEOUT = 20
+STARTUP_TIMEOUT = 30
 FRESHNESS = 90
 RECOVERY_HTML = '''<!doctype html><html lang="ko"><meta charset="utf-8">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'">
@@ -231,29 +232,70 @@ class Supervisor:
             raise PermissionError('Chrome 감시는 일반 사용자로 실행하세요.')
         self.value['boot_id'] = boot_id(self.paths)
         self.value['supervisor_start_ticks'] = process_identity(self.paths, os.getpid())
+        startup_deadline = self.monotonic() + STARTUP_TIMEOUT
         self.browser = self.transport_factory(self.argv)
         self.value['browser_pid'] = self.browser.pid
         self.value['browser_start_ticks'] = process_identity(self.paths, self.browser.pid)
+
+        def startup_call(method, params=None, *, session_id=None):
+            if self.browser.poll() is not None:
+                raise CDPError('표시용 Chrome 프로세스가 종료되었습니다.')
+            remaining = startup_deadline - self.monotonic()
+            if remaining <= 0:
+                raise CDPError('표시용 Chrome 제어 연결 준비 시간이 초과되었습니다.')
+            options = {'timeout': min(TIMEOUT, remaining)}
+            if session_id is not None:
+                options['session_id'] = session_id
+            try:
+                result = self.browser.call(method, params, **options)
+            except CDPResponseTimeout:
+                if self.browser.poll() is not None:
+                    raise CDPError('표시용 Chrome 프로세스가 종료되었습니다.') from None
+                if self.monotonic() >= startup_deadline:
+                    raise CDPError('표시용 Chrome 제어 연결 준비 시간이 초과되었습니다.') from None
+                raise
+            if self.browser.poll() is not None:
+                raise CDPError('표시용 Chrome 프로세스가 종료되었습니다.')
+            if self.monotonic() >= startup_deadline:
+                raise CDPError('표시용 Chrome 제어 연결 준비 시간이 초과되었습니다.')
+            return result
+
         # Only the target opened by this launch is eligible. Never attach to a
         # matching URL in somebody else's browser or guess an arbitrary tab.
-        for _ in range(10):
-            targets = self.browser.call('Target.getTargets', timeout=TIMEOUT).get('targetInfos', [])
+        while True:
+            if self.stopping or self.stop_requested():
+                return
+            try:
+                targets = startup_call('Target.getTargets').get('targetInfos', [])
+            except CDPResponseTimeout:
+                # Only this read-only query is safe to retry after the complete
+                # request was sent. Late replies keep their old CDP request ID.
+                continue
             matches = [item for item in targets if item.get('type') == 'page' and item.get('url') == RECOVERY_URL]
             if len(matches) == 1:
                 self.target = matches[0].get('targetId')
                 break
             if len(matches) > 1:
                 raise CDPError('표시용 관리 탭이 여러 개라 선택하지 않았습니다.')
-            self.browser.next_event(timeout=0.1)
+            remaining = startup_deadline - self.monotonic()
+            if remaining <= 0:
+                raise CDPError('표시용 Chrome 제어 연결 준비 시간이 초과되었습니다.')
+            self.browser.next_event(timeout=min(0.1, remaining))
         if not self.target:
             raise CDPError('이번 실행에서 연 표시용 탭을 확인하지 못했습니다.')
-        self.session = self.browser.call('Target.attachToTarget', {'targetId': self.target, 'flatten': True}, timeout=TIMEOUT).get('sessionId')
+        if self.stopping or self.stop_requested():
+            return
+        self.session = startup_call('Target.attachToTarget', {'targetId': self.target, 'flatten': True}).get('sessionId')
         if not isinstance(self.session, str) or not self.session:
             raise CDPError('표시용 탭 제어 연결을 확인하지 못했습니다.')
-        self._call('Page.enable')
-        self._call('Network.enable')
-        self._call('Page.setLifecycleEventsEnabled', {'enabled': True})
-        self.frame = self._call('Page.getFrameTree').get('frameTree', {}).get('frame', {}).get('id')
+        for method, params in (('Page.enable', None), ('Network.enable', None),
+                               ('Page.setLifecycleEventsEnabled', {'enabled': True})):
+            if self.stopping or self.stop_requested():
+                return
+            startup_call(method, params, session_id=self.session)
+        if self.stopping or self.stop_requested():
+            return
+        self.frame = startup_call('Page.getFrameTree', session_id=self.session).get('frameTree', {}).get('frame', {}).get('id')
         if not self.frame:
             raise CDPError('표시용 탭의 주 문서를 확인하지 못했습니다.')
         self._save()

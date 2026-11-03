@@ -80,6 +80,8 @@ Type=exec
 ExecStart={command}
 Restart=always
 RestartSec=5
+SuccessExitStatus=78
+RestartPreventExitStatus=78
 TimeoutStartSec=infinity
 TimeoutStopSec=30
 KillMode=control-group
@@ -495,7 +497,16 @@ def chrome_action(action, config: Config, host=None, paths=None):
             return {'exit_code':1,'state':'blocked','reason':'그래픽 세션이 여러 개입니다. 임의로 선택하지 않습니다.'}
         if not sessions or sessions[0][1].get('Active') != 'yes':
             return {'exit_code':2,'state':'pending','reason':'활성 그래픽 세션이 없습니다. 자동 로그인 적용 후 재검사하세요.'}
-    return _user_call(config, host, paths, action)
+    result = _user_call(config, host, paths, action)
+    if action == 'logs':
+        log = result.get('log')
+        empty_markers = {'-- No entries --', 'No journal files were found.'}
+        has_entries = (isinstance(log, str) and
+                       any(line.strip() and line.strip() not in empty_markers for line in log.splitlines()))
+        if result.get('exit_code') != 0 or not has_entries:
+            from .display_journal import read_display_journal
+            return read_display_journal(host, uid)
+    return result
 
 
 def _load_user_config(paths=Paths()):
@@ -812,10 +823,14 @@ def user_action(action, *, config=None, home=None, host=None, paths=None):
     if foreign:
         return {'exit_code':1,'state':'blocked','reason':f'관리 밖 프로세스 {foreign}가 표시 프로필을 사용 중입니다. 잠금 파일을 삭제하지 않았습니다.',
                 'next_action':'해당 PID와 프로필 사용 여부를 직접 확인하세요. 외부 Chrome을 자동 종료하지 않습니다.'}
-    if action == 'restart':
+    if action == 'restart' and (current.get('ActiveState') == 'failed' or current.get('Result') == 'start-limit-hit'):
         reset=host.run(['systemctl','--user','reset-failed',UNIT])
         if reset.returncode:
-            return {'exit_code':1,'state':'error','reason':reset.stderr.strip()}
+            after = _unit_state(host)
+            cleared = (not after.get('QueryError') and after.get('LoadState') == 'loaded'
+                       and after.get('ActiveState') == 'inactive' and after.get('Result') == 'success')
+            if not cleared:
+                return {'exit_code':1,'state':'error','reason':reset.stderr.strip()}
     reloaded=host.run(['systemctl','--user','daemon-reload'])
     if reloaded.returncode:
         return {'exit_code':1,'state':'error','reason':reloaded.stderr.strip()}
@@ -824,33 +839,199 @@ def user_action(action, *, config=None, home=None, host=None, paths=None):
             'reason':'비동기 실행 요청 완료. status/logs로 사이트 준비 상태를 확인하세요.' if start.returncode==0 else start.stderr.strip()}
 
 
+def _autostart_log(phase, outcome, rc=0, *, journal=False):
+    message = f'[ala-autostart] phase={phase} outcome={outcome} rc={int(rc)}'
+    print(message, flush=True)
+    if journal:
+        try:
+            import syslog
+            syslog.openlog('ala-autostart')
+            syslog.syslog(syslog.LOG_INFO,message)
+        except (ImportError,OSError):
+            print('[ala-autostart] phase=journal outcome=unavailable rc=1', flush=True)
+
+
+class _SessionHost:
+    def __init__(self, host, environment):
+        self.host, self.environment = host, environment
+
+    def run(self, argv, **kwargs):
+        environment = self.environment | (kwargs.get('env') or {})
+        for key in ('XDG_RUNTIME_DIR','DBUS_SESSION_BUS_ADDRESS'):
+            environment[key] = self.environment[key]
+        kwargs['env'] = environment
+        return self.host.run(argv, **kwargs)
+
+
+def _session_connection(host, paths):
+    response = host.run(['systemctl','--user','show-environment'])
+    if response.returncode == 0:
+        return host
+    # This derives a bus address from logind's actual current-user runtime, not
+    # an assumed UID path or a guessed graphical DISPLAY.
+    runtime = host.run(['loginctl','show-user',str(os.getuid()),'--property=RuntimePath','--value'])
+    if runtime.returncode:
+        raise RuntimeError('현재 사용자 runtime을 확인할 수 없습니다.')
+    value = runtime.stdout.strip()
+    if not value.startswith('/') or any(c.isspace() or c in '\0,;=' for c in value):
+        raise RuntimeError('현재 사용자 runtime 형식을 확인할 수 없습니다.')
+    directory = paths.at(value)
+    _safe_parents(directory)
+    info = directory.lstat()
+    if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
+        raise RuntimeError('현재 사용자 runtime 소유자·권한을 확인할 수 없습니다.')
+    bus = directory/'bus'
+    info = bus.lstat()
+    if not stat.S_ISSOCK(info.st_mode) or info.st_uid != os.getuid():
+        raise RuntimeError('현재 사용자 bus socket을 확인할 수 없습니다.')
+    connected = _SessionHost(host, dict(os.environ, XDG_RUNTIME_DIR=value,
+                                      DBUS_SESSION_BUS_ADDRESS='unix:path='+value+'/bus'))
+    if connected.run(['systemctl','--user','show-environment']).returncode:
+        raise RuntimeError('현재 사용자 서비스 연결을 확인할 수 없습니다.')
+    return connected
+
+
 def session_start(*, config=None, home=None, host=None, paths=None, environment=None):
     host, paths = host or Host(), paths or Paths()
-    if config is None:
-        config,home=_load_user_config(paths)
-    elif os.getuid()==0:
-        raise PermissionError('일반 사용자 세션에서 실행하세요.')
+    journal = type(host) is Host and paths.root == Path('/')
+    def log(phase,outcome,rc=0):
+        _autostart_log(phase,outcome,rc,journal=journal)
+    log('entry','entered')
+    try:
+        if config is None:
+            config,home=_load_user_config(paths)
+        elif os.getuid()==0:
+            raise PermissionError('일반 사용자 세션에서 실행하세요.')
+    except Exception:
+        log('configuration','rejected',1)
+        raise
     if not config.display or not config.autostart or not config.url:
+        log('configuration','disabled')
         return 0
+    log('configuration','accepted')
+    try:
+        host = _session_connection(host, paths)
+    except (OSError, ValueError, RuntimeError):
+        log('connection','unavailable',1)
+        return 1
+    log('connection','ready')
     environment = os.environ if environment is None else environment
-    if not environment.get('DISPLAY') and not environment.get('WAYLAND_DISPLAY'):
+    if environment.get('DISPLAY') or environment.get('WAYLAND_DISPLAY'):
+        env = dict(os.environ)
+        for name in ENV_NAMES:
+            env.pop(name,None)
+            if environment.get(name):
+                env[name]=environment[name]
+        cleared=host.run(['systemctl','--user','unset-environment','DISPLAY','WAYLAND_DISPLAY','XAUTHORITY'])
+        if cleared.returncode:
+            log('environment','clear_failed',cleared.returncode)
+            return 1
+        names=[name for name in ENV_NAMES if environment.get(name)]
+        imported=host.run(['systemctl','--user','import-environment',*names],env=env)
+        if imported.returncode:
+            log('environment','import_failed',imported.returncode)
+            return 1
+        log('environment','imported')
+    else:
+        log('environment','manager_retained')
+    old, current = _unit_state(host,LEGACY), _unit_state(host)
+    if not _confirmed_unit_state(old) or not _confirmed_unit_state(current):
+        log('unit_state','unknown',1)
+        return 1
+    if (current.get('ActiveState') in {'active','activating'}
+            and old.get('ActiveState') in {'active','activating','deactivating','reloading'}):
+        log('unit_state','legacy_conflict',1)
+        return 1
+    if current.get('ActiveState') in {'active','activating'}:
+        log('start','already_running')
+        return 0
+    if current.get('ActiveState') == 'failed' or current.get('Result') == 'start-limit-hit':
+        log('start','failed_preserved',1)
+        return 1
+    if current.get('ActiveState') != 'inactive':
+        log('start','transition_pending',2)
         return 2
-    env = dict(os.environ)
-    for name in ENV_NAMES:
-        env.pop(name,None)
-        if environment.get(name):
-            env[name]=environment[name]
-    # Clear stale display values before importing the new GNOME session's allowlist.
-    cleared=host.run(['systemctl','--user','unset-environment','DISPLAY','WAYLAND_DISPLAY','XAUTHORITY'])
-    if cleared.returncode:
+    # Migration is authorized at an actual GNOME login. Duplicate login entry
+    # calls preserve the new running unit and never restart it or reset limits.
+    if old.get('ActiveState') in {'active','activating','deactivating','reloading'}:
+        stopped = host.run(['systemctl','--user','stop',LEGACY],timeout=35)
+        if stopped.returncode:
+            log('legacy_stop','failed',stopped.returncode)
+            return 1
+        after = _unit_state(host,LEGACY)
+        if not _confirmed_unit_state(after) or after.get('ActiveState') not in {'inactive','failed'}:
+            log('legacy_stop','unconfirmed',1)
+            return 1
+        log('legacy_stop','confirmed')
+    if _foreign_profile_pid(paths,_profile(Path(home))):
+        log('profile','in_use',1)
         return 1
-    names=[name for name in ENV_NAMES if environment.get(name)]
-    imported=host.run(['systemctl','--user','import-environment',*names],env=env)
-    if imported.returncode:
+    reloaded = host.run(['systemctl','--user','daemon-reload'])
+    if reloaded.returncode:
+        log('reload','failed',reloaded.returncode)
         return 1
-    # Migration is authorized at the next actual graphical login, never during apply.
-    result=user_action('restart',config=config,home=home,host=host,paths=paths)
-    return result.get('exit_code',1)
+    started = host.run(['systemctl','--user','start','--no-block',UNIT])
+    log('start','requested' if started.returncode == 0 else 'request_failed',started.returncode)
+    return 0 if started.returncode == 0 else 1
+
+
+class _ReadinessCanceled(RuntimeError):
+    pass
+
+
+def _wait_for_graphical_ready(host, paths, *, clock, sleeper, stop_requested):
+    deadline = clock() + 45
+    identified = None
+    announced = False
+    class DeadlineHost:
+        def run(self, argv, **kwargs):
+            remaining = deadline-clock()
+            if remaining <= 0:
+                raise TimeoutError('그래픽 준비 확인 제한 시간 초과')
+            kwargs['timeout'] = min(kwargs.get('timeout',10),remaining)
+            return host.run(argv,**kwargs)
+    bounded = DeadlineHost()
+    while True:
+        if stop_requested():
+            raise _ReadinessCanceled('화면 시작 대기가 중지되었습니다.')
+        try:
+            sessions, reason = _graphical_sessions(bounded,os.getuid())
+            if sessions is None:
+                raise RuntimeError('그래픽 로그인 세션을 확실히 조회하지 못했습니다.')
+            if len(sessions) > 1:
+                raise RuntimeError('그래픽 세션이 여러 개입니다. 임의로 선택하지 않습니다.')
+            if not sessions and identified is not None:
+                raise _ReadinessCanceled('대기하던 그래픽 로그인이 종료되었습니다.')
+            if sessions:
+                session, properties = sessions[0]
+                if identified is not None and session != identified:
+                    raise _ReadinessCanceled('대기하던 그래픽 로그인이 변경되었습니다.')
+                identified = session
+                manager = bounded.run(['systemctl','--user','show-environment'])
+                if manager.returncode:
+                    raise RuntimeError('사용자 서비스 환경을 확실히 조회하지 못했습니다.')
+                values = _properties(manager.stdout)
+                if properties.get('Active') == 'yes' and (values.get('DISPLAY') or values.get('WAYLAND_DISPLAY')):
+                    if stop_requested():
+                        raise _ReadinessCanceled('화면 시작 대기가 중지되었습니다.')
+                    if clock() > deadline:
+                        raise TimeoutError('그래픽 준비 확인 제한 시간 초과')
+                    _autostart_log('readiness','ready')
+                    return values
+            if clock() >= deadline:
+                raise TimeoutError('그래픽 준비 확인 제한 시간 초과')
+            if not announced:
+                _autostart_log('readiness','waiting',2)
+                announced = True
+            sleeper(max(0,min(1,deadline-clock())))
+        except TimeoutError:
+            _autostart_log('readiness','timed_out',1)
+            raise RuntimeError('45초 안에 단일 활성 그래픽 세션과 화면 환경이 준비되지 않았습니다.') from None
+        except _ReadinessCanceled:
+            raise
+        except RuntimeError:
+            _autostart_log('readiness','blocked',1)
+            raise
 
 
 def url_ready(url, *, opener=None):
@@ -858,7 +1039,8 @@ def url_ready(url, *, opener=None):
     return probe_url(url,opener=opener).ok
 
 
-def run_chrome(*, config=None, home=None, host=None, paths=None, opener=None, supervisor_factory=None):
+def run_chrome(*, config=None, home=None, host=None, paths=None, opener=None, supervisor_factory=None,
+               clock=None, sleeper=None, stop_requested=None):
     host, paths = host or Host(), paths or Paths()
     if config is None:
         config,home=_load_user_config(paths)
@@ -867,10 +1049,12 @@ def run_chrome(*, config=None, home=None, host=None, paths=None, opener=None, su
     if not config.display or not config.url:
         return 2
     home=Path(home)
-    manager=_manager(host)
-    sessions,reason=_graphical_sessions(host,os.getuid())
-    if sessions is None or len(sessions)!=1 or sessions[0][1].get('Active')!='yes':
-        raise RuntimeError(reason or '활성 그래픽 세션 하나가 필요합니다.')
+    try:
+        manager = _wait_for_graphical_ready(host,paths,clock=clock or time.monotonic,
+                                           sleeper=sleeper or time.sleep,stop_requested=stop_requested or (lambda:False))
+    except _ReadinessCanceled:
+        _autostart_log('readiness','canceled',78)
+        return 78
     profile=_profile(home)
     _safe_parents(profile)
     if _foreign_profile_pid(paths,profile,allowed=(os.getpid(),)):
