@@ -330,3 +330,12 @@
 - 최종 초기 화면 점검에서 표뿐 아니라 하단 상세도 검사 중 안내로 맞췄다. 첫 조회가 끝나기 전에 확인 불가로 읽히지 않도록 보완하고 로딩 5개 검증을 통과했다.
 - 첫 push CI 41550029866은 성공했으나 PR CI 41550037710에서 종료 중 로딩 타이머의 NoMatches 2건을 발견했다. 위젯 해제 중 갱신을 건너뛰도록 보완하고 해제/종료 회귀를 추가했다. 기본 UI/배치/로딩 33개 재검증 통과. 최종 보완 커밋 CI를 다시 확인한다.
 - 후속 PR CI 41550976484는 통과했지만 push CI 41550966528에서 종료 후 늦은 화면 갱신 1건이 재현됐다. 타이머 외에도 비동기 응답/finally/예약된 강조 이벤트의 갱신을 App 실행 생명주기로 보호했다. 화면 해제 후 상태 응답이 성공/실패로 도착하는 두 회귀를 포함해 기본 UI/배치/로딩 35개 통과. 최종 CI에서 양쪽 실행을 확인하기 전에는 게시하지 않는다.
+
+## ALA-23 RC14 후보 완료
+
+- 최종 구현 eedb69daec41d78a1628fe5e5ddf961b3def996f. push CI 41552044329와 PR CI 41552049032 모두 성공. Python 3.12 전체 496 passed + 42 subtests (118.28초), 공개 이력·Bash·고정 의존성·빌드·CLI smoke 통과.
+- CI 설치 묶음과 로컬 고정 wheel 빌드 byte 일치. 체크섬·manifest 57개 파일 해시 검증 후 인증 없는 공개 다운로드와 byte 일치 확인. SHA-256: feaccc97d2f8590a40f9dff483620fe33e917492d7d7cd24d4d6c2d516a655b7.
+- 기존 PR #6 설명을 성능·화면 구분 최종 범위로 갱신했다: https://github.com/ubion-dev/project-ai-learning-analytics-instance-setup/pull/6
+- 시험판: https://github.com/ubion-dev/project-ai-learning-analytics-instance-setup/releases/tag/v0.1.0-rc.14
+- Rust 재작성은 하지 않았다. 실제 Rocky의 체감 속도와 느린 검사는 inspection 시간으로 확인해야 한다. 이번 작업은 실제 서버를 변경하지 않았다.
+- 설정 작업 종료 후 ala update --prerelease로 갱신한다. 후속 조건은 PR 검토·병합과 실제 장비 초기 조회/종료/화면 수용이다.
