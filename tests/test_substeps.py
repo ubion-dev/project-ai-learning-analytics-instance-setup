@@ -22,6 +22,7 @@ def test_catalog_is_known_safe_and_every_install_stage_has_details():
     rows = progress_rows()
     assert all(row['children'] and not row['current_step'] for row in rows)
     assert all(child['state'] == 'unknown' for row in rows for child in row['children'])
+    assert all(child['evidence'] == 'missing' for row in rows for child in row['children'])
 
 
 def test_report_only_explains_actual_settings_without_guessing_running_step():
@@ -178,3 +179,53 @@ def test_unvisited_parent_still_marks_markerless_healthy_child_unrun():
         assert rows['autologin']['state'] == 'not_run'
         assert rows['profile']['state'] == 'not_run'
         assert not current
+
+
+def test_missing_observations_and_actual_unknown_checks_have_distinct_evidence():
+    report = checks(('base.timezone', 'unknown'))
+    snapshots = [dict(report=report)]
+    for parent_state in ('waiting', 'not_run', 'running'):
+        snapshots.append(dict(report=report, job={'state': 'running'}, parent_state=parent_state))
+    snapshots.append(dict(job={'state': 'pending', 'report': report}, parent_state='pending'))
+    for snapshot in snapshots:
+        rows, current = children('base', **snapshot)
+        assert rows['timezone']['evidence'] == 'check'
+        assert rows['chrome']['evidence'] == 'missing'
+        assert not current
+    rows, _ = children('base', report=report)
+    assert rows['timezone']['state'] == rows['chrome']['state'] == 'unknown'
+
+
+def test_valid_live_event_is_evidence_even_with_old_precheck_and_invalid_signals_are_not():
+    job = {'state': 'running', 'substeps': [
+        {'stage': 'base', 'id': 'packages', 'state': 'started'},
+        {'stage': 'base', 'id': 'chrome', 'state': 'invalid'},
+        {'stage': 'base', 'id': 'unlisted', 'state': 'completed'},
+        {'stage': 'docker', 'id': 'timezone', 'state': 'completed'},
+    ]}
+    rows, current = children('base', report=checks(('base.package.git', 'change_required')),
+                             job=job, parent_state='running')
+    assert rows['packages']['evidence'] == 'event'
+    assert rows['chrome']['evidence'] == rows['timezone']['evidence'] == 'missing'
+    assert rows['chrome']['state'] == 'unknown'
+    assert not current
+
+
+def test_final_check_evidence_overrides_completion_but_failure_event_remains_observed():
+    job = {'state': 'failed', 'report': checks(('base.timezone', 'unknown'),
+                                              ('base.service.chronyd.active', 'ok')),
+           'substeps': [{'stage': 'base', 'id': 'timezone', 'state': 'completed'},
+                        {'stage': 'base', 'id': 'time_sync', 'state': 'failed'}]}
+    rows, current = children('base', job=job, parent_state='error')
+    assert rows['timezone']['state'] == 'unknown' and rows['timezone']['evidence'] == 'check'
+    assert rows['time_sync']['state'] == 'error' and rows['time_sync']['evidence'] == 'event'
+    assert rows['chrome']['evidence'] == 'missing'
+    assert not current
+
+
+def test_valid_event_without_final_check_is_not_reported_as_missing_record():
+    job = {'state': 'failed', 'substeps': [{'stage': 'base', 'id': 'chrome', 'state': 'completed'}]}
+    rows, current = children('base', job=job, parent_state='unknown')
+    assert rows['chrome']['state'] == 'unknown' and rows['chrome']['evidence'] == 'event'
+    assert rows['timezone']['state'] == 'unknown' and rows['timezone']['evidence'] == 'missing'
+    assert not current

@@ -6,6 +6,7 @@ modules, and their managed heredocs are also the source of expected file bytes.
 from __future__ import annotations
 
 import configparser
+from concurrent.futures import ThreadPoolExecutor
 import importlib.util
 import json
 import os
@@ -13,6 +14,7 @@ from pathlib import Path
 import re
 import stat
 import sys
+from time import perf_counter
 
 from .config import Config
 from .model import CheckResult, Report
@@ -57,6 +59,7 @@ class Engine:
         self.host = host if host is not None else Host()
         self.paths = paths if paths is not None else Paths()
         self.owner = 0 if self.paths.root == Path("/") else os.geteuid()
+        self.inspection = None
 
     def _run(self, argv, **kwargs):
         return self.host.run(argv, **kwargs)
@@ -464,23 +467,57 @@ class Engine:
             return [self._result("chrome.integration", "pending", "표시 복구 모듈", "ALA-04 구현 대기")]
         return (apply_display if apply else inspect_display)(self.config, self.host, self.paths)
 
-    def inspect(self) -> Report:
-        error = platform_error(self.paths)
-        if error:
-            return Report([self._result("platform", "blocked", "Rocky Linux 10 x86_64", error)])
-        results = [self._result("platform", "ok", "Rocky Linux 10 x86_64", "지원 환경")]
-        _, account = self._account(self.config.user)
-        results.append(account)
-        stages = [self._base, self._updates, self._hardware, self._network, self._shell, self._ssh, self._docker, self._gpu, self._dev_tools, self._display_policy, self._extra_display]
-        for inspect in stages:
-            try:
-                results.extend(inspect())
-            except (OSError, ValueError, configparser.Error) as exc:
-                results.append(self._result(inspect.__name__.lstrip("_"), "unknown", "상태 조회", str(exc)))
-        return Report(results)
+    def inspect(self, *, workers=1) -> Report:
+        if type(workers) is not int or workers < 1:
+            raise ValueError('검사 작업 수는 양의 정수여야 합니다.')
+        started = perf_counter()
+        self.inspection = {'duration_ms': 0, 'stages': []}
 
-    def plan(self) -> Report:
-        return self.inspect()
+        def elapsed(since):
+            return round(max(0.0, (perf_counter() - since) * 1000), 3)
+
+        def stage(spec):
+            name, inspect = spec
+            since = perf_counter()
+            try:
+                found = inspect()
+            except (OSError, ValueError, configparser.Error) as exc:
+                found = [self._result(name, 'unknown', '상태 조회', str(exc))]
+            return found, {'id': name, 'duration_ms': elapsed(since)}
+
+        try:
+            since = perf_counter()
+            error = platform_error(self.paths)
+            self.inspection['stages'].append({'id': 'platform', 'duration_ms': elapsed(since)})
+            if error:
+                return Report([self._result('platform', 'blocked', 'Rocky Linux 10 x86_64', error)])
+            results = [self._result('platform', 'ok', 'Rocky Linux 10 x86_64', '지원 환경')]
+            since = perf_counter()
+            _, account = self._account(self.config.user)
+            self.inspection['stages'].append({'id': 'user', 'duration_ms': elapsed(since)})
+            results.append(account)
+            stages = [(name, getattr(self, '_' + name)) for name in
+                      ('base', 'updates', 'hardware', 'network', 'shell', 'ssh', 'docker',
+                       'gpu', 'dev_tools', 'display_policy', 'extra_display')]
+            if workers == 1:
+                inspected = map(stage, stages)
+                for found, timing in inspected:
+                    results.extend(found)
+                    self.inspection['stages'].append(timing)
+            else:
+                with ThreadPoolExecutor(max_workers=min(workers, 4)) as pool:
+                    # Submission is concurrent; consumption keeps the old report order.
+                    pending = [pool.submit(stage, inspect) for inspect in stages]
+                    for future in pending:
+                        found, timing = future.result()
+                        results.extend(found)
+                        self.inspection['stages'].append(timing)
+            return Report(results)
+        finally:
+            self.inspection['duration_ms'] = elapsed(started)
+
+    def plan(self, *, workers=1) -> Report:
+        return self.inspect(workers=workers)
 
     def apply(self, on_stage=None, on_substep=None) -> Report:
         def event(stage, state):

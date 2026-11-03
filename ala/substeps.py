@@ -120,7 +120,11 @@ def _value(value):
 
 
 def child_rows(stage, *, report=None, job=None, parent_state='unknown'):
-    """Return (children, actual current task label) without inventing live work."""
+    """Return children with observation provenance, without inventing live work.
+
+    Evidence describes an available individual check or valid event, not proof
+    of execution or final verification. Missing evidence never implies failure.
+    """
     catalog = STAGE_TASKS.get(stage, ())
     report = report if isinstance(report, dict) else {}
     job = job if isinstance(job, dict) else None
@@ -142,6 +146,7 @@ def child_rows(stage, *, report=None, job=None, parent_state='unknown'):
         actual = _state(items)
         event = latest.get(entry['id'])
         event_state = event.get('state') if event else None
+        evidence = 'event' if event_state in _EVENTS else 'check' if items else 'missing'
         disabled = entry.get('option') in config and config[entry['option']] is False
         if parent_state == 'not_applicable' or disabled:
             state = 'not_applicable'
@@ -152,8 +157,10 @@ def child_rows(stage, *, report=None, job=None, parent_state='unknown'):
                 state = _EVENTS[event_state]
             elif actual == 'not_applicable':
                 state = actual
+                evidence = 'check'
             elif actual in {'error', 'blocked', 'change_required', 'pending'}:
                 state = actual
+                evidence = 'check'
             elif not event:
                 if parent_state in {'waiting', 'not_run'}:
                     state = 'not_run'
@@ -168,6 +175,7 @@ def child_rows(stage, *, report=None, job=None, parent_state='unknown'):
                          'error' if parent_state in {'error', 'blocked'} else 'unknown')
             elif items and actual == 'unknown':
                 state = 'unknown'
+                evidence = 'check'
             elif not isinstance(job.get('report'), dict) or not results:
                 state = 'unknown'
             else:
@@ -198,7 +206,7 @@ def child_rows(stage, *, report=None, job=None, parent_state='unknown'):
             if item.get('next_action'):
                 details.append('다음: ' + _value(item['next_action']))
         rows.append({'id': stage + '.' + entry['id'], 'label': entry['label'],
-                     'state': state, 'detail': '\n'.join(details)})
+                     'state': state, 'evidence': evidence, 'detail': '\n'.join(details)})
         if current_id == entry['id'] and state == 'running':
             current = entry['label']
     return rows, current

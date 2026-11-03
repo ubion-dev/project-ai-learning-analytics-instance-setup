@@ -26,6 +26,8 @@ class FakeService:
         await asyncio.sleep(0)
         if action == 'config-show':
             return {'config': deepcopy(self.config), 'exists': True}
+        if action == 'runs-list':
+            return {'runs': deepcopy(list(self.jobs.values()))}
         if action == 'status':
             snapshot = dict(deepcopy(self.report), config=deepcopy(self.config), runs=deepcopy(list(self.jobs.values())))
             if self.gate is not None:

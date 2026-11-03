@@ -7,10 +7,11 @@ import os
 import pwd
 import subprocess
 import sys
+from time import perf_counter
 
 from .config import Config
 from .jobs import JobStore, change_lock, protected_directory, trusted_release
-from .system import Host, Paths, atomic_json, platform_error
+from .system import Host, InspectionHost, Paths, atomic_json, platform_error
 
 class Operations:
     """Fixed privileged API. Tests inject paths/host, never environment overrides."""
@@ -61,14 +62,25 @@ class Operations:
                 expected_config=payload.get('expected_config'), operation='prepare')
         if action in {'inspect', 'plan', 'status'}:
             from .engine import Engine
+            started = perf_counter()
             config = self.config()
-            report = (Engine(config, host=self.host, paths=self.paths).plan() if action == 'plan' else
-                      Engine(config, host=self.host, paths=self.paths).inspect()).to_dict()
+            # Scope query sharing to this read-only response. Workers and all
+            # mutation/preparation paths continue using the original Host.
+            host = InspectionHost(self.host)
+            engine = Engine(config, host=host, paths=self.paths)
+            report = (engine.plan(workers=4) if action == 'plan' else engine.inspect(workers=4)).to_dict()
+            inspection = engine.inspection
             if action == 'status':
                 import socket
                 from .prepare import Prepare
-                report.update(hostname=socket.gethostname(), config=config.to_dict(), config_exists=self.paths.config.exists(), runs=JobStore(self.paths, self.host).list(),
-                              preparation=Prepare(config, host=self.host, paths=self.paths).inspect().to_dict())
+                report.update(hostname=socket.gethostname(), config=config.to_dict(), config_exists=self.paths.config.exists())
+                for name, query in (('runs', lambda: JobStore(self.paths, host).list()),
+                                    ('preparation', lambda: Prepare(config, host=host, paths=self.paths).inspect().to_dict())):
+                    since = perf_counter()
+                    report[name] = query()
+                    inspection['stages'].append({'id': name, 'duration_ms': round(max(0.0, (perf_counter() - since) * 1000), 3)})
+            inspection['duration_ms'] = round(max(0.0, (perf_counter() - started) * 1000), 3)
+            report['inspection'] = inspection
             return report
         if action == 'submit':
             def current_config():

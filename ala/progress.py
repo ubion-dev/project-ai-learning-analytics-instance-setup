@@ -168,6 +168,7 @@ def progress_rows(report=None, job=None):
         label = _LABELS.get(identifier, _DIAGNOSTICS.get(identifier, identifier + ' 진단' if diagnostic else identifier))
         children, current_step = child_rows(identifier, report=report, job=job, parent_state=state)
         rows.append({'id': identifier, 'label': label, 'state': state,
+                     'evidence': 'check' if items else 'event' if event else 'missing',
                      'detail': _detail(items, state, event, job, diagnostic=diagnostic),
                      'children': children, 'current_step': current_step})
     return rows

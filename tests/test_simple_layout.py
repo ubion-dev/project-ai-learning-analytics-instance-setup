@@ -59,7 +59,9 @@ def assert_setup_geometry(app, size):
     selectors = ['#config-summary', '#setup-progress', '#setup-summary',
                  '#setup-table', '#setup-output']
     if app.query_one('#setup-actions').display:
-        selectors.extend(['#setup-start', '#setup-note'])
+        selectors.append('#setup-start')
+    if app.query_one('#setup-note').display:
+        selectors.append('#setup-note')
     widgets = [app.query_one(selector) for selector in selectors]
     footer = app.query_one(Footer)
     for widget in [*widgets, footer]:
