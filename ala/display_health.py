@@ -93,6 +93,28 @@ def process_identity(paths, pid):
     return ticks
 
 
+def verify_direct_child(paths, supervisor_pid, browser_pid, record):
+    """Verify lineage independently of a browser's self-selected systemd scope."""
+    if record.get('supervisor_pid') != supervisor_pid or record.get('browser_pid') != browser_pid:
+        raise ValueError('Chrome 감시 기록과 현재 서비스·자식 PID가 다릅니다.')
+    if record.get('boot_id') != boot_id(paths):
+        raise ValueError('Chrome 감시 기록의 부팅 정보가 변경되었습니다.')
+    status = (paths.at('/proc') / str(browser_pid) / 'status').read_text()
+    fields = dict(line.split(':', 1) for line in status.splitlines() if ':' in line)
+    uids = fields.get('Uid', '').split()
+    if not uids or any(not value.isdecimal() or int(value) != os.getuid() for value in uids):
+        raise ValueError('Chrome 자식의 사용자 소유권을 확인할 수 없습니다.')
+    parent = fields.get('PPid', '').strip()
+    if not parent.isdecimal() or int(parent) != supervisor_pid:
+        raise ValueError('Chrome 프로세스가 현재 감독 서비스의 직접 자식이 아닙니다.')
+    # Re-read identities after the caller inspected argv: an old record or PID
+    # reuse must not authorize an unrelated process with a similar command line.
+    if record.get('supervisor_start_ticks') != process_identity(paths, supervisor_pid):
+        raise ValueError('Chrome 감독 프로세스의 시작 식별자가 변경되었습니다.')
+    if record.get('browser_start_ticks') != process_identity(paths, browser_pid):
+        raise ValueError('Chrome 자식 프로세스의 시작 식별자가 변경되었습니다.')
+
+
 def fingerprint(url):
     return hashlib.sha256((url or '').encode()).hexdigest()
 

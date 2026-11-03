@@ -79,6 +79,7 @@ class Operations:
                 import socket
                 from .prepare import Prepare
                 report.update(hostname=socket.gethostname(), config=config.to_dict(), config_exists=self.paths.config.exists())
+                report['configuration_report'] = engine.configuration_report.to_dict()
                 for name, query in (('runs', lambda: JobStore(self.paths, host).list()),
                                     ('preparation', lambda: Prepare(config, host=host, paths=self.paths).inspect().to_dict())):
                     since = perf_counter()

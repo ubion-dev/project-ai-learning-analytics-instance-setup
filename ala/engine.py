@@ -60,6 +60,10 @@ class Engine:
         self.paths = paths if paths is not None else Paths()
         self.owner = 0 if self.paths.root == Path("/") else os.geteuid()
         self.inspection = None
+        self.configuration_report = None
+        self._configuration_only = False
+        self._display_configuration = None
+        self._display_policy_configuration = None
 
     def _run(self, argv, **kwargs):
         return self.host.run(argv, **kwargs)
@@ -293,9 +297,11 @@ class Engine:
         results.extend(self._dconf("display", "00-display", "display", "setup-display.sh"))
         results.append(self._file("display.logind", "/etc/systemd/logind.conf.d/60-rocky-kiosk.conf", _template("setup-display.sh", "LOGIND")))
         results.extend(self._masked(unit, "display", inactive=False) for unit in SLEEP_UNITS)
-        runtime = self._restart_pending("display.logind.runtime", "systemd-logind.service", "/etc/systemd/logind.conf.d/60-rocky-kiosk.conf")
-        if runtime:
-            results.append(runtime)
+        self._display_policy_configuration = list(results)
+        if not self._configuration_only:
+            runtime = self._restart_pending("display.logind.runtime", "systemd-logind.service", "/etc/systemd/logind.conf.d/60-rocky-kiosk.conf")
+            if runtime:
+                results.append(runtime)
         return results
 
     def _ssh(self):
@@ -460,18 +466,37 @@ class Engine:
 
     def _extra_display(self, apply=False):
         try:
-            from .display import apply_display, inspect_display
+            from .display import apply_display, inspect_display_parts
         except ImportError as exc:
             if exc.name not in {"ala.display", "display"}:
                 raise
             return [self._result("chrome.integration", "pending", "표시 복구 모듈", "ALA-04 구현 대기")]
-        return (apply_display if apply else inspect_display)(self.config, self.host, self.paths)
+        if apply:
+            results = apply_display(self.config, self.host, self.paths)
+            self._display_configuration = list(results)
+            return results
+        configuration, runtime = inspect_display_parts(self.config, self.host, self.paths,
+                                                       include_runtime=not self._configuration_only)
+        self._display_configuration = configuration
+        return configuration + runtime
 
-    def inspect(self, *, workers=1) -> Report:
+    def inspect(self, *, workers=1, configuration_only=False) -> Report:
+        if type(configuration_only) is not bool:
+            raise ValueError('설정 검사 선택은 boolean이어야 합니다.')
+        previous = self._configuration_only
+        self._configuration_only = configuration_only
+        self._display_configuration = self._display_policy_configuration = None
+        try:
+            return self._inspect(workers=workers)
+        finally:
+            self._configuration_only = previous
+
+    def _inspect(self, *, workers=1) -> Report:
         if type(workers) is not int or workers < 1:
             raise ValueError('검사 작업 수는 양의 정수여야 합니다.')
         started = perf_counter()
         self.inspection = {'duration_ms': 0, 'stages': []}
+        self.configuration_report = Report(scope='configuration')
 
         def elapsed(since):
             return round(max(0.0, (perf_counter() - since) * 1000), 3)
@@ -483,43 +508,59 @@ class Engine:
                 found = inspect()
             except (OSError, ValueError, configparser.Error) as exc:
                 found = [self._result(name, 'unknown', '상태 조회', str(exc))]
-            return found, {'id': name, 'duration_ms': elapsed(since)}
+            configuration = (self._display_configuration if name == 'extra_display'
+                             else self._display_policy_configuration if name == 'display_policy' else None)
+            return found, {'id': name, 'duration_ms': elapsed(since)}, found if configuration is None else configuration
 
         try:
             since = perf_counter()
             error = platform_error(self.paths)
             self.inspection['stages'].append({'id': 'platform', 'duration_ms': elapsed(since)})
             if error:
-                return Report([self._result('platform', 'blocked', 'Rocky Linux 10 x86_64', error)])
+                self.configuration_report.results.append(self._result('platform', 'blocked', 'Rocky Linux 10 x86_64', error))
+                return self.configuration_report if self._configuration_only else Report(list(self.configuration_report.results))
             results = [self._result('platform', 'ok', 'Rocky Linux 10 x86_64', '지원 환경')]
             since = perf_counter()
             _, account = self._account(self.config.user)
             self.inspection['stages'].append({'id': 'user', 'duration_ms': elapsed(since)})
             results.append(account)
+            self.configuration_report.results.extend(results)
             stages = [(name, getattr(self, '_' + name)) for name in
                       ('base', 'updates', 'hardware', 'network', 'shell', 'ssh', 'docker',
                        'gpu', 'dev_tools', 'display_policy', 'extra_display')]
             if workers == 1:
                 inspected = map(stage, stages)
-                for found, timing in inspected:
+                for found, timing, configuration in inspected:
                     results.extend(found)
+                    self.configuration_report.results.extend(configuration)
                     self.inspection['stages'].append(timing)
             else:
                 with ThreadPoolExecutor(max_workers=min(workers, 4)) as pool:
                     # Submission is concurrent; consumption keeps the old report order.
                     pending = [pool.submit(stage, inspect) for inspect in stages]
                     for future in pending:
-                        found, timing = future.result()
+                        found, timing, configuration = future.result()
                         results.extend(found)
+                        self.configuration_report.results.extend(configuration)
                         self.inspection['stages'].append(timing)
-            return Report(results)
+            return Report(results, scope='configuration' if self._configuration_only else None)
         finally:
             self.inspection['duration_ms'] = elapsed(started)
 
     def plan(self, *, workers=1) -> Report:
-        return self.inspect(workers=workers)
+        return self.inspect(workers=workers, configuration_only=True)
 
     def apply(self, on_stage=None, on_substep=None) -> Report:
+        previous = self._configuration_only
+        self._configuration_only = True
+        try:
+            report = self._apply(on_stage=on_stage, on_substep=on_substep)
+            report.scope = 'configuration'
+            return report
+        finally:
+            self._configuration_only = previous
+
+    def _apply(self, on_stage=None, on_substep=None) -> Report:
         extra = []
 
         def event(stage, state):
@@ -527,7 +568,7 @@ class Engine:
                 on_stage(stage, state)
 
         def finish(additional=()):
-            report = self.inspect()
+            report = self.inspect(configuration_only=True)
             known = {r.id for r in report.results}
             report.results.extend(r for r in extra if r.id not in known)
             report.results.extend(additional)
@@ -590,7 +631,7 @@ class Engine:
                     outcome = self._hardware(apply=True)
                     if any(r.state == "error" for r in outcome):
                         event(stage, "failed")
-                        report = self.inspect()
+                        report = self.inspect(configuration_only=True)
                         observed = {r.id for r in outcome}
                         report.results = [r for r in report.results if r.id not in observed] + outcome
                         return report

@@ -399,3 +399,60 @@
 - 시험판: https://github.com/ubion-dev/project-ai-learning-analytics-instance-setup/releases/tag/v0.1.0-rc.16
 - RC15 이하에서 이번 한 번 갱신은 구버전 동작에 따라 journal로 완료를 확인한 뒤 ala를 다시 실행한다. 이후 update는 완료 추적/status/TUI u 조회를 제공한다. 기존 실행 Chrome의 감시 전환은 다음 그래픽 로그인 또는 명시적 화면 재시작으로 적용한다.
 - 실제 Rocky GNOME·전체화면·앱 내부 데이터·재부팅 수용은 미완료다. 실제 서버·게시된 이전 후보는 변경하지 않았으며 ALA-25의 출력/외부 장비 구조 확인도 남아 있다. 정식 v0.1.0 완료로 표시하지 않는다.
+
+## ALA-28 시작
+
+- PR #6 병합 dc591028078124e7d32defba0147f1fca4faae5a를 확인하고 origin/main에서 codex/chrome-management를 준비했다. 이전 RC16/원격 장비는 변경하지 않는다.
+- 사용자 화면에서 자동 로그인/자동 시작 등록은 정상이지만 Chrome 프로세스의 cgroup 비교에서 확인 불가가 남음을 확인했다. 실제 장비의 프로세스 관계는 아직 직접 조회하지 않았으므로 원인 추정과 검증을 구분한다.
+- 최신 요구는 간편 설정의 현재 Chrome 자동 시작을 제거하고 부팅 등록 등 설정 준비만 완료하는 것이다. 현재 실행 제어는 TUI 화면 관리로 옮기고 full status/check의 런타임 관측은 유지한다.
+- display 정적 검사/직접 자식 검증, TUI 관리창, 설정/런타임 판정 읽기 검토를 분담했다. root는 Engine/RPC·문서·통합을 맡는다. 실제 재부팅·모니터 표시 수용은 여전히 별도다.
+
+## ALA-28 구현·로컬 검증
+
+- display 단일 패스를 정적 구성/실행 관측으로 분리했다. plan/apply는 scope=configuration으로 Chrome/GNOME 현재 실행 상태를 분리하고 GPU 재부팅·URL 입력 대기는 유지한다. status/check의 전체 관측과 동일 패스 configuration_report는 함께 제공한다. 설정 적용은 현재 Chrome lifecycle 요청을 하지 않으며 부팅 _session 자동 실행은 유지한다.
+- cgroup 문자열 대신 직접 PPid·UID·동일 부팅·양쪽 시작 식별자·실제 프로필/인자를 대조한다. Chromium의 별도 scope 이동 구현을 공식 소스에서 확인했으나 해당 실기기의 원인까지 직접 검증한 것으로 기록하지 않는다. 프로세스 확인 실패 때 health 정상 행도 남기지 않는다.
+- TUI의 c/화면 관리 버튼에 시작·중지·재시작·상태·로그를 연결했다. 설정 준비/현재 실행/사이트 감시를 분리하고 중복·설치/갱신 중 제어·확인 불가를 구분한다. 작업 종료 뒤에는 전체 상태를 별도로 재조회해 설정 전용 결과가 runtime 관측을 지우지 않게 했다.
+- 읽기 검토에서 시작/중지/재시작의 서비스 조회 실패 오인과 길이 제한으로 잘린 인증 로그 행 노출을 재현·보완했다. 단독 제어 요청과 실제 종료 확인을 분리하고 상태가 불명확하면 성공으로 표시하지 않는다.
+- 첫 전체 로컬은 699 passed + 54 subtests와 새 inspect 인자를 받지 못한 테스트 더블 실패 1건이었다. 테스트 더블을 새 계약에 맞추되 스트리밍/종료 검증 의도는 유지했다. 이후 관련 대상 재검증을 진행한다. 표시/health 155개, 엔진/설정·기존 UI 통합 173개+15 subtests, 최종 Chrome UI 16개 검증을 통과했다.
+- 80×24/120×36 합성 TUI를 렌더링해 설정/중지/실행 상태와 버튼을 확인했다. 작은 화면의 URL 줄 숨김도 실제 SVG 회귀로 보완했다. 실제 서버·재부팅·기존 브라우저·RC16은 변경하지 않았다. 다음 행동은 최종 공개 검사·CI·새 PR·RC17 후보 검증이다.
+
+## ALA-28 RC17 후보 완료
+
+- 최종 구현 597202ad913b2011edf5c255ec66f7159134cbc7. push CI 41580266419와 PR CI 41580341485 모두 성공. Python 3.12 전체 705 passed + 54 subtests (132.12초), 공개 이력·Bash·고정 의존성·빌드·CLI smoke 통과.
+- CI/로컬 고정 wheel 빌드/인증 없는 다운로드 byte 일치, SHA-256과 manifest 61개 파일 해시 검증 완료. SHA-256: eb591d499d933e7f1e2a0128f6385d5c8ca3e0dd1285d684e350bc68b4190900.
+- PR #7: https://github.com/ubion-dev/project-ai-learning-analytics-instance-setup/pull/7
+- 시험판: https://github.com/ubion-dev/project-ai-learning-analytics-instance-setup/releases/tag/v0.1.0-rc.17
+- 간편 설정은 등록만 적용하고 현재 실행은 c/화면 관리에서 제어한다. 기존의 GDM 자동 로그인·GNOME autostart·사용자 서비스 복구는 유지했다. 현재 중지와 다음 로그인 자동 시작을 별도로 표시한다.
+- cgroup 문자열 차이 경고를 독립적인 자식 관계 증거로 보완했으며 실제 장비의 cgroup/재부팅 원인까지 직접 검증했다고 기록하지 않는다. 설정 준비·모의 체인 검증과 실제 다른 부팅 ID/모니터 관찰 수용은 구분한다.
+- 실제 서버·현재 Chrome·기존 릴리스는 변경하지 않았다. 후속은 PR 검토·병합, 대상 장비에서 새 CLI 확인과 명시적 재부팅 수용, ALA-25 다중 출력 연결 구조 확인이다.
+
+## ALA-29 시작
+
+- cdffd57/codex/chrome-management 기준. PR #7은 OPEN이며 RC17 게시 상태를 확인했다. 현재 Chrome 옵션이 전부 누락으로 표시되는 사용자 보고를 조사한다.
+- 공개 값 없는 proc 진단에서 단일 원소·제목 내 switch 포함·Chrome 실행 파일 형태를 확인했다. 공식 Chromium의 Linux 제목 재작성과 합성 9개 옵션 전부 불일치 재현이 일치한다. Mac은 해당 재작성이 no-op여서 기존 Mac 스모크로 이 차이를 확인하지 못했다.
+- 현재 parser/fixture는 실제 NUL을 사용하며 문자열 escape 실수가 아님을 독립 확인했다. 같은 NUL 전용 해석을 사용하는 관리 밖 프로필 감지도 조사 범위에 포함한다.
+- 실제 장비의 원문 argv·계정 경로·PID·부팅 ID·운영 URL은 공개 기록/코드에 저장하지 않는다. 확인 가능한 형식만 지원하고 모호한 형태는 확인 불가로 남기는 방향으로 보완한다. 실제 장비 변경/재시작은 수행하지 않았다.
+
+## ALA-29 구현·로컬 검증
+
+- 관측 계층은 기존 NUL 원소 경계를 유지하고 공식 stable 실행 파일과 일치하는 Linux 제목만 제한적으로 해석한다. 인자 경계가 손실된 공백·인용 부호·혼합 형식은 단일 프로세스 확인 불가로 남긴다. 중복·잘못된 값·금지 옵션 및 UID/직접 부모/부팅/양쪽 시작 식별자 검사를 유지한다.
+- 관리 밖 표시 프로필 감지도 제목 형식을 처리한다. 정확한 요청 프로필의 증거가 있으면 모호한 형식도 시작을 차단하고, 무관한 프로필이나 URL 내부 문자열만으로 점유를 단정하지 않는다. 잠금 파일·프로세스·설정은 조회에서 변경하지 않는다.
+- 독립 회귀에서 제목 뒤 NUL 잔여값과 외부 프로필 증거 누락을 발견해 보완했다. 첫 로컬 전체 실행은 수정 전 모듈을 읽어 750 passed + 54 subtests와 새 경계 2건 실패였다. 수정 후 관련 parser/display/health 202개를 재검증해 통과했다. 최종 전체 회귀는 CI에서 다시 확인한다.
+- Linux 실제 Chrome 스모크를 별도 CI 단계로 추가했다. 일반 사용자·네트워크 격리·sandbox 유지·private CDP PID와 실제 proc 제목 형식·요청 옵션 일치를 검증하며 명시적 실행의 환경/의미 실패를 skip하지 않는다. Mac의 기본 opt-in skip을 확인했으며 실제 Linux 통과로 기록하지 않는다.
+- 공개 index 검사 212 objects와 diff 검사를 통과했다. RC18 버전/설치 안내·운영 진단을 준비했다. 현재 Chrome/실제 장비/이전 후보는 변경하지 않았다. 다음 행동은 CI의 전체·실제 Linux 검증과 후보 빌드 대조·RC18 게시다.
+
+## ALA-29 첫 CI 확인
+
+- 구현 fb260b842dde1e455a5255c790e5a2ae22f3ee33의 push 41588603093 / PR 41588608770에서 전체 752 passed + 54 subtests와 공개/Bash 검사를 통과했다.
+- 실제 Linux Chrome은 private CDP/독립 PID/관측기까지 실행됐지만 NUL 형식을 유지해, 새 Linux 제목 분기를 실측해야 한다는 엄격한 스모크 조건이 실패했다. 이를 Linux 제목 검증 성공으로 취급하지 않으며 후보 빌드/업로드/릴리스는 진행하지 않았다.
+- GNOME과 CI의 시작 환경 차이를 조사한다. Chromium은 title 초기화 전에 DBUS 환경을 보충할 수 있고 title 초기화는 원래 환경의 연속 배치를 요구한다. 안전한 disabled DBUS 주소를 미리 전달하는 테스트 환경 보완을 검토하며 실제 서버나 런타임 설정을 바꾸지 않는다.
+
+## ALA-29 RC18 후보 완료
+
+- 최종 코드 4dce9c256a470138a670f082d066f89209c632a6. push CI 41589559253와 PR CI 41589566196 모두 성공했다. Python 3.12 전체 752 passed + 54 subtests, 별도 실제 Linux Chrome smoke 1 passed다.
+- 실제 Chrome을 일반 사용자·sandbox 유지·외부 인터페이스 없는 네트워크 namespace·임시 프로필·private CDP pipe에서 실행했다. CDP의 browser PID와 실제 자식 PID 일치, linux_title 형식, 요청 인자 각 1회와 금지 인자 부재를 확인했다. 테스트 자식의 disabled DBUS 환경을 미리 준비한 뒤 제목 분기를 실측했으며 NUL 관측만으로 성공 처리하지 않았다.
+- 공개 이력/Bash/고정 의존성/빌드/진입점 검증을 통과했다. CI/로컬/인증 없는 공개 다운로드 파일의 byte 일치와 SHA-256·manifest 62개 파일을 검증했다. SHA-256: 3691fbb980ea66ce8aafc1f317797f2beaf80db7d788e291910ceb8ca2c51282.
+- PR #7: https://github.com/ubion-dev/project-ai-learning-analytics-instance-setup/pull/7
+- 시험판: https://github.com/ubion-dev/project-ai-learning-analytics-instance-setup/releases/tag/v0.1.0-rc.18
+- PR 설명을 최종 검사 수정과 화면 관리 분리 범위로 갱신했다. GitHub 연결 앱은 PR 수정 권한이 없어 기존 gh 인증으로 반영했다. 기존 릴리스와 실제 서버/Chrome은 변경하지 않았다.
+- 후속은 ala 갱신 완료 후 새 CLI에서 실행 상태를 재조회하고 실제 Rocky 재부팅·GNOME·화면 수용을 확인하는 것이다. 현재 Chrome을 자동 재시작하지 않으며 옵션 누락 경고가 실제로 남을 때 다음 조치를 확인한다. 정식 완료나 GPU/다중 출력 수용으로 기록하지 않는다.

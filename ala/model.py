@@ -37,6 +37,7 @@ class CheckResult:
 @dataclass
 class Report:
     results: list[CheckResult] = field(default_factory=list)
+    scope: str | None = None
 
     @property
     def exit_code(self) -> int:
@@ -45,6 +46,9 @@ class Report:
         return 2 if any(r.state == "pending" for r in self.results) else 0
 
     def to_dict(self):
-        return {"schema_version": 1, "exit_code": self.exit_code,
+        result = {"schema_version": 1, "exit_code": self.exit_code,
                 "summary": {s: sum(r.state == s for r in self.results) for s in sorted(STATES)},
                 "results": [r.to_dict() for r in self.results]}
+        if self.scope is not None:
+            result['scope'] = self.scope
+        return result

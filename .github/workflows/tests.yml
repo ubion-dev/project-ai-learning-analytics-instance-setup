@@ -39,8 +39,16 @@ jobs:
         run: |
           bash -n install.sh
           find scripts/rocky-linux -name '*.sh' -exec bash -n {} \;
+      - name: Real Linux Chrome proc smoke; sandbox enabled and network isolated
+        timeout-minutes: 2
+        run: |
+          ALA_SMOKE_USER="$(id -un)"
+          ALA_SMOKE_PYTHON="$(command -v python)"
+          sudo unshare --net -- runuser -u "$ALA_SMOKE_USER" -- env \
+            PATH="$PATH" ALA_LINUX_CHROME_SMOKE=1 \
+            "$ALA_SMOKE_PYTHON" -m pytest tests/test_linux_chrome_smoke.py -q -s --tb=short --show-capture=no
       - name: Regression and isolated CLI/TUI/installer tests
-        run: python -m pytest -q --tb=no --show-capture=no
+        run: python -m pytest -q --tb=no --show-capture=no --ignore=tests/test_linux_chrome_smoke.py
       - name: Build hashed offline-installable candidate
         run: |
           python scripts/build-release.py

@@ -143,6 +143,9 @@ def child_rows(stage, *, report=None, job=None, parent_state='unknown'):
     rows = []
     current = ''
     for entry in catalog:
+        if (stage == 'chrome' and observed.get('scope') == 'configuration'
+                and entry['id'] in {'session', 'policy', 'health'}):
+            continue
         items = [item for item in results if isinstance(item, dict) and _matches(str(item.get('id', '')), entry['checks'])]
         actual = _state(items)
         event = latest.get(entry['id'])
