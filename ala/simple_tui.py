@@ -211,6 +211,8 @@ class SimpleApp(App[None]):
             self._resize_warning(event.size)
 
     def _resize_warning(self, size=None):
+        if not self.is_running:
+            return
         size = size or self.size
         self.query_one('#small-terminal').display = size.width < 80 or size.height < 24
         self.screen.set_class(size.height < 32, 'compact')
@@ -218,6 +220,8 @@ class SimpleApp(App[None]):
         self.call_after_refresh(self._fit_setup_table)
 
     def refresh_query_label(self):
+        if not self.is_running:
+            return
         # A queued timer may run while the screen's children are unmounting.
         labels = self.query('#query-status')
         if not labels:
@@ -230,6 +234,8 @@ class SimpleApp(App[None]):
 
     def _fit_setup_table(self):
         """Use measured space without horizontal scrolling; keep the inspected row."""
+        if not self.is_running:
+            return
         table = self.query_one('#setup-table', DataTable)
         if not table.size.width:
             return
@@ -260,6 +266,8 @@ class SimpleApp(App[None]):
         self.call_after_refresh(self._fit_setup_table)
 
     def notice(self, message):
+        if not self.is_running:
+            return
         notice = self.query_one('#notice', Static)
         notice.update(Text(message))
         notice.display = bool(message)
@@ -272,6 +280,8 @@ class SimpleApp(App[None]):
             return None
 
     def update_button(self):
+        if not self.is_running:
+            return
         self.query_one('#setup-actions').display = not bool(self._active_job)
         self.query_one('#setup-note').display = not bool(self._active_job) and not self.screen.has_class('compact')
         self.query_one('#setup-start', Button).disabled = bool(
@@ -279,7 +289,7 @@ class SimpleApp(App[None]):
             or not self._config or not self._config.get('user'))
 
     async def load_state(self):
-        if self._loading or self._submitting:
+        if not self.is_running or self._loading or self._submitting:
             return
         tracked_at_start = self._active_job
         self._loading = True
@@ -294,6 +304,8 @@ class SimpleApp(App[None]):
         attached_early = False
         try:
             config = await config_task
+            if not self.is_running:
+                return
             if config is None:
                 self._config = None
                 self.query_one('#config-summary', Static).update('구성을 확인하지 못했습니다. 상태 다시 확인으로 재시도하세요.')
@@ -303,12 +315,16 @@ class SimpleApp(App[None]):
                 mode = self._config.get('url') if self._config.get('autostart') and self._config.get('url') else '바탕화면만 표시'
                 self.query_one('#config-summary', Static).update(Text(f'설정 대상 · {user}\n화면 · {mode}'))
             runs = await runs_task
+            if not self.is_running:
+                return
             active = next((job for job in (runs or {}).get('runs', []) if job.get('state') in ACTIVE), None)
             if active and not self._active_job and tracked_at_start is None:
                 attached_early = True
                 self._active_job = active['run_id']
                 self.render_job(active)
             report = await report_task
+            if not self.is_running:
+                return
             self._status_known = bool(report and (report.get('results') or report.get('preparation', {}).get('results')))
             if report is None:
                 self._setup_report = None
@@ -347,15 +363,18 @@ class SimpleApp(App[None]):
             await asyncio.gather(config_task, runs_task, report_task, return_exceptions=True)
             self._loading = False
             self._has_checked = True
-            self.refresh_query_label()
-            self.render_setup_table()
-            self.query_one('#status-refresh', Button).disabled = False
-            self.update_button()
-            if self.query_one('#tabs', Tabs).active == 'setup-tab' and not self.query_one('#setup-start', Button).disabled:
-                self.query_one('#setup-start', Button).focus()
+            if self.is_running:
+                self.refresh_query_label()
+                self.render_setup_table()
+                self.query_one('#status-refresh', Button).disabled = False
+                self.update_button()
+                if self.query_one('#tabs', Tabs).active == 'setup-tab' and not self.query_one('#setup-start', Button).disabled:
+                    self.query_one('#setup-start', Button).focus()
 
     @on(Tabs.TabActivated, '#tabs')
     def activate_tab(self, event):
+        if not self.is_running:
+            return
         section = 'setup' if event.tab.id == 'setup-tab' else 'status'
         self.query_one('#pages', ContentSwitcher).current = section
         target = '#setup-start' if section == 'setup' else '#status-table'
@@ -374,7 +393,7 @@ class SimpleApp(App[None]):
         self.query_one('#tabs', Tabs).active = 'setup-tab'
 
     def action_refresh(self):
-        if self._loading or self._submitting:
+        if not self.is_running or self._loading or self._submitting:
             return
         self.run_worker(self.load_state(), group='load', exclusive=True, exit_on_error=False)
 
@@ -383,12 +402,14 @@ class SimpleApp(App[None]):
         self.run_worker(self.start_setup(), group='submit', exit_on_error=False)
 
     async def start_setup(self):
-        if self._submitting or self._active_job or self._loading or not self._status_known or not self._config or not self._config.get('user'):
+        if not self.is_running or self._submitting or self._active_job or self._loading or not self._status_known or not self._config or not self._config.get('user'):
             return
         self._submitting = True
         self.update_button()
         try:
             current = await self.api('config-show')
+            if not self.is_running:
+                return
             if current is None:
                 return
             if current.get('config') != self._config:
@@ -396,6 +417,8 @@ class SimpleApp(App[None]):
                 self._status_known = False
                 return
             job = await self.api('submit', {'expected_config': deepcopy(self._config)})
+            if not self.is_running:
+                return
             if job is not None:
                 self._active_job = job['run_id'] if job.get('state') in ACTIVE else None
                 self.render_job(job)
@@ -405,11 +428,13 @@ class SimpleApp(App[None]):
             self.update_button()
 
     async def poll_job(self):
-        if self._polling or not self._active_job:
+        if not self.is_running or self._polling or not self._active_job:
             return
         self._polling = True
         try:
             job = await self.api('runs-show', {'run_id': self._active_job})
+            if not self.is_running:
+                return
             if job is None:
                 return
             self.render_job(job)
@@ -426,6 +451,8 @@ class SimpleApp(App[None]):
             self.update_button()
 
     def render_job(self, job):
+        if not self.is_running:
+            return
         state = JOB_LABELS.get(job.get('state'), '확인 필요')
         self.query_one('#setup-progress', Static).update(Text(f"현재 작업 · {state} · 실행 ID {job.get('run_id', '-') }"))
         overview = self.query_one('#setup-overview')
@@ -436,6 +463,8 @@ class SimpleApp(App[None]):
         self.render_setup_table()
 
     def render_setup_table(self):
+        if not self.is_running:
+            return
         if self._display_job is None:
             self.query_one('#setup-overview').set_classes('')
         parents = progress_rows(report=self._setup_report, job=self._display_job)
@@ -523,6 +552,8 @@ class SimpleApp(App[None]):
         return Text(STATE_LABELS.get(row['state'], row['state']), style=STATE_STYLES.get(row['state'], 'yellow'))
 
     def show_setup_row(self, index):
+        if not self.is_running:
+            return
         if not 0 <= index < len(self._progress_rows):
             return
         row = self._progress_rows[index]
@@ -540,6 +571,8 @@ class SimpleApp(App[None]):
             self.show_setup_row(keys.index(event.row_key.value))
 
     def render_status(self, report):
+        if not self.is_running:
+            return
         rows = report.get('results', []) + report.get('preparation', {}).get('results', [])
         groups = {}
         for row in rows:
@@ -570,6 +603,8 @@ class SimpleApp(App[None]):
             pass
 
     def show_group(self, index):
+        if not self.is_running:
+            return
         names = list(self._groups)
         if 0 <= index < len(names):
             name = names[index]
@@ -580,6 +615,8 @@ class SimpleApp(App[None]):
         try:
             result = await asyncio.to_thread(check)
         except Exception:
+            return
+        if not self.is_running:
             return
         if result.get('available'):
             self.query_one('#update-notice', Static).update(Text(f"새 버전 {result['latest']} · ala update로 갱신"))

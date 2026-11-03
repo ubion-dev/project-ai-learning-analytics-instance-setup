@@ -1,6 +1,7 @@
 """Early context, loading feedback and evidence labels without host access."""
 import asyncio
 from copy import deepcopy
+import pytest
 
 from textual.widgets import Button, DataTable, Static, TextArea
 
@@ -153,4 +154,31 @@ def test_loading_timer_tolerates_the_label_unmounting_during_shutdown():
             app.refresh_query_label()
             await pilot.press('q')
         assert not any(action == 'submit' for action, _ in app.service.calls)
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize('query_fails', (False, True))
+def test_late_status_response_after_shutdown_does_not_touch_removed_widgets(query_fails):
+    async def scenario():
+        service = FakeService()
+        app = SimpleApp(service=service)
+        async with app.run_test(size=(80, 24)) as pilot:
+            await pilot.pause()
+            service.gate = asyncio.Event()
+            service.fail_status = query_fails
+            # An independent read can finish after Textual's screen is closed.
+            pending = asyncio.create_task(app.load_state())
+            await pilot.pause()
+            assert app._loading
+        assert not app.is_running
+        service.gate.set()
+        await pending
+        await app.load_state()
+        await app.poll_job()
+        await app.start_setup()
+        app.refresh_query_label()
+        app.show_group(0)
+        app.render_setup_table()
+        assert not app._loading
+        assert not any(action == 'submit' for action, _ in service.calls)
     asyncio.run(scenario())
