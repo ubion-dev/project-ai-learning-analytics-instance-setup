@@ -454,3 +454,17 @@ def test_user_preflight_observes_exact_loaded_unit_without_changing_manager(tmp_
     result=display.user_action('environment',target='right',config=fleet(),home=tmp_path,host=Host(),paths=Paths(tmp_path))
     assert result['state']==expected
     assert len(calls)==2 and not any('start' in args or 'stop' in args or 'daemon-reload' in args for args in calls)
+
+
+def test_nonfirst_candidate_pin_is_not_forwarded_to_session_inventory_rpc(monkeypatch):
+    pin={'config_path':'/var/lib/ala-runtime/configs/second-candidate.json','revision':'a'*64,'version':'0.1.0rc21'}
+    config=replace(fleet(),runtime_pin=pin).for_screen('right',revision=pin['revision'])
+    calls=[]
+    def observed(context,host,paths,action):
+        calls.append((context.target_id,context.runtime_pin,action))
+        assert context.runtime_pin is None
+        return preflight_inventory()
+    monkeypatch.setattr(display,'_user_call',observed)
+    result=screens._inventory(config,object(),Paths())
+    assert result['state']=='ok' and calls==[('default',None,'outputs')]
+    assert config.target_id=='right' and config.runtime_pin==pin

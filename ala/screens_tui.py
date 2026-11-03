@@ -231,8 +231,9 @@ class ScreenPanel(Vertical):
             counts = [v.get('placement', {}).get('confirmed_window_count', v.get('placement', {}).get('window_count')) for v in targets]
             confirmed = sum(v for v in counts if type(v) is int) if any(type(v) is int for v in counts) else '확인 불가'
         output_label = f'출력 {physical}개 · 논리 화면 {logical}개' if self.report.get('output_state', 'ok') == 'ok' else '출력 조회 대기·확인 필요'
+        confirmed_label = str(confirmed)+'개' if type(confirmed) is int else '확인 불가'
         self.query_one('#screens-summary', Static).update(Text(
-            f'{output_label} · 관리 대상 {len(targets)}개 · 확인된 창 {confirmed}개'
+            f'{output_label} · 관리 대상 {len(targets)}개 · 확인된 창 {confirmed_label}'
             if self.loaded else '출력·창 조회 확인 필요 · '+str(self.report.get('reason', '조회 중'))))
         self.query_one('#screens-map', Static).update(Text(topology_text(self.report, max(20, self.size.width-4), 7 if self.size.height >= 23 else 3)))
         table = self.query_one('#screens-table', DataTable)

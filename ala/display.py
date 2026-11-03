@@ -642,14 +642,18 @@ def _load_user_config(paths=Paths(),target='default',*,runtime=False):
     info = p.lstat()
     if p.is_symlink() or not p.is_file() or info.st_uid != 0 or info.st_mode & 0o022:
         raise PermissionError('root 소유의 쓰기 보호된 ala 구성이 필요합니다.')
-    config = Config.load(p)
+    config = None
     revision=''
     if runtime or os.environ.get('ALA_RUNTIME_CONFIG'):
         from .runtime import load_user_selection
         selected=load_user_selection(target or os.environ.get('ALA_RUNTIME_TARGET','default'),paths=paths)
-        if selected:
+        if selected is not None:
+            # Desired config may already use a future schema. A protected,
+            # selected snapshot is the only config this runtime must parse.
             config=Config.from_dict(selected['config'])
             revision=selected['revision']
+    if config is None:
+        config = Config.load(p)
     identity = pwd.getpwuid(os.getuid())
     if config.user != identity.pw_name:
         raise PermissionError('지정한 화면 사용자로 실행하세요.')
