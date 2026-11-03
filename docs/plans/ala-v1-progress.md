@@ -356,3 +356,13 @@
 - 로컬 전체 회귀 530 passed + 54 subtests (149.55초). 이후 서비스 조회의 부분 실패 회귀를 보강하고 최종 표시/엔진/세부 모델/로딩 대상 131 passed + 15 subtests로 재검증했다. 고정 wheel RC15 후보 빌드와 diff 문법 검사를 통과했다.
 - 실제 장비의 Chrome 등록 정상은 사용자 화면에서 확인했으나 실행 대기 원인은 아직 해당 상세가 없어 확정하지 않았다. 실제 서버 변경·재부팅·Docker 재시작은 수행하지 않았다. 최종 CI·RC15 후보 게시와 실기기 수용이 남아 있다.
 - 합성 화면에서 원인/다음 조치가 보이는 것을 확인했다. GPU runtime처럼 현재 값이 긴 JSON이면 다음 조치를 먼저 표시하고 원본 증거는 그 뒤에 유지해 상세 화면 밖으로 조치가 밀리지 않도록 보완했다.
+
+## ALA-24 RC15 후보 완료
+
+- 최종 구현 8aa7df5e14a8c2b2fd4bb350f5720f26c88323c5. push CI 41560135363와 PR CI 41560143404 모두 성공. Python 3.12 전체 532 passed + 54 subtests (83.08초), 공개 이력·Bash·고정 의존성·빌드·CLI smoke 통과.
+- 긴 runtime 조치 우선 보강 후 세부 모델/로딩/배치 50개 재검증 통과. 별도 읽기 리뷰에서 자동 시작 안전 조건·고정 진입점·후속 단계 실패 시 Chrome 오류 보존을 확인했다.
+- CI 설치 묶음과 고정 wheel 로컬 빌드 byte 일치. 체크섬·manifest 57개 파일 해시 검증 후 인증 없는 공개 다운로드와 byte 일치 확인. SHA-256: a758698d1d72d2ec6e28c309e9c137576b9d13430ee53bddb404ec15ec53a0df.
+- 사용자 추가 확인으로 실제 대기가 등록 미완료가 아닌 현재 Chrome 서비스 중지였음을 구분했다. RC15의 현재 세션 자동 시작 보완이 이 누락을 처리하며, 실제 장비 적용·모니터 표시 검증은 남아 있다.
+- 기존 PR #6 설명을 최종 자동 설정/진행 상태 범위로 갱신했다: https://github.com/ubion-dev/project-ai-learning-analytics-instance-setup/pull/6
+- 시험판: https://github.com/ubion-dev/project-ai-learning-analytics-instance-setup/releases/tag/v0.1.0-rc.15
+- 진행 중 설정 작업이 끝난 뒤 ala update --prerelease로 갱신하고 다시 실행해 간편 설정을 한 번 적용한다. 실제 서버 변경·재부팅·Docker/GDM 재시작은 수행하지 않았다. 후속은 PR 검토·병합과 실기기 수용이다.
