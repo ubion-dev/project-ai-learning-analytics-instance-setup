@@ -22,6 +22,8 @@ def test_slow_first_inspection_shows_context_and_neutral_loading_until_ready():
             assert app.query_one('#setup-start', Button).disabled
             query = app.query_one('#query-status', Static)
             assert query.display and '확인 중' in str(query.render())
+            detail = app.query_one('#setup-output', TextArea).text
+            assert '검사하고 있습니다' in detail and '확인 불가' not in detail
             table = app.query_one('#setup-table', DataTable)
             assert app._progress_rows
             for row in app._progress_rows:

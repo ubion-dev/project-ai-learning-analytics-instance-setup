@@ -523,6 +523,8 @@ class SimpleApp(App[None]):
             return
         row = self._progress_rows[index]
         detail = row['label'] + '\n' + row.get('detail', '')
+        if not self._has_checked and self._setup_report is None and self._display_job is None:
+            detail = row['label'] + '\n환경 상태를 검사하고 있습니다.\n검사가 끝나면 현재 값과 필요한 조치를 표시합니다.'
         output = self.query_one('#setup-output', TextArea)
         if output.text != detail:
             output.load_text(detail)
