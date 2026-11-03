@@ -108,8 +108,13 @@ def test_helper_without_required_prefix_is_not_returned():
 
 
 @pytest.mark.parametrize('service_output', ('', '-- No entries --\n'))
-def test_no_entries_is_normal_empty_including_grep_no_match_exit_one(service_output):
-    host = JournalHost(Command(0, service_output), Command(1, '-- No entries --\n'))
+@pytest.mark.parametrize('helper_output', ('', '-- No entries --\n'))
+def test_no_entries_is_normal_empty_including_json_grep_no_match_exit_one(service_output, helper_output):
+    # v257 OUTPUT_JSON sets arg_quiet while no-match grep still exits 1.
+    # The old marker-only expectation missed that normal empty stdout case.
+    # https://github.com/systemd/systemd/blob/v257/src/journal/journalctl.c#L449-L459
+    # https://github.com/systemd/systemd/blob/v257/src/journal/journalctl-show.c#L421-L432
+    host = JournalHost(Command(0, service_output), Command(1, helper_output))
     value = display_journal.read_display_journal(host, UID)
     assert value['exit_code'] == 0 and value['state'] == 'ok' and value['log'] == ''
     assert '로그가 없습니다' in value['reason']
@@ -119,7 +124,11 @@ def test_no_entries_is_normal_empty_including_grep_no_match_exit_one(service_out
     Command(127, '', 'private executable path'),
     Command(124, '', 'private timeout detail'),
     Command(1, '-- No entries --\n', 'Permission denied: private journal path'),
-    Command(1, '', ''),
+    Command(1, '{"MESSAGE":', ''),
+    Command(1, ' \n', ''),
+    Command(1, '', ' '),
+    Command(1, '', 'Permission denied: private journal path'),
+    Command(2, '', ''),
     Command(0, '', 'Some journal files were not opened due to insufficient permissions.'),
     PermissionError('private host detail'),
 ))
@@ -138,6 +147,14 @@ def test_failed_runtime_query_cannot_be_hidden_by_successful_login_helper_query(
     assert result['exit_code'] == 1 and result['log'] == ''
     assert 'Chrome 서비스' in result['reason'] and len(host.calls) == 2
     assert 'phase=request' not in str(result)
+
+
+def test_runtime_query_without_grep_cannot_treat_exit_one_empty_as_normal_no_match():
+    host = JournalHost(Command(1, '', ''), Command(1, '', ''))
+    result = display_journal.read_display_journal(host, UID)
+    assert result['exit_code'] == 1 and result['state'] == 'unknown' and result['log'] == ''
+    assert 'Chrome 서비스' in result['reason']
+    assert '로그인 진입점' not in result['reason']
 
 
 @pytest.mark.parametrize('invalid', ('not json', '{}', '[]', '{"_UID":'))

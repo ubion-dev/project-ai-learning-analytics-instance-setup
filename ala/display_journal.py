@@ -22,16 +22,18 @@ def _messages(response, uid, *, helper):
     if not isinstance(response.stdout, str) or not isinstance(response.stderr, str):
         raise _JournalError('로그 조회 응답 형식을 확인하지 못했습니다.')
     output = response.stdout.strip()
-    # With --grep journalctl exits 1 for no matches. Accept only its exact,
-    # diagnostic-free empty marker; permission or partial-query failures differ.
+    # With --grep journalctl exits 1 for no matches. Its JSON output also sets
+    # arg_quiet, suppressing the empty marker. Only a marker or exactly empty
+    # stdout without any stderr is a no-match result for this fixed grep query.
     empty = output == '-- No entries --'
-    no_match = helper and response.returncode == 1 and empty and not response.stderr.strip()
+    no_match = (helper and response.returncode == 1 and not response.stderr and
+                (empty or response.stdout == ''))
     if response.returncode != 0 and not no_match:
         reason = ('journalctl 명령을 사용할 수 없습니다.' if response.returncode == 127 else
                   '로그 조회 제한 시간이 초과되었습니다.' if response.returncode == 124 else
                   '대상 로그 조회에 실패했습니다. 권한과 journal 상태를 확인하세요.')
         raise _JournalError(reason)
-    if response.stderr.strip():
+    if response.stderr:
         raise _JournalError('로그 조회 진단이 있어 결과의 완전성을 확인하지 못했습니다.')
     if empty or not output:
         return []
