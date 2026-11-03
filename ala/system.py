@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from concurrent.futures import Future
 from pathlib import Path
 import os
+import sys
 import subprocess
 import tempfile
+from threading import Lock
 
 @dataclass(frozen=True)
 class Paths:
@@ -43,6 +46,66 @@ class Host:
 
     def execute(self, argv, *, env=None) -> int:
         return subprocess.run(list(argv), env=env, check=False).returncode
+
+    def execute_reported(self, argv, *, env=None, on_line=None) -> int:
+        """Stream a module's output to the worker log and an optional observer."""
+        observer_error = None
+        with subprocess.Popen(list(argv), env=env, stdout=subprocess.PIPE,
+                              stderr=subprocess.STDOUT, text=True, errors='replace', bufsize=1) as process:
+            for line in process.stdout:
+                try:
+                    sys.stdout.write(line)
+                    sys.stdout.flush()
+                except OSError as exc:
+                    observer_error = observer_error or exc
+                if on_line is not None and observer_error is None:
+                    try:
+                        on_line(line)
+                    except Exception as exc:
+                        # Drain to completion: a record error must not kill an RPM transaction.
+                        observer_error = exc
+            code = process.wait()
+        if observer_error is not None:
+            raise observer_error
+        return code
+
+
+class InspectionHost:
+    """Share identical reads for one Operations request, never across mutations.
+
+    Callers create this wrapper locally and discard it after the response. The
+    Future is installed before running the command so parallel stages share both
+    successful and failed queries without holding a lock during subprocess I/O.
+    """
+    def __init__(self, host):
+        self._host = host
+        self._queries = {}
+        self._lock = Lock()
+
+    def run(self, argv, *, timeout=10, env=None) -> Command:
+        args = list(argv)
+        environment = None if env is None else dict(env)
+        key = (tuple(args), timeout,
+               None if environment is None else tuple(sorted(environment.items())))
+        with self._lock:
+            query = self._queries.get(key)
+            first = query is None
+            if first:
+                query = self._queries[key] = Future()
+        if first:
+            try:
+                query.set_result(self._host.run(args, timeout=timeout, env=environment))
+            except BaseException as exc:
+                query.set_exception(exc)
+        result = query.result()
+        # Do not let one stage alter a command result observed by another stage.
+        return Command(result.returncode, result.stdout, result.stderr)
+
+    def execute(self, argv, *, env=None):
+        raise RuntimeError('상태 조회에서는 변경 명령을 실행하지 않습니다.')
+
+    def execute_reported(self, argv, *, env=None, on_line=None):
+        raise RuntimeError('상태 조회에서는 변경 명령을 실행하지 않습니다.')
 
 def atomic_json(path: Path, value, mode=0o600):
     import json

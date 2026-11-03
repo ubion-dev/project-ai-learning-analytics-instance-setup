@@ -9,7 +9,11 @@ if (($#)); then
   esac
 fi
 require_rocky
+ala_substep repository started
 install_missing_packages dnf-plugins-core
 ensure_repo_enabled crb
 install_missing_packages epel-release
+ala_substep repository completed
+ala_substep packages started
 install_missing_packages neovim btop tmux
+ala_substep packages completed

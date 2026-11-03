@@ -6,6 +6,7 @@ import tarfile
 import pytest
 from ala import update
 from ala.cli import main
+from ala.system import Command, Paths
 
 
 def release(tag, **extra):
@@ -77,8 +78,8 @@ def test_cli_update_submits_selected_channel(capsys):
         def request(self, action, payload):
             assert action == 'update-submit'
             assert payload == {'prerelease': True}
-            return {'started': True, 'latest': '2.0.0rc1', 'next_action': 'logs', 'exit_code': 0}
-    assert main(['update', '--prerelease', '--json'], service=Service()) == 0
+            return {'started': True, 'latest': '2.0.0rc1', 'next_action': 'logs', 'exit_code': 2}
+    assert main(['update', '--prerelease', '--detach', '--json'], service=Service()) == 2
     assert json.loads(capsys.readouterr().out)['started']
 
 
@@ -107,23 +108,29 @@ def test_symlink_archive_rejected(tmp_path):
 
 
 def test_no_release_does_not_start_job(monkeypatch, tmp_path):
-    monkeypatch.setattr(update, 'check', lambda *a: {'available': False, 'exit_code': 0})
+    monkeypatch.setattr(update, 'check', lambda *a, **kw: {'available': False, 'exit_code': 0})
     monkeypatch.setattr(update.subprocess, 'run', lambda *a, **kw: pytest.fail('unnecessary worker'))
     assert not update.submit(tmp_path)['available']
 
 
 def test_submit_fixed_background_worker(monkeypatch, tmp_path):
-    from contextlib import nullcontext
     from ala import jobs
-    monkeypatch.setattr(update, 'check', lambda *a: {'available': True, 'exit_code': 0, 'tag': 'v2.0.0'})
-    monkeypatch.setattr(jobs, 'change_lock', nullcontext)
+    monkeypatch.setattr(update, 'check', lambda *a, **kw: {'available': True, 'exit_code': 0, 'tag': 'v2.0.0', 'latest': '2.0.0'})
     monkeypatch.setattr(jobs.JobStore, 'list', lambda self: [])
+    paths = Paths(tmp_path)
+    boot = paths.at('/proc/sys/kernel/random/boot_id')
+    boot.parent.mkdir(parents=True)
+    boot.write_text('synthetic-boot')
     calls = []
-    monkeypatch.setattr(update.subprocess, 'run', lambda args, **kw: calls.append(args))
-    assert update.submit(tmp_path)['started']
+    class Host:
+        def run(self, args, **kwargs):
+            calls.append(args)
+            return Command(0)
+    result = update.submit(tmp_path, paths=paths, host=Host())
+    assert result['started'] and result['exit_code'] == 2
     assert calls[0][:3] == ['systemd-run', '--unit=ala-update', '--collect']
-    assert calls[0][-2:] == ['_update-worker', 'v2.0.0']
+    assert calls[0][-2:] == ['_update-worker', result['run_id']]
     monkeypatch.setattr(jobs.JobStore, 'list', lambda self: [{'state': 'running'}])
     with pytest.raises(RuntimeError):
-        update.submit(tmp_path)
+        update.submit(tmp_path, paths=paths, host=Host())
     assert len(calls) == 1

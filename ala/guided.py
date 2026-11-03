@@ -314,7 +314,7 @@ class GuidedSetup:
         self.query_one('#wizard-progress', Static).update(Text(text))
         lines = []
         for stage in job.get('stages', []):
-            state_label = {'started': '진행 중', 'completed': '완료', 'failed': '실패', 'pending': '대기'}.get(stage.get('state'), stage.get('state'))
+            state_label = {'started': '진행 중', 'completed': '완료', 'kept': '정상 유지', 'blocked': '조치 필요', 'failed': '실패', 'pending': '대기'}.get(stage.get('state'), stage.get('state'))
             lines.append(f"{item_name(stage.get('id'))}: {state_label}")
         if job.get('reason'):
             lines.append(str(job['reason']))

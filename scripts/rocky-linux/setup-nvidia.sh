@@ -16,15 +16,19 @@ while (($#)); do
   esac
 done
 require_rocky
+ala_substep detection started
 if ! nvidia_gpu_present; then
+  ala_substep detection completed
   echo '[건너뜀] NVIDIA GPU가 없습니다. GPU 패키지를 설치하지 않습니다.'
   exit 0
 fi
+ala_substep detection completed
 [[ $(uname -m) == x86_64 ]] || die '현재 GPU 설치 스크립트는 x86_64 전용입니다.'
 printf '현재 커널: %s\n' "$(uname -r)"
 pending=/var/lib/rocky-setup/nvidia-reboot-required
 if command -v nvidia-smi >/dev/null && nvidia-smi; then
   if $install_driver && [[ -f $pending ]]; then rm -f "$pending"; fi
+  ala_substep verify kept
   echo '[유지] 현재 NVIDIA 드라이버가 정상 동작합니다.'
   exit 0
 fi
@@ -38,11 +42,13 @@ if [[ -f $pending ]] && ! rpm -q nvidia-open >/dev/null 2>&1; then
 fi
 if [[ -f $pending ]]; then
   if [[ $(cat "$pending") == "$boot_id" ]]; then
+    ala_substep driver pending
     echo '[대기] NVIDIA 패키지는 이미 설치되었습니다. 재부팅 후 같은 setup.sh 명령을 다시 실행하세요.'
     exit 10
   fi
   die '재부팅 후에도 NVIDIA 드라이버가 동작하지 않습니다. DKMS/커널/서명 상태를 확인하세요.'
 fi
+ala_substep compatibility started
 if [[ -f /var/log/nvidia-installer.log ]]; then
   die '.run 방식 설치 흔적이 있습니다. 기존 설치 상태를 확인한 뒤 패키지 방식으로 전환하세요.'
 fi
@@ -64,6 +70,8 @@ curl --fail --silent --show-error --location \
 if ! python3 "$ROCKY_SCRIPT_DIR/lib/nvidia_gpu.py" --support-table "$support_table"; then
   die 'NVIDIA open 드라이버 지원이 확인되지 않았습니다. 레거시/미확인 GPU는 별도 드라이버가 필요합니다.'
 fi
+ala_substep compatibility completed
+ala_substep build_packages started
 ensure_repo_enabled crb
 install_missing_packages epel-release
 install_missing_packages gcc make dkms kernel-headers
@@ -73,14 +81,21 @@ if [[ ! -d /usr/src/kernels/$(uname -r) ]]; then
 fi
 [[ -d /usr/src/kernels/$(uname -r) ]] || \
   die '실행 커널용 개발 파일이 없습니다. kernel-devel 패키지의 파일과 저장소 지원 버전을 확인하세요.'
+ala_substep build_packages completed
+ala_substep repository started
 add_repo https://developer.download.nvidia.com/compute/cuda/repos/rhel10/x86_64/cuda-rhel10.repo \
   /etc/yum.repos.d/cuda-rhel10.repo
+ala_substep repository completed
+ala_substep driver started
 # Full desktop + compute driver for workloads alongside Chrome/GNOME.
 install_missing_packages nvidia-open
+ala_substep driver completed
+ala_substep verify started
 rpm -q nvidia-open >/dev/null || die 'NVIDIA 드라이버 패키지 설치를 확인할 수 없습니다.'
 install -d -m 0755 /var/lib/rocky-setup
 printf '%s\n' "$boot_id" > "$pending"
 chmod 0600 "$pending"
+ala_substep verify pending
 echo '[대기] NVIDIA 드라이버 설치 완료. 자동 재부팅하지 않습니다.'
 echo '유지보수 시간에 재부팅 후 같은 setup.sh 명령을 다시 실행하면 컨테이너 GPU 연결을 이어서 검사합니다.'
 exit 10

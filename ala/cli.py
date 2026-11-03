@@ -34,7 +34,11 @@ def parser():
         setup.add_argument('--detach', action='store_true')
         setup.add_argument('--json', action='store_true')
     update = sub.add_parser('update', help='ala 새 버전 확인·갱신')
-    update.add_argument('--check', action='store_true', help='설치 없이 확인')
+    update_mode = update.add_mutually_exclusive_group()
+    update_mode.add_argument('--check', action='store_true', help='설치 없이 새 버전 확인')
+    update_mode.add_argument('--status', action='store_true', help='마지막 갱신의 완료·실패 확인')
+    update.add_argument('--run', dest='run_id', help='조회할 갱신 실행 ID (--status)')
+    update.add_argument('--detach', action='store_true', help='갱신 시작 후 완료를 기다리지 않고 반환')
     update.add_argument('--prerelease', action='store_true', help='시험판 포함')
     update.add_argument('--json', action='store_true')
     doctor = sub.add_parser('doctor', help='읽기 전용 진단').add_subparsers(dest='action', required=True)
@@ -71,6 +75,31 @@ def emit(value, as_json=False):
                 print(f'  → {result["next_action"]}')
         print('결과: ' + ' / '.join(f'{key} {count}' for key,count in value.get('summary', {}).items() if count))
 
+
+def update_result(result):
+    labels = {'queued':'시작 대기', 'running':'진행 중', 'completed':'완료',
+              'failed':'실패', 'interrupted':'중단됨', 'unknown':'확인 불가', 'idle':'실행 기록 없음'}
+    print('ala 갱신: ' + labels.get(result.get('state'), '확인 불가'))
+    if result.get('phase') and result.get('state') not in {'idle', 'completed'}:
+        print('단계: ' + update_phase(result['phase']))
+    if result.get('run_id'):
+        print('실행 ID: ' + result['run_id'])
+    print('설치된 버전: ' + str(result.get('installed_version') or '확인 불가'))
+    if result.get('target_version'):
+        print('대상 버전: ' + result['target_version'])
+    if result.get('reason'):
+        print(result['reason'])
+    if result.get('next_action'):
+        print(result['next_action'])
+
+
+def update_phase(phase):
+    return {'queued':'작업 접수', 'checking':'업데이트 조건 확인',
+            'downloading':'배포 파일 다운로드', 'checksum':'다운로드 해시 검사',
+            'manifest':'배포 파일 검증', 'installing':'새 버전 설치',
+            'rechecking':'설치 버전·실행 재검사', 'completed':'완료', 'failed':'실패'}.get(phase, str(phase))
+
+
 def main(argv=None, *, service=None):
     argv = list(sys.argv[1:] if argv is None else argv)
     # Not part of the public command grammar. Root-owned installed entry only.
@@ -82,12 +111,11 @@ def main(argv=None, *, service=None):
             if argv[0] == '_update-worker' and len(argv) == 2:
                 from .jobs import trusted_release
                 from .system import platform_error
-                from .update import install_release
+                from .update import run_worker
                 if os.geteuid() != 0 or platform_error():
                     raise PermissionError('Rocky Linux root 작업입니다.')
                 trusted_release(Path(__file__).resolve().parents[1])
-                install_release(argv[1])
-                return 0
+                return run_worker(argv[1])
             if argv[0] == '_worker' and len(argv) == 2:
                 from .jobs import trusted_release, run_worker
                 from .system import platform_error
@@ -109,8 +137,15 @@ def main(argv=None, *, service=None):
             return 1
     p = parser()
     args = p.parse_args(argv)
-    if getattr(args, 'detach', False) and not getattr(args, 'apply', False):
+    if args.command in {'setup', 'prepare'} and args.detach and not args.apply:
         p.error('--detach는 --apply와 함께 사용하세요.')
+    if args.command == 'update':
+        if args.detach and (args.check or args.status):
+            p.error('--detach는 갱신 실행에만 사용하세요.')
+        if args.run_id and not args.status:
+            p.error('--run은 --status와 함께 사용하세요.')
+        if args.status and args.prerelease:
+            p.error('--status에는 시험판 채널 선택이 필요하지 않습니다.')
     svc = service or Service()
     try:
         if args.command is None or args.command in {'tui', 'console'} or (args.command == 'chrome' and not args.action) or (args.command == 'config' and args.action == 'edit'):
@@ -135,11 +170,33 @@ def main(argv=None, *, service=None):
             from .update import check
             if args.check:
                 result = check(args.prerelease)
+            elif args.status:
+                svc.authenticate()
+                result = svc.request('update-status', {'run_id': args.run_id})
             else:
                 svc.authenticate()
                 result = svc.request('update-submit', {'prerelease': args.prerelease})
+                if result.get('started') and not args.detach:
+                    run_id = result.get('run_id')
+                    if not run_id:
+                        raise RuntimeError('업데이트 실행 ID를 확인하지 못했습니다. ala update --status로 확인하세요.')
+                    previous = None
+                    if not args.json:
+                        print(f"ala {result.get('latest', result.get('target_version', '?'))} 갱신 · 실행 ID {run_id}")
+                        print('SSH·이 표시를 종료해도 갱신 작업은 계속됩니다.')
+                    while True:
+                        result = svc.request('update-status', {'run_id': run_id})
+                        if result.get('state') not in {'queued', 'running'}:
+                            break
+                        phase = result.get('phase')
+                        if not args.json and phase != previous:
+                            print('진행 중: ' + update_phase(phase or '상태 확인'))
+                        previous = phase
+                        time.sleep(1)
             if args.json:
                 emit(result, True)
+            elif args.status or result.get('state'):
+                update_result(result)
             elif result.get('started'):
                 print(f"ala {result['latest']} 갱신 시작. SSH 종료 후에도 계속됩니다.")
                 print(result['next_action'])
@@ -211,7 +268,7 @@ def main(argv=None, *, service=None):
                     return 0
                 time.sleep(1)
     except KeyboardInterrupt:
-        print('표시를 종료했습니다. 시작한 설치 작업은 계속 실행됩니다.', file=sys.stderr)
+        print('표시를 종료했습니다. 시작한 작업은 계속 실행됩니다.', file=sys.stderr)
         return 130
     except (OSError, ValueError, RuntimeError, KeyError) as exc:
         if getattr(args, 'json', False):

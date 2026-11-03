@@ -11,13 +11,18 @@ while (($#)); do
   esac
 done
 require_rocky
+ala_substep packages started
 install_missing_packages openssh-server firewalld iproute
+ala_substep packages completed
+ala_substep sshd started
 # Generate missing host keys before validation; preserve all existing keys.
 if ! /usr/sbin/sshd -t; then systemctl start sshd-keygen.target; fi
 # Check the existing SSH configuration and permit ALL configured listening ports.
 /usr/sbin/sshd -t
 ports=$(/usr/sbin/sshd -T | awk '$1 == "port" { print $2 }')
 [[ -n $ports ]] || die 'SSH 수신 포트를 확인할 수 없습니다.'
+ala_substep sshd completed
+ala_substep firewall started
 firewall_running=false
 if firewall-cmd --state >/dev/null 2>&1; then firewall_running=true; fi
 if [[ -z $zone ]]; then
@@ -63,9 +68,12 @@ for port in $ports; do
     fi
   fi
 done
+ala_substep firewall completed
+ala_substep services started
 # No reload of existing firewall rules or restart of the current SSH daemon.
 ensure_service sshd
 ensure_service firewalld
 systemctl is-active --quiet sshd firewalld
 systemctl is-enabled sshd firewalld
+ala_substep services completed
 echo '기존 SSH 인증 설정과 SELinux 설정을 유지했습니다. 새 SSH 연결로 접속을 확인하세요.'

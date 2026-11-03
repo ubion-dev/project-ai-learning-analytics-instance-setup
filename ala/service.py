@@ -7,10 +7,11 @@ import os
 import pwd
 import subprocess
 import sys
+from time import perf_counter
 
 from .config import Config
 from .jobs import JobStore, change_lock, protected_directory, trusted_release
-from .system import Host, Paths, atomic_json, platform_error
+from .system import Host, InspectionHost, Paths, atomic_json, platform_error
 
 class Operations:
     """Fixed privileged API. Tests inject paths/host, never environment overrides."""
@@ -34,7 +35,12 @@ class Operations:
             from .update import submit
             if type(payload.get('prerelease', False)) is not bool:
                 raise ValueError('시험판 선택은 boolean이어야 합니다.')
-            return submit(self.release, payload.get('prerelease', False))
+            return submit(self.release, payload.get('prerelease', False), paths=self.paths, host=self.host)
+        if action == 'update-status':
+            if payload.get('run_id') is not None and not isinstance(payload['run_id'], str):
+                raise ValueError('업데이트 실행 ID는 문자열이어야 합니다.')
+            from .update import status
+            return status(paths=self.paths, host=self.host, run_id=payload.get('run_id'))
         if action == 'config-show':
             return {'config': self.config().to_dict(), 'exists': self.paths.config.exists()}
         if action == 'config-save':
@@ -61,14 +67,25 @@ class Operations:
                 expected_config=payload.get('expected_config'), operation='prepare')
         if action in {'inspect', 'plan', 'status'}:
             from .engine import Engine
+            started = perf_counter()
             config = self.config()
-            report = (Engine(config, host=self.host, paths=self.paths).plan() if action == 'plan' else
-                      Engine(config, host=self.host, paths=self.paths).inspect()).to_dict()
+            # Scope query sharing to this read-only response. Workers and all
+            # mutation/preparation paths continue using the original Host.
+            host = InspectionHost(self.host)
+            engine = Engine(config, host=host, paths=self.paths)
+            report = (engine.plan(workers=4) if action == 'plan' else engine.inspect(workers=4)).to_dict()
+            inspection = engine.inspection
             if action == 'status':
                 import socket
                 from .prepare import Prepare
-                report.update(hostname=socket.gethostname(), config=config.to_dict(), config_exists=self.paths.config.exists(), runs=JobStore(self.paths, self.host).list(),
-                              preparation=Prepare(config, host=self.host, paths=self.paths).inspect().to_dict())
+                report.update(hostname=socket.gethostname(), config=config.to_dict(), config_exists=self.paths.config.exists())
+                for name, query in (('runs', lambda: JobStore(self.paths, host).list()),
+                                    ('preparation', lambda: Prepare(config, host=host, paths=self.paths).inspect().to_dict())):
+                    since = perf_counter()
+                    report[name] = query()
+                    inspection['stages'].append({'id': name, 'duration_ms': round(max(0.0, (perf_counter() - since) * 1000), 3)})
+            inspection['duration_ms'] = round(max(0.0, (perf_counter() - started) * 1000), 3)
+            report['inspection'] = inspection
             return report
         if action == 'submit':
             def current_config():
@@ -130,7 +147,7 @@ class Service:
 
     def authenticate(self):
         if os.geteuid() != 0:
-            if not sys.stdin.isatty():
+            if not (sys.stdin.isatty() and sys.stdout.isatty()):
                 result = subprocess.run(['sudo', '-n', '-v'], check=False)
             else:
                 result = subprocess.run(['sudo', '-v'], check=False)

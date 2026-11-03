@@ -6,6 +6,7 @@ modules, and their managed heredocs are also the source of expected file bytes.
 from __future__ import annotations
 
 import configparser
+from concurrent.futures import ThreadPoolExecutor
 import importlib.util
 import json
 import os
@@ -13,6 +14,7 @@ from pathlib import Path
 import re
 import stat
 import sys
+from time import perf_counter
 
 from .config import Config
 from .model import CheckResult, Report
@@ -51,11 +53,13 @@ def _template(script, label):
 
 
 class Engine:
+    supports_substeps = True
     def __init__(self, config: Config, host=None, paths=None):
         self.config = config
         self.host = host if host is not None else Host()
         self.paths = paths if paths is not None else Paths()
         self.owner = 0 if self.paths.root == Path("/") else os.geteuid()
+        self.inspection = None
 
     def _run(self, argv, **kwargs):
         return self.host.run(argv, **kwargs)
@@ -463,28 +467,88 @@ class Engine:
             return [self._result("chrome.integration", "pending", "표시 복구 모듈", "ALA-04 구현 대기")]
         return (apply_display if apply else inspect_display)(self.config, self.host, self.paths)
 
-    def inspect(self) -> Report:
-        error = platform_error(self.paths)
-        if error:
-            return Report([self._result("platform", "blocked", "Rocky Linux 10 x86_64", error)])
-        results = [self._result("platform", "ok", "Rocky Linux 10 x86_64", "지원 환경")]
-        _, account = self._account(self.config.user)
-        results.append(account)
-        stages = [self._base, self._updates, self._hardware, self._network, self._shell, self._ssh, self._docker, self._gpu, self._dev_tools, self._display_policy, self._extra_display]
-        for inspect in stages:
+    def inspect(self, *, workers=1) -> Report:
+        if type(workers) is not int or workers < 1:
+            raise ValueError('검사 작업 수는 양의 정수여야 합니다.')
+        started = perf_counter()
+        self.inspection = {'duration_ms': 0, 'stages': []}
+
+        def elapsed(since):
+            return round(max(0.0, (perf_counter() - since) * 1000), 3)
+
+        def stage(spec):
+            name, inspect = spec
+            since = perf_counter()
             try:
-                results.extend(inspect())
+                found = inspect()
             except (OSError, ValueError, configparser.Error) as exc:
-                results.append(self._result(inspect.__name__.lstrip("_"), "unknown", "상태 조회", str(exc)))
-        return Report(results)
+                found = [self._result(name, 'unknown', '상태 조회', str(exc))]
+            return found, {'id': name, 'duration_ms': elapsed(since)}
 
-    def plan(self) -> Report:
-        return self.inspect()
+        try:
+            since = perf_counter()
+            error = platform_error(self.paths)
+            self.inspection['stages'].append({'id': 'platform', 'duration_ms': elapsed(since)})
+            if error:
+                return Report([self._result('platform', 'blocked', 'Rocky Linux 10 x86_64', error)])
+            results = [self._result('platform', 'ok', 'Rocky Linux 10 x86_64', '지원 환경')]
+            since = perf_counter()
+            _, account = self._account(self.config.user)
+            self.inspection['stages'].append({'id': 'user', 'duration_ms': elapsed(since)})
+            results.append(account)
+            stages = [(name, getattr(self, '_' + name)) for name in
+                      ('base', 'updates', 'hardware', 'network', 'shell', 'ssh', 'docker',
+                       'gpu', 'dev_tools', 'display_policy', 'extra_display')]
+            if workers == 1:
+                inspected = map(stage, stages)
+                for found, timing in inspected:
+                    results.extend(found)
+                    self.inspection['stages'].append(timing)
+            else:
+                with ThreadPoolExecutor(max_workers=min(workers, 4)) as pool:
+                    # Submission is concurrent; consumption keeps the old report order.
+                    pending = [pool.submit(stage, inspect) for inspect in stages]
+                    for future in pending:
+                        found, timing = future.result()
+                        results.extend(found)
+                        self.inspection['stages'].append(timing)
+            return Report(results)
+        finally:
+            self.inspection['duration_ms'] = elapsed(started)
 
-    def apply(self, on_stage=None) -> Report:
+    def plan(self, *, workers=1) -> Report:
+        return self.inspect(workers=workers)
+
+    def apply(self, on_stage=None, on_substep=None) -> Report:
+        extra = []
+
         def event(stage, state):
             if on_stage:
                 on_stage(stage, state)
+
+        def finish(additional=()):
+            report = self.inspect()
+            known = {r.id for r in report.results}
+            report.results.extend(r for r in extra if r.id not in known)
+            report.results.extend(additional)
+            return report
+
+        def run_module(stage, command):
+            from .substeps import step_ids
+            allowed = step_ids(stage)
+            def output(line):
+                if len(line) > 256:
+                    return
+                fields = line.rstrip('\r\n').split('\t')
+                if (len(fields) == 3 and fields[0] == '__ALA_SUBSTEP__'
+                        and fields[1] in allowed
+                        and fields[2] in {'started', 'completed', 'pending', 'kept', 'failed'}
+                        and on_substep is not None):
+                    on_substep(stage, fields[1], fields[2])
+            reported = getattr(self.host, 'execute_reported', None)
+            if reported is not None:
+                return reported(command, env=dict(os.environ, ALA_REPORT_PROGRESS='1'), on_line=output)
+            return self.host.execute(command)
 
         error = platform_error(self.paths)
         if error:
@@ -502,10 +566,10 @@ class Engine:
             ("hardware", self._hardware, None, []),
             ("shell", self._shell, "setup-bash.sh", ["--user", self.config.user] + (["--with-root"] if self.config.root_bash else [])),
             ("ssh", self._ssh, "setup-ssh.sh", ["--ssh-zone", self.config.ssh_zone] if self.config.ssh_zone else []),
+            ("display", self._display_policy, "setup-display.sh", []),
             ("docker", self._docker, "setup-docker.sh", []),
             ("gpu", self._gpu, "setup-nvidia.sh", ["--auto"]),
             ("dev_tools", self._dev_tools, "setup-dev-tools.sh", []),
-            ("display", self._display_policy, "setup-display.sh", []),
         ]
         for stage, inspect, script, args in specs:
             current = inspect()
@@ -518,7 +582,7 @@ class Engine:
                     # Docker, or display policy changes dependent on that device.
                     # The final report still retains the blocked/unknown checks.
                     continue
-                return Report(self.inspect().results)
+                return finish()
             changed = any(r.state == "change_required" for r in current)
             if changed:
                 event(stage, "started")
@@ -535,12 +599,12 @@ class Engine:
                         continue
                     code = 10 if any(r.state == "pending" for r in outcome) else 0
                 else:
-                    code = self.host.execute(["bash", str(SCRIPTS / script), *args])
+                    code = run_module(stage, ["bash", str(SCRIPTS / script), *args])
                 if stage in {"gpu", "hardware"} and code == 10:
                     event(stage, "pending")
                 elif code != 0:
                     event(stage, "failed")
-                    return Report(self.inspect().results + [self._result(stage + ".apply", "error", "설치 모듈 성공", code, "단계 로그 확인 후 재실행")])
+                    return finish([self._result(stage + ".apply", "error", "설치 모듈 성공", code, "단계 로그 확인 후 재실행")])
                 else:
                     event(stage, "completed")
             else:
@@ -549,19 +613,27 @@ class Engine:
             if stage == "gpu" and any(r.id == "gpu.driver" and r.state == "ok" for r in after):
                 if any(r.state == "change_required" for r in after if r.id.startswith("gpu.runtime") or r.id.startswith("gpu.package")):
                     event("gpu_container", "started")
-                    code = self.host.execute(["bash", str(SCRIPTS / "setup-nvidia-container.sh")])
+                    code = run_module("gpu_container", ["bash", str(SCRIPTS / "setup-nvidia-container.sh")])
                     if code != 0:
-                        return Report(self.inspect().results + [self._result("gpu_container.apply", "error", 0, code)])
+                        return finish([self._result("gpu_container.apply", "error", 0, code)])
                     event("gpu_container", "completed")
                     after = inspect()
             if any(r.state in {"error", "blocked", "unknown", "change_required"} for r in after):
                 if stage == "hardware" and not any(r.state == "error" for r in after):
                     continue
-                return Report(self.inspect().results)
-        event("chrome", "started")
-        extra = self._extra_display(apply=True)
-        event("chrome", "completed" if all(r.state in {"ok", "not_applicable"} for r in extra) else "pending")
-        report = self.inspect()
-        known = {r.id for r in report.results}
-        report.results.extend(r for r in extra if r.id not in known)
-        return report
+                return finish()
+            if stage == "display":
+                # Registration needs the display prerequisites, not Docker/GPU.
+                # Keep it in this same serial worker and before unrelated blockers.
+                event("chrome", "started")
+                extra = self._extra_display(apply=True)
+                if any(r.state == "error" for r in extra):
+                    state = "failed"
+                elif any(r.state in {"blocked", "unknown", "change_required"} for r in extra):
+                    state = "blocked"
+                elif any(r.state == "pending" for r in extra):
+                    state = "pending"
+                else:
+                    state = "completed"
+                event("chrome", state)
+        return finish()

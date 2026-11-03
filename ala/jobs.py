@@ -145,6 +145,9 @@ def run_worker(run_id, paths=None, host=None, engine_factory=None):
             raw['stages'].append(dict(id=stage_id, state=state, time=now()))
             store.save(raw)
             print(f'[{state}] {stage_id}', flush=True)
+        def substep(stage_id, step_id, state):
+            raw.setdefault('substeps', []).append(dict(stage=stage_id, id=step_id, state=state, time=now()))
+            store.save(raw)
         try:
             operation = raw.get('operation', 'setup')
             if operation not in {'setup', 'prepare'}:
@@ -157,7 +160,11 @@ def run_worker(run_id, paths=None, host=None, engine_factory=None):
                     from .engine import Engine
                     engine_factory = Engine
             config = Config.load(store.directory(run_id) / 'config.json')
-            report = engine_factory(config, host=host, paths=paths).apply(on_stage=stage)
+            engine = engine_factory(config, host=host, paths=paths)
+            callbacks = {'on_stage': stage}
+            if getattr(engine, 'supports_substeps', False):
+                callbacks['on_substep'] = substep
+            report = engine.apply(**callbacks)
             raw.update(state={0:'completed', 1:'failed', 2:'pending'}[report.exit_code],
                        exit_code=report.exit_code, report=report.to_dict())
         except Exception as exc:
