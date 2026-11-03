@@ -456,3 +456,20 @@
 - 시험판: https://github.com/ubion-dev/project-ai-learning-analytics-instance-setup/releases/tag/v0.1.0-rc.18
 - PR 설명을 최종 검사 수정과 화면 관리 분리 범위로 갱신했다. GitHub 연결 앱은 PR 수정 권한이 없어 기존 gh 인증으로 반영했다. 기존 릴리스와 실제 서버/Chrome은 변경하지 않았다.
 - 후속은 ala 갱신 완료 후 새 CLI에서 실행 상태를 재조회하고 실제 Rocky 재부팅·GNOME·화면 수용을 확인하는 것이다. 현재 Chrome을 자동 재시작하지 않으며 옵션 누락 경고가 실제로 남을 때 다음 조치를 확인한다. 정식 완료나 GPU/다중 출력 수용으로 기록하지 않는다.
+
+## ALA-30 시작·읽기 조사
+
+- PR #7 병합 573a212ac2f66e2a0ff8e9b29ca61b9e874eb291을 확인해 origin/main 기준 codex/chrome-refresh-observation을 준비했다. 사용자 실제 계정/주소/PID/운영 시각은 공개 기록에 저장하지 않는다.
+- 사용자 두 상태 관측에서 PID 변화 없이 healthy/HTTP 정상이었다. Chrome 자체 재시작의 증거는 없으며 페이지 재탐색의 주체는 미확정이다. 외부 사이트 사용 사실만으로 사이트 책임을 단정하지 않는다.
+- 독립 합성 회귀는 5 passed / 2 failed로 errorText/isDownload 때 실제 복구 안내 탐색이 빠지는 경계를 재현했다. 정상 probe 추가 명령0, 실제 PipeBrowser 큐 순서3종, 이전 요청 실패 무시는 통과했다.
+- 격리 로컬 HTTP/임시 프로필/실제 Mac headless Chrome 7시나리오를 실측했다. 정상 probe8회에 최초 표시 탐색1회뿐, JS/meta 동일주소 재로딩은 추가 ala 탐색 없이 브라우저에서 발생했다. 페이지 내부 경로 변경 뒤 재로딩은 기존 제어의 실패로 이어지는 별도 후보였지만 실제 장비의 PID 관측과는 다르다. Linux 프로세스 신원은 이 Mac 시험에서만 대체했으며 Rocky 수용을 대신하지 않는다.
+- 다음은 재현된 복구 안내 누락과 값 없는 명령/브라우저 탐색 진단을 구현하고 실제 원인은 후속 관측으로 확인하는 것이다. 실제 서버·현재 Chrome·기존 릴리스는 변경하지 않았다.
+
+## ALA-30 구현·로컬 검증
+
+- 초기 탐색의 errorText/isDownload에도 실제 복구 안내를 요청하도록 탐색 시작 표시를 앞당겼다. 중복 안내 억제/정상 HTTP probe 탐색0/기존 TLS·복구 간격·타깃 범위는 유지했다.
+- 버전/탐색 진단을 현재 감독 프로세스의 상태에 추가했다. 직접 보낸 표시/복구 요청과 새 허용 주 문서의 브라우저 관측을 나눠 세고, 마지막 오류/명령/관측은 고정 범주와 시각만 기록한다. matching Network.loadingFailed도 원문 없이 분류하고 다른 요청/세션·하위 리소스·이전 요청 실패는 제외한다.
+- 화면 관리 상세에 같은 진단을 읽기 전용으로 표시한다. 구버전 기록 부재와 실제0, 잘못된 값·범주·시각을 구분하고 사용자 입력/사이트/브라우저 중 원인을 확정했다고 표현하지 않는다. 기존 제어 버튼과 건강 판정은 유지한다.
+- 독립 refresh 회귀32개, TUI29개, 관련 통합227개를 검증했다. 최종 로컬 전체797 passed +54 subtests(160.41초), diff검사·고정 wheel 빌드·manifest62개 검증을 통과했다.
+- Linux opt-in 스모크에 실제 로컬 HTTP 정적 페이지와 JavaScript 동일주소 재로딩을 추가했다. 격리 namespace의 loopback만 활성화해 실제 Linux 신원과 Chrome/private CDP·반복 HTTPprobe를 대조하며 sandbox/외부 통신 차단을 유지한다. 로컬 Mac의3개opt-in skip을 실제Linux성공으로 기록하지 않으며 CI 결과가 남았다.
+- RC19 버전·설치/운영 안내를 준비했다. 실제 서버/Chrome과 기존 RC18은 변경하지 않았다. 다음 행동은 공개검사/CI의 실제Linux3시나리오/새PR/배포대조와RC19후보다. 사용자 장비의 실제 재탐색 주체는 여전히 미확정이다.

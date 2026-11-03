@@ -7,7 +7,7 @@ import pytest
 from rich.cells import cell_len
 from textual.widgets import Button, Static, Tabs, TextArea
 
-from ala.chrome_tui import ChromeScreen, safe_logs
+from ala.chrome_tui import ChromeScreen, navigation_details, safe_logs
 from ala.model import CheckResult, Report
 from ala.simple_tui import SimpleApp
 from test_simple_tui import FakeService
@@ -301,3 +301,89 @@ def test_complete_credential_lines_are_masked_without_hiding_other_complete_even
 
 def test_ordinary_complete_log_lines_are_preserved():
     assert safe_logs('first normal event\nsecond normal event\n') == 'first normal event\nsecond normal event'
+
+
+def navigation_sample():
+    return {
+        'display_requests': 2, 'recovery_requests': 1, 'browser_navigations': 5,
+        'last_command': {'kind': 'display', 'at': '2026-01-01T09:00:00+09:00'},
+        'last_browser_navigation': {'initiator': 'script', 'at': '2026-01-01T00:00:01Z'},
+        'last_error': {'kind': 'aborted', 'at': '2026-01-01T00:00:02+00:00'},
+    }
+
+
+def test_navigation_details_distinguish_ala_requests_from_browser_observations_without_cause_claim():
+    value = navigation_sample()
+    value['url'] = 'https://example.com/not-for-diagnostics'
+    value['last_browser_navigation']['stack'] = 'synthetic stack must stay hidden'
+    text = '\n'.join(navigation_details({'supervisor_version': '0.1.0rc19', 'navigation': value}, running=True))
+    assert '실행 중 감시 버전 · 0.1.0rc19' in text
+    assert 'ala 표시 요청 2회 / 복구 안내 요청 1회 / 브라우저 문서 이동 5회' in text
+    assert '마지막 ala 명령 · 표시 주소 요청 · 2026-01-01 00:00:00 UTC' in text
+    assert '마지막 브라우저 이동 · 스크립트 관련 관측 · 2026-01-01 00:00:01 UTC' in text
+    assert '마지막 탐색 오류 · 탐색 취소 · 2026-01-01 00:00:02 UTC' in text
+    assert '사용자 입력·브라우저 동작도 포함하며 원인 확정이 아닙니다.' in text
+    assert 'not-for-diagnostics' not in text and 'synthetic stack' not in text
+
+
+@pytest.mark.parametrize('invalid', (True, False, -1, 1.0, '1', None, 2**70, [], {}))
+def test_navigation_counter_invalid_values_are_not_displayed_as_zero(invalid):
+    value = navigation_sample()
+    value['display_requests'] = invalid
+    text = '\n'.join(navigation_details({'navigation': value}, running=True))
+    assert 'ala 표시 요청 확인 불가 / 복구 안내 요청 1회' in text
+    assert 'ala 표시 요청 0회' not in text
+
+
+def test_navigation_missing_invalid_or_explicitly_empty_history_remains_distinct():
+    legacy = '\n'.join(navigation_details({'state': 'healthy'}, running=True))
+    assert '실행 중 감시에 탐색 기록 없음' in legacy
+    assert '명시적 재시작 후 진단' in legacy and '0회' not in legacy
+    malformed = '\n'.join(navigation_details({'navigation': []}, running=True))
+    assert '기록 형식 확인 필요' in malformed and '0회' not in malformed
+    empty = {'display_requests': 0, 'recovery_requests': 0, 'browser_navigations': 0,
+             'last_command': None, 'last_browser_navigation': None, 'last_error': None}
+    text = '\n'.join(navigation_details({'navigation': empty}, running=True))
+    assert 'ala 표시 요청 0회 / 복구 안내 요청 0회 / 브라우저 문서 이동 0회' in text
+    assert text.count('기록 없음') == 3
+    assert '실행 중 감시에 탐색 기록 없음' not in text
+
+
+def test_navigation_categories_and_times_never_render_untrusted_diagnostic_fields():
+    value = navigation_sample()
+    for key in ('last_command', 'last_browser_navigation', 'last_error'):
+        value[key] = {'kind': 'untrusted-kind', 'initiator': 'untrusted-initiator',
+                      'at': 'untrusted-time', 'url': 'https://example.com/private'}
+    text = '\n'.join(navigation_details({'supervisor_version': 'untrusted-version', 'navigation': value}))
+    assert '감시 기록 버전 · 확인 불가' in text
+    assert text.count('범주 확인 불가 · 시각 확인 불가') == 3
+    assert 'untrusted' not in text and 'https://' not in text
+    value['last_command'] = {'kind': 'display', 'at': '2026-01-01T00:00:00'}
+    assert '표시 주소 요청 · 시각 확인 불가' in '\n'.join(navigation_details({'navigation': value}))
+
+
+def test_navigation_diagnostics_in_modal_refresh_readonly_without_restarting_legacy_supervisor():
+    async def scenario():
+        service = ChromeService()
+        service.chrome.update(state='running', service={'ActiveState': 'active'},
+                              health={'state': 'healthy', 'supervisor_version': '0.1.0rc19',
+                                      'navigation': navigation_sample()})
+        app = SimpleApp(service=service)
+        async with app.run_test(size=(80, 24)) as pilot:
+            await pilot.pause()
+            await pilot.press('c')
+            await pilot.pause()
+            screen = app.screen
+            text = screen.query_one('#chrome-detail', TextArea).text
+            assert 'ala 표시 요청 2회' in text and '브라우저 문서 이동 5회' in text
+            assert '실행 중 감시 버전 · 0.1.0rc19' in text
+            assert not mutations(service)
+            service.chrome['health'].pop('navigation')
+            await screen.refresh_status()
+            text = screen.query_one('#chrome-detail', TextArea).text
+            assert '실행 중 감시에 탐색 기록 없음' in text and '0회' not in text
+            assert '명시적 재시작 후 진단' in text
+            assert '주 문서·HTTP 연결 확인' in str(screen.query_one('#chrome-health', Static).render())
+            assert not screen.query_one('#chrome-restart', Button).disabled
+            assert not mutations(service)
+    asyncio.run(scenario())

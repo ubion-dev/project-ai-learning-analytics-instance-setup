@@ -17,6 +17,7 @@ import urllib.parse
 import urllib.request
 
 from .cdp import CDPError, PipeBrowser
+from . import __version__
 from .system import Paths, atomic_json
 
 INTERVAL = 30
@@ -200,6 +201,9 @@ class Supervisor:
         self.managed_navigation = False
         self.observed_document_url = None
         self.value = {'state': 'waiting_site', 'browser_pid': None, 'supervisor_pid': os.getpid(),
+                      'supervisor_version': __version__,
+                      'navigation': {'display_requests': 0, 'recovery_requests': 0, 'browser_navigations': 0,
+                                     'last_command': None, 'last_browser_navigation': None, 'last_error': None},
                       'last_checked': None, 'last_success': None, 'http_status': None,
                       'target_matches_config': False, 'consecutive_failures': 0,
                       'reason': '사이트 응답 확인 대기', 'next_action': 'HTTP 연결을 자동으로 재확인합니다.',
@@ -255,13 +259,31 @@ class Supervisor:
         self._save()
 
     def _navigate(self, url):
-        result = self._call('Page.navigate', {'url': url})
+        kind = 'recovery' if url == RECOVERY_URL else 'display'
+        navigation = self.value['navigation']
+        navigation[kind + '_requests'] += 1
+        navigation['last_command'] = {'kind': kind, 'at': stamp(self.clock())}
+        if kind == 'display':
+            # A request may start changing the document before CDP replies.
+            # Record that fact before error handling so an initial aborted
+            # navigation also requests the real recovery page.
+            self.navigating = True
+        try:
+            result = self._call('Page.navigate', {'url': url})
+        except CDPError:
+            navigation['last_error'] = {'kind': 'navigation_error', 'at': stamp(self.clock())}
+            raise
         if result.get('errorText') or result.get('isDownload'):
+            error_text = result.get('errorText')
+            error_kind = ('download' if result.get('isDownload') else
+                          'aborted' if isinstance(error_text, str) and error_text in {'net::ERR_ABORTED', 'ERR_ABORTED'} else 'navigation_error')
+            navigation['last_error'] = {'kind': error_kind, 'at': stamp(self.clock())}
             if url == RECOVERY_URL:
                 raise CDPError('로컬 복구 안내를 표시하지 못했습니다.')
             self._fallback('표시 주소로 이동하는 중 네트워크 오류가 발생했습니다.')
             return
         if result.get('frameId') != self.frame or not result.get('loaderId'):
+            navigation['last_error'] = {'kind': 'navigation_error', 'at': stamp(self.clock())}
             raise CDPError('표시용 탭의 문서 이동 식별자를 확인하지 못했습니다.')
         if url != RECOVERY_URL:
             self.loader = result['loaderId']
@@ -335,6 +357,17 @@ class Supervisor:
             if self.loader and params.get('loaderId') != self.loader:
                 if params.get('request', {}).get('url') not in self.allowed_reload_urls:
                     raise CDPError('관리 탭이 설정한 주소와 다른 새 주 문서로 이동했습니다.')
+                if not isinstance(params.get('loaderId'), str) or not params['loaderId']:
+                    raise CDPError('새 주 문서 이동의 식별자를 확인하지 못했습니다.')
+                navigation = self.value['navigation']
+                navigation['browser_navigations'] += 1
+                initiator = params.get('initiator')
+                initiator_type = initiator.get('type') if isinstance(initiator, dict) else None
+                navigation['last_browser_navigation'] = {
+                    'initiator': initiator_type if isinstance(initiator_type, str) and initiator_type in {'script', 'parser', 'other'} else 'unknown',
+                    'at': stamp(self.clock()),
+                }
+                self._save()
                 self.loader = params.get('loaderId')
                 self.document_ok = self.loaded = False
                 self.navigating = True
@@ -356,6 +389,10 @@ class Supervisor:
                     self.document_ok = True
                     self._healthy_if_complete()
         elif method == 'Network.loadingFailed' and self.request and params.get('requestId') == self.request:
+            self.value['navigation']['last_error'] = {
+                'kind': 'aborted' if params.get('errorText') == 'net::ERR_ABORTED' or params.get('canceled') is True else 'navigation_error',
+                'at': stamp(self.clock()),
+            }
             self._fallback('관리 탭의 주 문서에서 네트워크 오류를 확인했습니다.')
         elif method == 'Page.lifecycleEvent' and params.get('frameId') == self.frame and params.get('loaderId') == self.loader:
             if params.get('name') == 'load':

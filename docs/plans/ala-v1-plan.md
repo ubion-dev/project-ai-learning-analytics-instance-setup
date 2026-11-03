@@ -182,3 +182,12 @@ OS 설치·파티션·애플리케이션 배포·DB 운영·DID 패널 제어는
 - 기존 UID/직접 PPid/동일 부팅/양쪽 시작 식별자/표시 프로필·실제 옵션 검증을 유지한다. 중복·잘못된 옵션·금지 플래그는 계속 차단하고 관리 밖 프로필 감지에도 같은 형식 차이를 반영한다. 공개 진단에는 argv·URL·계정 경로를 넣지 않는다.
 - Linux 프로세스 제목을 반영한 회귀와 가능한 실제 Linux headless Chrome 검증을 추가한다. Mac에서 같은 함수가 no-op라는 차이를 기록하고 Mac 스모크를 Linux 검사 증거로 대체하지 않는다.
 - parser/display 통합과 독립 검사/테스트를 분담하고 root는 Linux 통합 검증·문서·PR/RC18 후보를 맡는다. 설정/실행 관리 분리와 기존 프로필·현재 Chrome·RC17 배포 파일은 유지한다.
+
+## ALA-30 — 정상 화면 재탐색 진단과 복구 안내 누락 보완
+
+- 사용자가 외부 테스트 사이트의 안내 없는 주기적 재로딩을 보고했다. 두 관측의 감독/브라우저 PID와 healthy/HTTP 정상 상태가 동일하여 프로세스 재기동은 관측되지 않았다. 같은 탭 재탐색과 페이지 자체 동작은 아직 구분하지 못하며 실제 원인을 확정하지 않는다.
+- PR #7 병합 573a212 기준 새 codex/chrome-refresh-observation에서 진행한다. 정상 HTTP probe는 탐색하지 않는 계약을 유지하고 사이트 JavaScript/meta refresh를 임의 차단하거나 Chrome/GDM을 강제 재시작하지 않는다.
+- 초기 표시 주소 탐색의 errorText/isDownload가 탐색 시작 표시보다 앞서 처리되어 실제 복구 안내를 요청하지 않고 재시도할 수 있는 재현 경계를 수정한다. 실제 안내로 전환하며 반복 복구 안내 요청은 억제하고 원래 HTTP 복구 확인·TLS·대기 간격을 유지한다.
+- 감시 JSON에 supervisor_version과 navigation을 추가한다. navigation은 display_requests/recovery_requests/browser_navigations 카운터, last_command(kind/at), last_browser_navigation(initiator/at), last_error(kind/at)를 저장한다. 명령 접수/실제 문서 관측을 구분하고 브라우저 관측을 사이트 원인 확정으로 표현하지 않는다. URL·제목·스크립트·스택·쿠키는 저장하지 않는다. initiator/error는 고정 범주만 기록한다.
+- 기존 UID/부모/부팅/시작 식별자와 상태 검사·구성 호환을 유지한다. 과거 실행에 진단 기록이 없으면 0회로 추정하지 않고 전환 대기를 표시한다. TUI 화면 관리 상세에서 카운터를 읽기 전용으로 확인한다.
+- 분담은 display_health 구현/독립 회귀/TUI 표시·검증으로 나눈다. root는 통합·계획·배포·새 PR·RC19를 담당한다. 정상 probe 추가 탐색0, 명령 실패의 안내 요청, 페이지 주도 동일주소 재탐색 구분, 불명/잘못된 진단의 정상 오인 방지를 검증한다. 실제 장비 원인과 자동/격리 실측 결과를 구분한다.

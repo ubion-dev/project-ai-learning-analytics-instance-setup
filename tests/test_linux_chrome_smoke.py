@@ -89,3 +89,92 @@ def test_real_linux_chrome_proc_observation_and_independent_browser_pid(tmp_path
     finally:
         if browser is not None:
             browser.close()
+
+
+@pytest.mark.parametrize('page_reload', [False, True])
+def test_real_linux_display_probe_and_page_reload_are_distinguished(tmp_path, monkeypatch, page_reload):
+    if sys.platform != 'linux':
+        pytest.skip('Linux /proc smoke is unavailable on this OS; Mac is not Linux validation.')
+    require(os.geteuid() != 0, 'Linux display smoke requires an ordinary sandboxed browser user.')
+    interfaces = [line.split(':', 1)[0].strip()
+                  for line in Path('/proc/self/net/dev').read_text().splitlines()[2:] if ':' in line]
+    require(bool(interfaces) and all(name == 'lo' for name in interfaces),
+            'Linux display smoke requires an isolated loopback-only network namespace.')
+    chrome = shutil.which('google-chrome-stable') or shutil.which('google-chrome')
+    require(bool(chrome), 'Linux display smoke requires official Google Chrome.')
+
+    import threading
+    import time
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    from ala import display_health as health
+    from ala.cdp import PipeBrowser
+    from ala.config import Config
+
+    requests = {'probe': 0, 'document': 0}
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            if self.path != '/display':
+                self.send_response(204)
+                self.end_headers()
+                return
+            kind = 'probe' if self.headers.get('User-Agent', '').startswith('ala-display-readiness/') else 'document'
+            requests[kind] += 1
+            script = '<script>setTimeout(()=>location.reload(),400)</script>' if page_reload else ''
+            body = ('<!doctype html><title>synthetic display</title><p>display</p>' + script).encode()
+            self.send_response(200)
+            self.send_header('Content-Type', 'text/html')
+            self.send_header('Cache-Control', 'no-store')
+            self.send_header('Content-Length', str(len(body)))
+            self.end_headers()
+            try:
+                self.wfile.write(body)
+            except (BrokenPipeError, ConnectionResetError):
+                pass
+
+        def log_message(self, *_):
+            pass
+
+    server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+    worker = threading.Thread(target=server.serve_forever, daemon=True)
+    worker.start()
+    try:
+        url = 'http://127.0.0.1:' + str(server.server_port) + '/display'
+        arguments = [chrome, '--headless=new', '--disable-background-networking',
+                     '--disable-component-update', '--disable-default-apps', '--disable-extensions',
+                     '--disable-sync', '--metrics-recording-only', '--no-first-run',
+                     '--no-default-browser-check', '--password-store=basic', '--remote-debugging-pipe',
+                     '--user-data-dir=' + str(tmp_path / 'display-profile'), health.RECOVERY_URL]
+        hard_stop = time.monotonic() + 20
+        healthy_stop = [None]
+        supervisor = health.Supervisor(Config(user='user', url=url), tmp_path, arguments,
+            transport_factory=lambda argv: PipeBrowser(argv, spawn=quiet_spawn),
+            stop_requested=lambda: time.monotonic() >= hard_stop or
+                (healthy_stop[0] is not None and time.monotonic() >= healthy_stop[0]))
+        save = supervisor._save
+
+        def observed_save():
+            if supervisor.value['state'] == 'healthy' and healthy_stop[0] is None:
+                healthy_stop[0] = time.monotonic() + 1.5
+            save()
+
+        supervisor._save = observed_save
+        monkeypatch.setattr(health, 'INTERVAL', 0.2)
+        code = supervisor.run()
+        require(code == 0 and healthy_stop[0] is not None,
+                'Linux display supervisor did not reach healthy state and stop cleanly.')
+        navigation = supervisor.value.get('navigation') or {}
+        require(requests['probe'] >= 3, 'Linux display smoke did not perform repeated real HTTP probes.')
+        require(navigation.get('display_requests') == 1 and navigation.get('recovery_requests') == 0,
+                'Healthy real HTTP probes unexpectedly requested another display navigation.')
+        if page_reload:
+            require(requests['document'] >= 2 and navigation.get('browser_navigations', 0) >= 1,
+                    'Browser-initiated reloads were not observed independently of ala commands.')
+        else:
+            require(requests['document'] == 1 and navigation.get('browser_navigations') == 0,
+                    'Static display was unexpectedly requested or counted as reloading.')
+        print('Linux display reload attribution validated: ' + ('browser_reload' if page_reload else 'static'))
+    finally:
+        server.shutdown()
+        server.server_close()
+        worker.join(timeout=2)
