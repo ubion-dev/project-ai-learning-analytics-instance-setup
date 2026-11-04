@@ -54,7 +54,8 @@ class Service:
                 self.screens['confirmed_windows'] -= 1
             return {'state': 'ok', 'reason': '대상 종료를 확인했습니다.', 'exit_code': 0}
         if action == 'screens-save':
-            assert payload['expected_config'] == self.config
+            if payload['expected_config'] != self.config:
+                raise RuntimeError('다른 작업에서 구성이 변경됐습니다.')
             saved = payload['target']
             selected = next(v for v in self.screens['targets'] if v['id'] == saved['id'])
             selected.update(saved, settings={'pending': saved['url'] != selected['applied_url'], 'state': 'pending'})
@@ -258,4 +259,24 @@ def test_hdmi_status_and_gnome_error_are_separate_and_editor_keeps_disconnected_
             output = app.screen.query_one('#target-output', Select)
             assert output.value == 'HDMI-1'
             assert {value for _, value in output._options} == {'', 'HDMI-1'}
+    asyncio.run(scenario())
+
+
+def test_save_conflict_refreshes_config_and_explains_retry():
+    async def scenario():
+        service = Service()
+        app = SimpleApp(service=service, initial_section='screens')
+        async with app.run_test(size=(100, 32)) as pilot:
+            await pilot.pause()
+            panel = app.query_one('#screens', ScreenPanel)
+            edited = next(value for value in Config.from_dict(service.config).screen_targets() if value.id == 'default')
+            old = deepcopy(service.config)
+            service.config['timezone'] = 'UTC'
+            await panel.save_target(edited.to_dict(), old)
+            detail = app.query_one('#screens-detail', TextArea).text
+            assert '다른 작업에서 구성이 변경됐습니다' in detail
+            assert '설정을 다시 열고' in detail
+            assert app._config == service.config
+            await panel.save_target(edited.to_dict(), app._config)
+            assert '설정 저장 · 완료' in str(app.query_one('#screens-result', Static).render())
     asyncio.run(scenario())

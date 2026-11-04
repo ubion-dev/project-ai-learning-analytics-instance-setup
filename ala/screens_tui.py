@@ -531,7 +531,14 @@ class ScreenPanel(Vertical):
                 self.messages.pop(shown_target, None)
             self.selected = target
         except Exception as exc:
-            self.messages[shown_target] = '설정 저장 · 실패 · '+safe_text(str(exc))+'\n설정을 다시 열고 현재 값을 확인한 뒤 저장하세요.'
+            reason = '설정 저장 · 실패 · '+safe_text(str(exc))
+            try:
+                latest = await self.owner.service.call('config-show')
+                self.owner._config = deepcopy(latest['config'])
+                action = '설정을 다시 열고 현재 값을 확인한 뒤 저장하세요.'
+            except Exception:
+                action = '상태 확인 탭에서 r로 다시 조회한 뒤 설정을 저장하세요.'
+            self.messages[shown_target] = reason+'\n'+action
         finally:
             self.mutating = False
         await self.refresh_state()
