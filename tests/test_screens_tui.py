@@ -43,6 +43,8 @@ class Service:
             if self.gate:
                 await self.gate.wait()
             return deepcopy(self.screens)
+        if action == 'screens-login-logs':
+            return {'log': '로그인·세션 시작 오류 단서', 'exit_code': 0}
         if action == 'screens-action':
             if payload['action'] == 'logs':
                 return {'log': 'fixed event\n', 'exit_code': 0}
@@ -82,13 +84,13 @@ def test_site_overview_omits_query_and_fragment_and_rejects_userinfo():
     assert site_label(None) == '주소 미설정'
 
 
-def test_three_tabs_and_opening_screen_management_is_read_only():
+def test_four_tabs_and_opening_screen_management_is_read_only():
     async def scenario():
         service = Service()
         app = SimpleApp(service=service)
         async with app.run_test(size=(110, 36)) as pilot:
             await pilot.pause()
-            assert len(app.query_one('#tabs', Tabs).query('Tab')) == 3
+            assert len(app.query_one('#tabs', Tabs).query('Tab')) == 4
             assert not any(a.startswith('screens-') for a, _ in service.calls)
             await pilot.press('c')
             await pilot.pause()
@@ -133,6 +135,14 @@ def test_small_terminal_controls_and_detail_remain_inside_viewport():
             assert app.query_one('#screens-stop', Button).region.width >= 7
             for button in app.query('#screens-actions Button'):
                 assert button.content_size.width >= cell_len(str(button.label)) + 2
+            await pilot.resize_terminal(120, 36)
+            await pilot.pause()
+            summary = app.query_one('#screens-result').region
+            next_action = app.query_one('#screens-next').region
+            actions = app.query_one('#screens-actions').region
+            detail = app.query_one('#screens-detail').region
+            assert summary.bottom <= next_action.y < actions.y
+            assert actions.bottom <= detail.y and detail.bottom <= 35
             await pilot.resize_terminal(125, 42)
             await pilot.pause()
             await app.query_one('#screens', ScreenPanel).refresh_state()
@@ -279,4 +289,87 @@ def test_save_conflict_refreshes_config_and_explains_retry():
             assert app._config == service.config
             await panel.save_target(edited.to_dict(), app._config)
             assert '설정 저장 · 완료' in str(app.query_one('#screens-result', Static).render())
+    asyncio.run(scenario())
+
+
+
+def test_quick_check_opens_current_boot_log_and_starts_only_selected_did():
+    async def scenario():
+        class QuickService(Service):
+            async def call(self, action, payload=None):
+                if action == 'screens-action' and payload['action'] in {'start', 'restart'}:
+                    self.calls.append((action, deepcopy(payload)))
+                    selected = self.screens['targets'][1]
+                    pid = selected['service'].get('MainPID', 4320)
+                    selected['service'] = {'ActiveState': 'active', 'MainPID': pid + 1}
+                    return {'submitted': True, 'exit_code': 2}
+                return await super().call(action, payload)
+
+        service = QuickService()
+        service.screens['session'] = 'ok'
+        service.screens['targets'][1]['service'] = {'ActiveState': 'failed'}
+        app = SimpleApp(service=service)
+        async with app.run_test(size=(80, 24)) as pilot:
+            await pilot.pause()
+            app.query_one('#tabs', Tabs).active = 'quick-tab'
+            await pilot.pause()
+            assert ('screens-inspect', {'quick': True}) in service.calls
+            assert app.query_one('#quick').report, str(app.query_one('#quick-note', Static).render())
+            assert app.query_one('#quick-target', Select).display, str(app.query_one('#quick-note', Static).render())
+            assert not any(action == 'screens-action' for action, _ in service.calls)
+            app.query_one('#quick-target', Select).value = 'display-2'
+            await pilot.pause()
+            assert 'Chrome 서비스 시작 실패' in str(app.query_one('#quick-reason', Static).render())
+            assert '창 배치 · 확인 대기' in app.query_one('#quick-detail', TextArea).text
+            await pilot.click('#quick-logs')
+            await pilot.pause()
+            assert 'fixed event' in app.query_one('#quick-detail', TextArea).text
+            assert ('screens-action', {'target': 'display-2', 'action': 'logs'}) in service.calls
+            control = app.query_one('#quick-control', Button)
+            assert not control.disabled
+            control.focus()
+            await pilot.press('enter')
+            await pilot.pause()
+            assert not any(payload and payload.get('action') == 'start' for _, payload in service.calls)
+            assert str(control.label) == '시작 확인'
+            await pilot.pause(control.active_effect_duration)
+            await pilot.press('enter')
+            await pilot.pause()
+            assert ('screens-action', {'target': 'display-2', 'action': 'start'}) in service.calls
+            assert '서버 점검 통과' in str(app.query_one('#quick-reason', Static).render())
+            assert '실제 DID' in str(app.query_one('#quick-next', Static).render())
+            assert str(control.label) == '재시작'
+            await pilot.pause(control.active_effect_duration)
+            control.focus()
+            await pilot.press('enter')
+            await pilot.pause(control.active_effect_duration)
+            await pilot.press('enter')
+            await pilot.pause()
+            assert ('screens-action', {'target': 'display-2', 'action': 'restart'}) in service.calls
+            assert '서버 점검 완료' in str(app.query_one('#quick-note', Static).render())
+            assert control.region.bottom <= app.size.height
+
+    asyncio.run(scenario())
+
+
+def test_quick_check_keeps_gnome_log_button_visible_in_compact_terminal():
+    async def scenario():
+        service = Service()
+        service.screens['session'] = 'pending'
+        app = SimpleApp(service=service)
+        async with app.run_test(size=(80, 24)) as pilot:
+            await pilot.pause()
+            app.query_one('#tabs', Tabs).active = 'quick-tab'
+            await pilot.pause()
+            app.query_one('#quick-target', Select).value = 'display-2'
+            await pilot.pause()
+            button = app.query_one('#quick-logs', Button)
+            assert cell_len(button.label.plain) + 2 * button.styles.line_pad <= button.content_region.width
+            assert button.variant == 'primary'
+            assert app.query_one('#quick-control', Button).disabled
+            assert await pilot.click('#quick-logs')
+            await pilot.pause()
+            assert ('screens-login-logs', {'target': 'display-2'}) in service.calls
+            assert '로그인·세션 시작 오류 단서' in app.query_one('#quick-detail', TextArea).text
+
     asyncio.run(scenario())

@@ -61,6 +61,24 @@ def _conflict(config,target,inventory,*,host=None,paths=None,selected=None):
     return found
 
 
+def inspect_session(config, host):
+    if not config.display:
+        return 'disabled'
+    try:
+        uid, _, _ = display._account(config, host)
+        sessions, _ = display._graphical_sessions(host, uid)
+    except (OSError, ValueError, RuntimeError):
+        return 'unknown'
+    if sessions is None:
+        return 'unknown'
+    if len(sessions) > 1:
+        return 'multiple'
+    if not sessions or sessions[0][1].get('Active') != 'yes':
+        return 'pending'
+    locked = sessions[0][1].get('LockedHint')
+    return {'no': 'ok', 'yes': 'locked'}.get(locked, 'lock_unknown')
+
+
 def inspect_screens(config:Config,host=None,paths=None):
     host,paths=host or Host(),paths or Paths()
     hardware=hardware_topology(paths)

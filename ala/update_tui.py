@@ -61,11 +61,12 @@ class UpdateScreen(ModalScreen):
     UpdateScreen { align: center middle; background: #000000 65%; }
     #update-dialog { width: 92%; max-width: 88; height: auto; max-height: 95%; padding: 1 2; background: #17212d; border: round #83e3c4; }
     #update-title { height: 1; text-style: bold; color: #b5e9d9; }
+    #update-release { height: 1; padding: 0 1; background: #172735; color: #b5e9d9; text-style: bold; text-wrap: nowrap; text-overflow: ellipsis; }
+    #update-next { height: 1; padding: 0 1; text-wrap: nowrap; text-overflow: ellipsis; }
     #update-versions { height: 2; margin-top: 1; }
     #update-channel { height: 3; }
     #update-channel-label { height: 3; width: 1fr; content-align: left middle; }
     #update-prerelease { width: auto; }
-    #update-release { height: 2; }
     #update-detail { height: 6; min-height: 4; padding: 0 1; background: #0e151e; }
     #update-controls { height: 3; margin-top: 1; }
     UpdateScreen Button { width: 1fr; min-width: 10; padding: 0 1; }
@@ -86,17 +87,18 @@ class UpdateScreen(ModalScreen):
     def compose(self) -> ComposeResult:
         with Vertical(id='update-dialog'):
             yield Static('ala 업데이트', id='update-title')
-            yield Static('', id='update-versions', markup=False)
+            yield Static('릴리스를 확인하고 있습니다.', id='update-release', markup=False)
+            yield Static('', id='update-next', markup=False)
             with Horizontal(id='update-channel'):
                 yield Static('시험판 포함 · 필요한 경우에만 켜세요', id='update-channel-label')
                 yield Switch(False, id='update-prerelease')
-            yield Static('릴리스를 확인하고 있습니다.', id='update-release', markup=False)
-            yield TextArea('', id='update-detail', read_only=True, show_cursor=False, highlight_cursor_line=False)
             with Horizontal(id='update-controls'):
                 yield Button('다시 확인', id='update-check')
-                yield Button('업데이트 시작', id='update-start', variant='primary', disabled=True)
+                yield Button('업데이트 시작', id='update-start', disabled=True)
                 yield Button('자동 운영', id='update-automatic')
                 yield Button('닫기', id='update-close')
+            yield Static('', id='update-versions', markup=False)
+            yield TextArea('', id='update-detail', read_only=True, show_cursor=False, highlight_cursor_line=False)
             yield Static('Esc 닫기 · 창을 닫아도 시작한 업데이트는 계속됩니다.', id='update-help')
 
     def alive(self):
@@ -126,6 +128,7 @@ class UpdateScreen(ModalScreen):
 
     @on(Button.Pressed, '#update-check')
     def check_pressed(self):
+        self._message = ''
         self.run_worker(self.refresh_status(latest=True), exit_on_error=False)
         self.run_worker(self.refresh_release(), exit_on_error=False)
 
@@ -156,6 +159,32 @@ class UpdateScreen(ModalScreen):
         if self.alive():
             self.render_state()
 
+    def priority(self, status, release, available):
+        state = status.get('state', 'unknown')
+        if self._submitting:
+            return '업데이트 시작 요청 중', '작업 접수 결과를 기다리세요.', None, 'cyan'
+        if state in ACTIVE:
+            phase = PHASES.get(status.get('phase'))
+            return ' · '.join(filter(None, (LABELS[state], phase))), '작업 상태를 확인하세요.', None, 'cyan'
+        if self.owner._active_job:
+            return '환경 설정 작업 진행 중', '설정 작업이 끝난 뒤 업데이트를 시작하세요.', None, 'cyan'
+        if self._message:
+            return self._message, '다시 확인으로 현재 상태를 조회하세요.', 'check', 'yellow'
+        if state in {'failed', 'interrupted', 'unknown'}:
+            next_action = status.get('next_action') or '다시 확인으로 현재 상태를 조회하세요.'
+            return LABELS[state], str(redact(next_action)), 'check', 'red'
+        if self._checking:
+            return '릴리스 확인 중…', '조회 결과를 기다리세요.', None, 'cyan'
+        installed = status.get('installed_version')
+        runtime = status.get('runtime_version') or __version__
+        if installed and installed != runtime:
+            return '설치 버전과 실행 버전이 다릅니다', 'ala를 종료하고 다시 실행하세요.', None, 'yellow'
+        if release.get('exit_code', 1) or release.get('error'):
+            return '릴리스 조회 실패', '연결 상태를 확인하고 다시 확인을 선택하세요.', 'check', 'red'
+        if available:
+            return f"새 버전 · {release.get('latest', '확인 불가')}", '업데이트 시작을 선택하면 설치를 요청합니다.', 'start', 'yellow'
+        return '이 채널에 새로 설치할 버전이 없습니다', '자동 운영 정책이나 설치·실행 버전을 확인하세요.', None, 'green'
+
     def render_state(self):
         if not self.alive():
             return
@@ -165,17 +194,9 @@ class UpdateScreen(ModalScreen):
         self.query_one('#update-versions', Static).update(Text(f'설치 버전 · {installed}\n현재 실행 버전 · {runtime}'))
         release = self._release or {}
         available = newer_than_installed(release, status)
-        if self._checking:
-            message = '릴리스 확인 중…'
-        elif release.get('exit_code', 1) or release.get('error'):
-            message = '릴리스 조회 실패 · 다시 확인하세요.'
-        elif available:
-            message = f"새 버전 · {release.get('latest', '확인 불가')} · 시작 버튼으로 적용"
-        elif release.get('available') and release.get('latest') == installed:
-            message = '이미 설치된 버전입니다. 현재 실행 버전이 다르면 ala를 다시 실행하세요.'
-        else:
-            message = '이 채널에 새로 설치할 버전이 없습니다.'
-        self.query_one('#update-release', Static).update(Text(message))
+        headline, next_action, primary, tone = self.priority(status, release, available)
+        self.query_one('#update-release', Static).update(Text(headline, style=tone))
+        self.query_one('#update-next', Static).update(Text('다음 · '+next_action))
         detail = self.query_one('#update-detail', TextArea)
         text = status_text(status) + ('\n' + self._message if self._message else '')
         if self.owner._active_job:
@@ -184,12 +205,16 @@ class UpdateScreen(ModalScreen):
             detail.load_text(text)
             detail.refresh()
         active = status.get('state') in ACTIVE
-        self.query_one('#update-start', Button).disabled = bool(
+        start = self.query_one('#update-start', Button)
+        check = self.query_one('#update-check', Button)
+        start.disabled = bool(
             self._checking or self._submitting or active or self.owner._active_job
             or status.get('state') == 'unknown' or not available
             or release.get('exit_code', 1) or release.get('error'))
         self.query_one('#update-prerelease', Switch).disabled = self._submitting or active
-        self.query_one('#update-check', Button).disabled = self._checking or self._submitting
+        check.disabled = self._checking or self._submitting
+        start.variant = 'primary' if primary == 'start' and not start.disabled else 'default'
+        check.variant = 'primary' if primary == 'check' and not check.disabled else 'default'
 
     @on(Button.Pressed, '#update-start')
     def start_pressed(self):

@@ -2,7 +2,7 @@
 import asyncio
 from copy import deepcopy
 
-from textual.widgets import Button, DataTable, Static, Tabs, TextArea
+from textual.widgets import Button, Checkbox, DataTable, Static, Tabs, TextArea
 
 from ala.config import Config
 from ala.model import CheckResult, Report
@@ -20,6 +20,7 @@ class FakeService:
         self.jobs = {}
         self.gate = None
         self.fail_status = False
+        self.bash_assist = False
 
     async def call(self, action, payload=None):
         self.calls.append((action, deepcopy(payload)))
@@ -36,7 +37,10 @@ class FakeService:
                 raise PermissionError('상태 접근 거부')
             return snapshot
         if action == 'submit':
-            assert payload == {'expected_config': self.config}
+            expected = {'expected_config': self.config}
+            if self.bash_assist:
+                expected['bash_assist'] = True
+            assert payload == expected
             self.jobs['test-run'] = {'run_id': 'test-run', 'state': 'queued', 'stages': []}
             return deepcopy(self.jobs['test-run'])
         if action == 'runs-show':
@@ -50,7 +54,7 @@ def test_keyboard_one_action_applies_current_config_and_prevents_duplicates():
         app = SimpleApp(service=service)
         async with app.run_test(size=(80, 24)) as pilot:
             await pilot.pause()
-            assert len(app.query_one('#tabs', Tabs).query('Tab')) == 3
+            assert len(app.query_one('#tabs', Tabs).query('Tab')) == 4
             start = app.query_one('#setup-start', Button)
             assert app.focused is start
             assert not start.disabled and start.region.bottom <= 23
@@ -69,8 +73,8 @@ def test_status_is_read_only_and_separates_podman_blocker_from_reboot_wait():
     async def scenario():
         service = FakeService()
         service.report = Report([
-            CheckResult('docker.conflict.podman', 'blocked', actual='podman', next_action='컨테이너·볼륨 확인'),
             CheckResult('display.session', 'pending', actual='적용 대기', next_action='재부팅 후 검사'),
+            CheckResult('docker.conflict.podman', 'blocked', actual='podman', next_action='컨테이너·볼륨 확인'),
         ]).to_dict()
         app = SimpleApp(service=service)
         async with app.run_test(size=(80, 24)) as pilot:
@@ -82,11 +86,38 @@ def test_status_is_read_only_and_separates_podman_blocker_from_reboot_wait():
             detail = app.query_one('#status-detail', TextArea).text
             assert 'Podman' in detail and '컨테이너·볼륨 확인' in detail
             assert '이전' not in detail
-            await pilot.press('down')
+            assert '컨테이너·볼륨 확인' in str(app.query_one('#status-next', Static).render())
+            await pilot.press('up')
+            await pilot.pause()
+            assert '재부팅 후 검사' in app.query_one('#status-detail', TextArea).text
+            await app.load_state()
             await pilot.pause()
             assert '재부팅 후 검사' in app.query_one('#status-detail', TextArea).text
             assert '조치·확인 필요 1' in str(app.query_one('#status-summary', Static).render())
             assert not any(action in {'submit', 'config-save'} for action, _ in service.calls)
+    asyncio.run(scenario())
+
+
+def test_bash_assist_is_an_opt_in_for_one_setup_request():
+    async def scenario():
+        service = FakeService()
+        service.bash_assist = True
+        app = SimpleApp(service=service)
+        async with app.run_test(size=(80, 24)) as pilot:
+            await pilot.pause()
+            checkbox = app.query_one('#setup-bash-assist', Checkbox)
+            assert not checkbox.value and not checkbox.disabled
+            checkbox.focus()
+            await pilot.press('space')
+            await pilot.pause()
+            assert checkbox.value
+            assert not any(action == 'submit' for action, _ in service.calls)
+            assert await pilot.click('#setup-start')
+            await pilot.pause()
+            assert ('submit', {'expected_config': service.config, 'bash_assist': True}) in service.calls
+            assert not checkbox.value and checkbox.disabled
+            assert '진행' in str(app.query_one('#setup-next', Static).render())
+
     asyncio.run(scenario())
 
 

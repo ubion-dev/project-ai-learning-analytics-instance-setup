@@ -56,12 +56,10 @@ def assert_nonoverlapping(widgets):
 
 
 def assert_setup_geometry(app, size):
-    selectors = ['#config-summary', '#setup-progress', '#setup-summary',
+    selectors = ['#config-summary', '#setup-progress', '#setup-next', '#setup-summary', '#setup-bash-assist',
                  '#setup-table', '#setup-output']
     if app.query_one('#setup-actions').display:
         selectors.append('#setup-start')
-    if app.query_one('#setup-note').display:
-        selectors.append('#setup-note')
     widgets = [app.query_one(selector) for selector in selectors]
     footer = app.query_one(Footer)
     for widget in [*widgets, footer]:
@@ -72,15 +70,11 @@ def assert_setup_geometry(app, size):
     assert table.region.height >= table.header_height + 2
     assert detail.content_region.height >= 1
     assert table.region.bottom <= detail.region.y < footer.region.y
+    assert app.query_one('#setup-next').region.bottom <= app.query_one('#config-summary').region.y
+    assert app.query_one('#setup-bash-assist').region.bottom <= table.region.y
     if size[1] >= 36:
-        overview_end = max(app.query_one(selector).region.bottom
-                           for selector in ('#setup-progress', '#setup-summary'))
-        assert table.region.y - overview_end >= 1
+        assert app.query_one('#config-summary').region.y - app.query_one('#setup-next').region.bottom >= 1
         assert detail.region.y - table.region.bottom >= 1
-        if app.query_one('#setup-actions').display:
-            toolbar_end = max(app.query_one(selector).region.bottom
-                              for selector in ('#config-summary', '#setup-note', '#setup-start'))
-            assert app.query_one('#setup-progress').region.y - toolbar_end >= 1
 
 
 @pytest.mark.parametrize('size', SIZES)
@@ -171,12 +165,14 @@ def test_status_summary_table_details_and_footer_stay_separate(size):
             await pilot.press('s')
             await pilot.pause()
             widgets = [app.query_one(selector) for selector in
-                       ('#status-refresh', '#status-summary', '#status-table', '#status-detail')]
+                       ('#status-summary', '#status-next', '#status-refresh', '#status-table', '#status-detail')]
             footer = app.query_one(Footer)
             for widget in [*widgets, footer]:
                 assert_inside_screen(widget, size)
             assert_nonoverlapping([*widgets, footer])
-            button, summary, table, detail = widgets
+            summary, next_action, button, table, detail = widgets
+            assert summary.region.bottom <= next_action.region.y
+            assert next_action.region.bottom <= button.region.y
             assert table.region.height >= table.header_height + 2
             assert detail.content_region.height >= 2
             assert table.region.bottom <= detail.region.y < footer.region.y
@@ -184,9 +180,10 @@ def test_status_summary_table_details_and_footer_stay_separate(size):
                 assert table.region.y - max(button.region.bottom, summary.region.bottom) >= 1
                 assert detail.region.y - table.region.bottom >= 1
             assert app.focused is table
+            assert '컨테이너' in detail.text
             await pilot.press('down')
             await pilot.pause()
-            assert '컨테이너' in app.query_one('#status-detail', TextArea).text
+            assert '드라이버' in detail.text
             assert not any(action == 'submit' for action, _ in app.service.calls)
     asyncio.run(scenario())
 

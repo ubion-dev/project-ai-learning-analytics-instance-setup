@@ -50,7 +50,7 @@ def test_update_menu_requires_explicit_channel_and_start_then_tracks_completion(
         app = SimpleApp(service=service)
         async with app.run_test(size=(80, 24)) as pilot:
             await pilot.pause()
-            assert len(app.query_one('#tabs', Tabs).query('Tab')) == 3
+            assert len(app.query_one('#tabs', Tabs).query('Tab')) == 4
             await pilot.press('u')
             await pilot.pause()
             screen = app.screen
@@ -58,7 +58,12 @@ def test_update_menu_requires_explicit_channel_and_start_then_tracks_completion(
             assert screen.query_one('#update-prerelease', Switch).value is False
             assert channels == [False]
             assert not any(action == 'update-submit' for action, _ in service.calls)
-            for selector in ('#update-start', '#update-check', '#update-close', '#update-detail'):
+            assert '새 버전 · 99.0.0' in str(screen.query_one('#update-release', Static).render())
+            assert screen.query_one('#update-start', Button).variant == 'primary'
+            order = [screen.query_one('#update-'+key).region.y
+                     for key in ('release', 'next', 'start', 'versions', 'detail')]
+            assert order == sorted(set(order))
+            for selector in ('#update-start', '#update-check', '#update-close', '#update-detail', '#update-next'):
                 region = screen.query_one(selector).region
                 assert 0 <= region.x < region.right <= 80
                 assert 0 <= region.y < region.bottom <= 24
@@ -72,6 +77,8 @@ def test_update_menu_requires_explicit_channel_and_start_then_tracks_completion(
             assert [(action, payload) for action, payload in service.calls if action == 'update-submit'] == [
                 ('update-submit', {'prerelease': True})]
             assert screen.query_one('#update-start', Button).disabled
+            assert '업데이트 진행 중' in str(screen.query_one('#update-release', Static).render())
+            assert screen.query_one('#update-start', Button).variant == 'default'
             await screen.start_update()
             assert sum(action == 'update-submit' for action, _ in service.calls) == 1
             assert '진행 중' in screen.query_one('#update-detail', TextArea).text
@@ -90,6 +97,7 @@ def test_update_menu_requires_explicit_channel_and_start_then_tracks_completion(
             versions = str(app.screen.query_one('#update-versions', Static).render())
             assert '설치 버전 · 99.0.0' in versions and f'현재 실행 버전 · {__version__}' in versions
             assert app.screen.query_one('#update-start', Button).disabled
+            assert 'ala를 종료하고 다시 실행' in str(app.screen.query_one('#update-next', Static).render())
     asyncio.run(scenario())
 
 
@@ -131,6 +139,9 @@ def test_failure_unknown_and_unverified_completion_are_never_success(monkeypatch
             detail = app.screen.query_one('#update-detail', TextArea).text
             assert '업데이트 실패' in detail and 'manifest verification failed' in detail
             assert '배포 파일을 다시 확인' in detail
+            assert '업데이트 실패' in str(app.screen.query_one('#update-release', Static).render())
+            assert '배포 파일을 다시 확인' in str(app.screen.query_one('#update-next', Static).render())
+            assert app.screen.query_one('#update-check', Button).variant == 'primary'
             assert '98.0.0' in str(app.screen.query_one('#update-versions', Static).render())
             service.fail_update_status = True
             await app.screen.refresh_status()
