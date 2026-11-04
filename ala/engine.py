@@ -54,8 +54,9 @@ def _template(script, label):
 
 class Engine:
     supports_substeps = True
-    def __init__(self, config: Config, host=None, paths=None):
+    def __init__(self, config: Config, host=None, paths=None, *, bash_assist=False):
         self.config = config
+        self.bash_assist = bash_assist
         self.host = host if host is not None else Host()
         self.paths = paths if paths is not None else Paths()
         self.owner = 0 if self.paths.root == Path("/") else os.geteuid()
@@ -562,6 +563,7 @@ class Engine:
 
     def _apply(self, on_stage=None, on_substep=None) -> Report:
         extra = []
+        bash_assist_results = []
 
         def event(stage, state):
             if on_stage:
@@ -571,6 +573,7 @@ class Engine:
             report = self.inspect(configuration_only=True)
             known = {r.id for r in report.results}
             report.results.extend(r for r in extra if r.id not in known)
+            report.results.extend(bash_assist_results)
             report.results.extend(additional)
             return report
 
@@ -613,6 +616,7 @@ class Engine:
             ("dev_tools", self._dev_tools, "setup-dev-tools.sh", []),
         ]
         for stage, inspect, script, args in specs:
+            optional_shell = stage == "shell" and self.bash_assist
             current = inspect()
             blocking = [r for r in current if r.state in {"blocked", "error", "unknown"} and not
                         (stage == "gpu" and r.id == "gpu.secure_boot" and "mokutil" in r.next_action)]
@@ -646,9 +650,9 @@ class Engine:
                 elif code != 0:
                     event(stage, "failed")
                     return finish([self._result(stage + ".apply", "error", "설치 모듈 성공", code, "단계 로그 확인 후 재실행")])
-                else:
+                elif not optional_shell:
                     event(stage, "completed")
-            else:
+            elif not optional_shell:
                 event(stage, "kept" if all(r.state in {"ok", "not_applicable"} for r in current) else "pending")
             after = inspect()
             if stage == "gpu" and any(r.id == "gpu.driver" and r.state == "ok" for r in after):
@@ -662,7 +666,31 @@ class Engine:
             if any(r.state in {"error", "blocked", "unknown", "change_required"} for r in after):
                 if stage == "hardware" and not any(r.state == "error" for r in after):
                     continue
+                if optional_shell:
+                    event(stage, "blocked")
                 return finish()
+            if optional_shell:
+                if not changed:
+                    event(stage, "started")
+                if on_substep:
+                    if not changed:
+                        on_substep(stage, "user_shell", "kept")
+                    on_substep(stage, "bash_assist", "started")
+                try:
+                    code = run_module(stage, ["bash", str(SCRIPTS / "setup-bash-assist.sh"),
+                                              "--user", self.config.user])
+                    detail = ""
+                except OSError as exc:
+                    code = 1
+                    detail = str(exc)
+                if on_substep:
+                    on_substep(stage, "bash_assist", "failed" if code else "completed")
+                bash_assist_results.append(self._result(
+                    f"shell.{self.config.user}.bash_assist", "error" if code else "ok",
+                    "대화형 Bash 자동 제안·구문 강조", "설치 실패" if code else "설치됨",
+                    "설치 로그와 셸 설정을 확인한 뒤 옵션을 선택해 다시 실행하세요." if code
+                    else "새 SSH 로그인에서 자동 제안과 구문 강조를 확인하세요.", detail))
+                event(stage, "failed" if code else "completed")
             if stage == "display":
                 # Registration needs the display prerequisites, not Docker/GPU.
                 # Keep it in this same serial worker and before unrelated blockers.

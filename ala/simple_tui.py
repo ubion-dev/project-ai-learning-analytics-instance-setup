@@ -13,13 +13,14 @@ from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
 from textual.message import Message
-from textual.widgets import Button, ContentSwitcher, DataTable, Footer, Static, Tab, Tabs, TextArea
+from textual.widgets import Button, Checkbox, ContentSwitcher, DataTable, Footer, Static, Tab, Tabs, TextArea
 
 from . import __version__
 from .console import LABELS, PRIORITY, group_name
 from .model import redact
 from .progress import progress_rows, STATE_LABELS, STATE_STYLES
 from .screens_tui import ScreenPanel
+from .quick_tui import QuickPanel
 
 ACTIVE = {'queued', 'running'}
 JOB_LABELS = {'queued': '시작 대기', 'running': '실행 중', 'completed': '완료',
@@ -44,6 +45,14 @@ class DetailArea(TextArea):
 def value_text(value):
     value = redact(value)
     return value if isinstance(value, str) else json.dumps(value, ensure_ascii=False)
+
+
+def first_issue(rows):
+    return max(
+        (row for row in rows if row.get('state') not in {'ok', 'not_applicable'}),
+        key=lambda row: PRIORITY.get(row.get('state'), PRIORITY['unknown']),
+        default=None,
+    )
 
 
 def result_detail(rows):
@@ -92,10 +101,10 @@ class SimpleApp(App[None]):
     #body { height: 1fr; margin-top: 1; }
     #pages { width: 100%; height: 1fr; padding: 0 3 1 3; }
     #setup, #status, #screens { height: 1fr; }
-    #setup-toolbar { height: auto; margin-bottom: 1; padding: 0 2; background: #172735; border-left: solid #648ba7; }
+    #setup-toolbar { height: auto; margin-bottom: 1; padding: 0 2; }
     #setup-context { width: 1fr; height: auto; }
     #config-summary { height: auto; max-height: 3; text-style: bold; text-wrap: nowrap; text-overflow: ellipsis; }
-    #setup-note { height: auto; max-height: 2; margin-top: 1; color: #aabdd0; }
+    #setup-bash-assist { height: 1; border: none; padding: 0; width: 100%; }
     .actions { height: 3; margin-bottom: 1; }
     #setup-actions { width: 24; margin: 0 0 0 3; }
     Button { height: 3; padding: 0 3; background: #233344; color: #e9f0f7; border: tall #233344; }
@@ -106,20 +115,21 @@ class SimpleApp(App[None]):
     #chrome-open { width: 16; height: 3; margin-left: 1; padding: 0 1; }
     #screens-actions { height: 6; layout: grid; grid-size: 5 2; grid-rows: 3 3; grid-columns: 1fr 1fr 1fr 1fr 1fr; grid-gutter: 0 1; }
     #screens-actions Button { padding: 0; min-width: 7; width: 1fr; }
-    #setup-overview { height: auto; margin-bottom: 1; padding: 0 2; border-left: solid #648ba7; }
+    #quick-actions Button { padding: 0; }
+    #setup-overview, #status-overview { height: auto; margin-bottom: 1; padding: 0 2; background: #172735; border-left: solid #648ba7; }
     #setup-overview.running { background: #142a32; border-left: solid #62cce5; }
     #setup-overview.pending { background: #2b2518; border-left: solid #e6ba63; }
     #setup-overview.failed, #setup-overview.interrupted { background: #321d25; border-left: solid #ee8795; }
     #setup-overview.completed { background: #162b25; border-left: solid #83e3c4; }
-    #setup-progress { height: auto; max-height: 2; margin-bottom: 1; text-style: bold; }
-    #setup-summary { height: auto; max-height: 2; }
+    #setup-progress, #status-summary { height: auto; max-height: 2; text-style: bold; color: #b5e9d9; }
+    #setup-next, #status-next { height: auto; max-height: 2; }
+    #setup-summary { height: auto; max-height: 2; padding: 0 2; }
     DataTable { background: #141d28; border: solid #34475d; border-title-color: #aabdd0; }
     DataTable > .datatable--header { background: #233344; color: #e9f0f7; text-style: bold; }
     DataTable > .datatable--cursor { background: #244859; }
     DataTable:focus { border: solid #83e3c4; }
     #setup-table { height: 1fr; min-height: 5; background: #152332; }
     #setup-output { height: 7; min-height: 5; margin-top: 1; }
-    #status-summary { height: auto; max-height: 2; margin-bottom: 1; }
     #status-table { height: 1fr; min-height: 3; }
     #status-detail { height: 9; min-height: 5; margin-top: 1; }
     TextArea { background: #0e151e; border: round #52677a; border-title-color: #c0d1e0; padding: 0 2; }
@@ -132,26 +142,28 @@ class SimpleApp(App[None]):
     Screen.compact #body { margin-top: 0; }
     Screen.compact #pages { padding: 0 2; }
     Screen.compact #config-summary { max-height: 2; }
-    Screen.compact #setup-note { margin-top: 0; max-height: 1; }
     Screen.compact #setup-toolbar { margin-bottom: 0; padding: 0 1; }
-    Screen.compact #setup-actions { width: 22; margin-left: 2; }
+    Screen.compact #setup-actions { width: 22; margin-left: 0; }
     Screen.compact #setup-start { width: 22; }
+    Screen.compact #chrome-open { width: 15; margin-left: 0; }
     Screen.compact Button { padding: 0 2; }
-    Screen.compact #setup-overview, Screen.compact #setup-progress { margin-bottom: 0; }
-    Screen.compact #setup-overview { padding: 0 1; }
+    Screen.compact #setup-overview, Screen.compact #status-overview { margin-bottom: 0; padding: 0 1; }
+    Screen.compact #setup-summary { padding: 0 1; }
     Screen.compact #setup-table { min-height: 4; }
     Screen.compact #setup-output { height: 5; margin-top: 0; }
-    Screen.compact #status-summary, Screen.compact .actions { margin-bottom: 0; }
+    Screen.compact .actions { margin-bottom: 0; }
     Screen.compact #status-detail { height: 7; margin-top: 0; }
     Screen.compact TextArea { padding: 0 1; }
     Screen.compact #screens-summary { height: 1; margin-bottom: 0; }
     Screen.compact #screens-map, Screen.compact #screens-map.no-layout { height: auto; max-height: 2; padding: 0; border: none; }
     Screen.compact #screens-table { margin-top: 0; }
-    Screen.compact #screens-detail { height: 5; min-height: 5; margin-top: 0; }
+    Screen.compact #screens-detail { height: 4; min-height: 3; margin-top: 0; }
     Screen.compact #screens-help { height: 1; text-wrap: nowrap; text-overflow: ellipsis; }
     Screen.compact #screens-actions { height: 4; grid-rows: 2 2; margin-top: 0; }
     Screen.compact #screens-actions Button { height: 2; border: none; padding: 0; }
     Screen.compact #screens-actions Button:focus { background: #244859; color: #ccf7e8; text-style: bold; }
+    Screen.compact #quick-actions Button { height: 2; border: none; padding: 0; }
+    Screen.compact #quick-logs { width: 21; }
     """
 
     def __init__(self, *, service, initial_section='setup', **kwargs):
@@ -165,6 +177,7 @@ class SimpleApp(App[None]):
         self._loading = False
         self._status_known = False
         self._groups = {}
+        self._selected_status_group = None
         self._setup_report = None
         self._full_report = None
         self._display_job = None
@@ -184,32 +197,38 @@ class SimpleApp(App[None]):
     def compose(self) -> ComposeResult:
         yield Static(f'ala {__version__} · 서버 환경 관리' + (' · 관리자' if os.geteuid() == 0 else ''), id='heading', markup=False)
         yield Static('화면이 작습니다. 80×24 이상으로 늘려주세요.', id='small-terminal', markup=False)
-        yield Tabs(Tab('간편 설정', id='setup-tab'), Tab('상태 확인', id='status-tab'), Tab('화면 관리', id='screens-tab'), id='tabs')
+        yield Tabs(Tab('간편 설정', id='setup-tab'), Tab('상태 확인', id='status-tab'), Tab('화면 관리', id='screens-tab'), Tab('DID 빠른 점검', id='quick-tab'), id='tabs')
         yield Static('현재 구성을 확인하고 있습니다.', id='notice', markup=False)
         yield Static('', id='update-notice', markup=False)
         yield Static('', id='query-status', markup=False)
         with Vertical(id='body'):
             with ContentSwitcher(initial='setup', id='pages'):
                 with Vertical(id='setup'):
+                    with Vertical(id='setup-overview'):
+                        yield Static('환경 상태 확인 중', id='setup-progress', markup=False)
+                        yield Static('다음 · 조회가 끝날 때까지 기다리세요.', id='setup-next', markup=False)
                     with Horizontal(id='setup-toolbar'):
                         with Vertical(id='setup-context'):
                             yield Static('현재 구성을 확인하고 있습니다.', id='config-summary', markup=False)
-                            yield Static('환경과 자동 시작 등록을 준비합니다. Chrome 제어는 화면 관리에서 합니다.', id='setup-note', markup=False)
+                            option = Checkbox('Bash 자동 제안·구문 강조 설치', id='setup-bash-assist', disabled=True)
+                            option.tooltip = '이번 설정에서 일반 운영 계정에 설치합니다. 다음 대화형 SSH 로그인부터 적용됩니다.'
+                            yield option
                         with Horizontal(classes='actions', id='setup-actions'):
                             yield Button('간편 설정 실행', id='setup-start', variant='primary', disabled=True)
                         yield Button('화면 관리', id='chrome-open')
-                    with Vertical(id='setup-overview'):
-                        yield Static('실행하면 SSH·화면을 닫아도 설정 작업은 계속됩니다.', id='setup-progress', markup=False)
-                        yield Static('현재 상태를 확인하고 있습니다.', id='setup-summary', markup=False)
+                    yield Static('현재 상태를 확인하고 있습니다.', id='setup-summary', markup=False)
                     yield SetupTable(id='setup-table', cursor_type='row', cursor_foreground_priority='renderable')
                     yield DetailArea('', id='setup-output', read_only=True, show_cursor=False, highlight_cursor_line=False)
                 with Vertical(id='status'):
+                    with Vertical(id='status-overview'):
+                        yield Static('상태 조회 대기', id='status-summary', markup=False)
+                        yield Static('다음 · 상태를 다시 확인하세요.', id='status-next', markup=False)
                     with Horizontal(classes='actions'):
                         yield Button('상태 다시 확인', id='status-refresh')
-                    yield Static('아직 확인하지 않았습니다.', id='status-summary', markup=False)
                     yield DataTable(id='status-table', cursor_type='row')
                     yield DetailArea('', id='status-detail', read_only=True, show_cursor=False, highlight_cursor_line=False)
                 yield ScreenPanel(self, id='screens')
+                yield QuickPanel(self, id='quick')
         yield Footer()
 
     def on_mount(self):
@@ -310,11 +329,60 @@ class SimpleApp(App[None]):
         if not self.is_running:
             return
         self.query_one('#setup-actions').display = not bool(self._active_job)
-        self.query_one('#setup-note').display = not bool(self._active_job) and not self.query_one('#setup-note').screen.has_class('compact')
-        self.query_one('#setup-start', Button).disabled = bool(
+        disabled = bool(
             self._loading or self._submitting or self._active_job or not self._status_known
             or not self._config or not self._config.get('user')
             or self._chrome_mutating or (self._update_status or {}).get('state') in ACTIVE)
+        button = self.query_one('#setup-start', Button)
+        button.disabled = disabled
+        self.query_one('#setup-bash-assist', Checkbox).disabled = disabled
+        self.render_setup_header()
+
+    def render_setup_header(self):
+        job = self._display_job or {}
+        state = job.get('state')
+        style = ''
+        recommend_setup = False
+        if self._active_job or (state in JOB_LABELS and state not in ACTIVE):
+            heading = '설정 작업 · ' + JOB_LABELS.get(state, '진행 중')
+            style = STATE_STYLES.get(state, 'cyan' if state in ACTIVE else 'yellow')
+            if state in ACTIVE:
+                action = '항목별 진행을 확인하세요. SSH를 닫아도 작업은 계속됩니다.'
+            else:
+                result = job.get('report') or {}
+                issue = first_issue(result.get('results', []))
+                action = ((issue or {}).get('next_action') or job.get('reason')
+                          or '항목별 결과를 확인하세요.')
+        elif self._submitting:
+            heading, action = '설정 요청 중', '작업 접수를 기다리세요.'
+        elif self._loading:
+            heading, action = '환경 상태 확인 중', '조회가 끝날 때까지 기다리세요.'
+        elif not self._config or not self._status_known:
+            heading, action = '설정 실행 전 확인 필요', '상태를 다시 확인하세요.'
+            style = 'yellow'
+        elif not self._config.get('user'):
+            heading, action = '일반 운영 계정이 필요합니다', '일반 사용자로 접속하거나 화면 계정을 지정하세요.'
+            style = 'yellow'
+        elif self._chrome_mutating or (self._update_status or {}).get('state') in ACTIVE:
+            heading, action = '다른 작업 진행 중', '현재 작업이 끝난 뒤 간편 설정을 실행하세요.'
+        else:
+            issue = first_issue((self._setup_report or {}).get('results', []))
+            if issue:
+                kind = issue.get('state', 'unknown')
+                heading = f"{group_name(issue.get('id'))} · {LABELS.get(kind, '확인 불가')}"
+                style = STATE_STYLES.get(kind, 'yellow')
+                recommend_setup = kind == 'change_required'
+                action = issue.get('next_action') or (
+                    '간편 설정을 실행해 필요한 항목을 적용하세요.' if recommend_setup
+                    else '아래 항목에서 원인과 조치를 확인하세요.')
+            else:
+                heading, action = '간편 설정 실행 가능', '대상과 설치 옵션을 확인한 뒤 실행하세요.'
+                style = 'green'
+                recommend_setup = True
+        button = self.query_one('#setup-start', Button)
+        button.variant = 'primary' if recommend_setup and not button.disabled else 'default'
+        self.query_one('#setup-progress', Static).update(Text(heading, style=style))
+        self.query_one('#setup-next', Static).update('다음 · '+value_text(action))
 
     async def load_state(self):
         if not self.is_running or self._loading or self._submitting:
@@ -325,6 +393,7 @@ class SimpleApp(App[None]):
         self.refresh_query_label()
         self.update_button()
         self.query_one('#status-refresh', Button).disabled = True
+        self.set_status_header('장비 상태 조회 중', '조회가 끝날 때까지 기다리세요.')
         # Read the cheap context independently of the full host inspection.
         config_task = asyncio.create_task(self.api('config-show'))
         runs_task = asyncio.create_task(self.api('runs-list'))
@@ -362,7 +431,7 @@ class SimpleApp(App[None]):
                     self.render_setup_table()
                 self._groups = {}
                 self.query_one('#status-table', DataTable).clear()
-                self.query_one('#status-summary', Static).update('상태 조회 실패 · 정상으로 판단할 수 없습니다.')
+                self.set_status_header('상태 조회 실패 · 정상으로 판단할 수 없습니다.', '상태를 다시 확인하세요.')
                 self.query_one('#status-detail', TextArea).load_text('현재 조회가 실패했습니다. 상태 다시 확인으로 재시도하세요.')
             if report is not None:
                 self._full_report = deepcopy(report)
@@ -387,9 +456,6 @@ class SimpleApp(App[None]):
                 if not self._active_job and tracked_at_start is None and not attached_early:
                     self._display_job = None
                     self.render_setup_table()
-                    duration = report.get('inspection', {}).get('duration_ms')
-                    timing = f' · {duration / 1000:.1f}초' if isinstance(duration, (int, float)) else ''
-                    self.query_one('#setup-progress', Static).update(f'검사 결과{timing} · 필요한 항목만 적용합니다.')
         finally:
             for task in (config_task, runs_task, report_task):
                 if not task.done():
@@ -409,14 +475,16 @@ class SimpleApp(App[None]):
     def activate_tab(self, event):
         if not self.is_running:
             return
-        section = {'setup-tab': 'setup', 'status-tab': 'status', 'screens-tab': 'screens'}[event.tab.id]
+        section = {'setup-tab': 'setup', 'status-tab': 'status', 'screens-tab': 'screens', 'quick-tab': 'quick'}[event.tab.id]
         self.query_one('#pages', ContentSwitcher).current = section
-        target = '#setup-start' if section == 'setup' else '#screens-table' if section == 'screens' else '#status-table'
+        target = {'setup': '#setup-start', 'screens': '#screens-table', 'status': '#status-table', 'quick': '#quick-refresh'}[section]
         self.call_after_refresh(self.query_one(target).focus)
         if section == 'setup':
             self.call_after_refresh(self._fit_setup_table)
         elif section == 'screens':
             self.query_one('#screens', ScreenPanel).activate()
+        elif section == 'quick':
+            self.query_one('#quick', QuickPanel).activate()
 
     @on(Button.Pressed, '#status-refresh')
     def refresh_pressed(self):
@@ -429,6 +497,9 @@ class SimpleApp(App[None]):
         self.query_one('#tabs', Tabs).active = 'setup-tab'
 
     def action_refresh(self):
+        if self.is_running and self.query_one('#pages').current == 'quick':
+            self.query_one('#quick', QuickPanel).activate()
+            return
         if self.is_running and self.query_one('#pages').current == 'screens':
             self.query_one('#screens', ScreenPanel).activate()
             return
@@ -443,6 +514,10 @@ class SimpleApp(App[None]):
     async def start_setup(self):
         if not self.is_running or self._submitting or self._active_job or self._loading or not self._status_known or not self._config or not self._config.get('user'):
             return
+        option = self.query_one('#setup-bash-assist', Checkbox)
+        payload = {'expected_config': deepcopy(self._config)}
+        if option.value:
+            payload['bash_assist'] = True
         self._submitting = True
         self.update_button()
         try:
@@ -455,10 +530,11 @@ class SimpleApp(App[None]):
                 self.notice('구성이 변경됐습니다. 상태를 다시 확인한 뒤 실행하세요.')
                 self._status_known = False
                 return
-            job = await self.api('submit', {'expected_config': deepcopy(self._config)})
+            job = await self.api('submit', payload)
             if not self.is_running:
                 return
             if job is not None:
+                option.value = False
                 self._active_job = job['run_id'] if job.get('state') in ACTIVE else None
                 self.render_job(job)
                 self.notice('설정을 시작했습니다. 이 화면을 종료해도 작업은 계속됩니다.')
@@ -486,7 +562,7 @@ class SimpleApp(App[None]):
                     if job['report'].get('scope') == 'configuration':
                         self._setup_report = dict(self._setup_report or {}, **deepcopy(job['report']))
                         self._setup_report['configuration_report'] = deepcopy(job['report'])
-                        self.query_one('#status-summary', Static).update('설정 결과 수신 · 현재 실행 상태를 다시 확인하고 있습니다.')
+                        self.set_status_header('설정 결과 수신', '현재 실행 상태를 다시 확인하고 있습니다.')
                         self.run_worker(self.refresh_runtime_status(), group='runtime-status', exclusive=True, exit_on_error=False)
                     else:
                         self._full_report = deepcopy(job['report'])
@@ -512,19 +588,18 @@ class SimpleApp(App[None]):
             self._full_report = None
             self._groups = {}
             self.query_one('#status-table', DataTable).clear()
-            self.query_one('#status-summary', Static).update('현재 실행 상태 조회 실패 · 정상으로 판단할 수 없습니다.')
+            self.set_status_header('현재 실행 상태 조회 실패 · 정상으로 판단할 수 없습니다.', '상태를 다시 확인하세요.')
             self.query_one('#status-detail', TextArea).load_text('현재 실행 상태를 확인하지 못했습니다. 상태를 다시 확인하세요.')
 
     def render_job(self, job):
         if not self.is_running:
             return
-        state = JOB_LABELS.get(job.get('state'), '확인 필요')
-        self.query_one('#setup-progress', Static).update(Text(f"현재 작업 · {state} · 실행 ID {job.get('run_id', '-') }"))
         overview = self.query_one('#setup-overview')
         overview.set_classes(job.get('state') if job.get('state') in JOB_LABELS else '')
         if not self._display_job or self._display_job.get('run_id') != job.get('run_id'):
             self._last_followed_step = None
         self._display_job = deepcopy(job)
+        self.render_setup_header()
         self.render_setup_table()
 
     def render_setup_table(self):
@@ -581,6 +656,8 @@ class SimpleApp(App[None]):
             summary.append(f'{label} {count}', style=style)
         if not self._has_checked and self._setup_report is None and self._display_job is None:
             summary = Text('… 검사 결과를 기다리고 있습니다.', style='cyan')
+        if (self._display_job or {}).get('run_id'):
+            summary.append(f"   실행 ID {self._display_job['run_id']}", style='dim')
         self.query_one('#setup-summary', Static).update(summary)
         running = next((row['id'] for row in rows if row.get('parent_id') and row['state'] == 'running'), None)
         running = running or next((row['id'] for row in rows if row['state'] in {'running', 'started'}), None)
@@ -647,27 +724,49 @@ class SimpleApp(App[None]):
             groups.setdefault(group_name(row.get('id')), []).append(row)
         self._groups = groups
         table = self.query_one('#status-table', DataTable)
-        table.clear()
-        for index, (name, items) in enumerate(groups.items()):
-            state = max((row.get('state', 'unknown') for row in items), key=lambda value: PRIORITY.get(value, 5))
-            style = 'green' if state == 'ok' else 'dim' if state == 'not_applicable' else 'yellow' if state in {'change_required', 'pending', 'unknown'} else 'red'
-            label = '조회 확인 필요' if state == 'unknown' else '자동 설정 대상' if state == 'change_required' else LABELS.get(state, '확인 불가')
-            table.add_row(Text(name, style='bold'), Text(label, style=style), key=str(index))
-        if rows:
-            issues = sum(row.get('state') in {'error', 'blocked', 'unknown'} for row in rows)
-            pending = sum(row.get('state') == 'pending' for row in rows)
-            changes = sum(row.get('state') == 'change_required' for row in rows)
-            self.query_one('#status-summary', Static).update(Text(f'조치·확인 필요 {issues} · 설정 필요 {changes} · 적용 대기 {pending}'))
-            self.show_group(0)
-        else:
-            self.query_one('#status-summary', Static).update('검사 결과가 없습니다. 정상으로 판단할 수 없습니다.')
+        issue = first_issue(rows)
+        with table.prevent(DataTable.RowHighlighted):
+            table.clear()
+            for index, (name, items) in enumerate(groups.items()):
+                state = max((row.get('state', 'unknown') for row in items), key=lambda value: PRIORITY.get(value, 5))
+                style = 'green' if state == 'ok' else 'dim' if state == 'not_applicable' else 'yellow' if state in {'change_required', 'pending', 'unknown'} else 'red'
+                label = '조회 확인 필요' if state == 'unknown' else '자동 설정 대상' if state == 'change_required' else LABELS.get(state, '확인 불가')
+                table.add_row(Text(name, style='bold'), Text(label, style=style), key=str(index))
+            if groups:
+                preferred = group_name(issue.get('id')) if issue else next(iter(groups))
+                selected = self._selected_status_group if self._selected_status_group in groups else preferred
+                index = list(groups).index(selected)
+                table.move_cursor(row=index, animate=False)
+                self.show_group(index)
+        if not rows:
+            self.set_status_header('검사 결과가 없습니다. 정상으로 판단할 수 없습니다.', '상태를 다시 확인하세요.')
             self.query_one('#status-detail', TextArea).load_text('상태 다시 확인으로 재검사하세요.')
+        elif issue:
+            kind = issue.get('state', 'unknown')
+            issues = sum(row.get('state') in {'error', 'blocked', 'unknown'} for row in rows)
+            heading = f"{group_name(issue.get('id'))} · {LABELS.get(kind, '확인 불가')}"
+            if issues:
+                heading += f'   조치·확인 필요 {issues}'
+            action = issue.get('next_action') or (
+                '아래에서 관련 항목의 현재 상태를 확인하세요.' if kind != 'unknown'
+                else '상태를 다시 확인하세요.')
+            self.set_status_header(heading, action, style=STATE_STYLES.get(kind, 'yellow'))
+        elif any(row.get('state') == 'ok' for row in rows):
+            self.set_status_header('서버 상태 검사 통과', '실제 DID 표시는 모니터에서 확인하세요.', style='green')
+        else:
+            self.set_status_header('해당하는 검사 항목이 없습니다.', '현재 장비 구성을 확인하세요.')
+
+    def set_status_header(self, heading, action, *, style=''):
+        self.query_one('#status-summary', Static).update(Text(heading, style=style))
+        self.query_one('#status-next', Static).update('다음 · '+value_text(action))
 
     @on(DataTable.RowHighlighted, '#status-table')
     def row_highlighted(self, event):
         try:
-            self.show_group(int(event.row_key.value))
-        except (TypeError, ValueError):
+            index = int(event.row_key.value)
+            self._selected_status_group = list(self._groups)[index]
+            self.show_group(index)
+        except (IndexError, TypeError, ValueError):
             pass
 
     def show_group(self, index):

@@ -80,7 +80,7 @@ def test_button_and_keyboard_open_single_display_controls_without_mutating_or_ex
         app = SimpleApp(service=service)
         async with app.run_test(size=(80, 24)) as pilot:
             await pilot.pause()
-            assert len(app.query_one('#tabs', Tabs).query('Tab')) == 3
+            assert len(app.query_one('#tabs', Tabs).query('Tab')) == 4
             button = app.query_one('#chrome-open', Button)
             assert cell_len(button.label.plain) <= button.content_region.width - 2 * button.styles.line_pad
             await pilot.click('#chrome-open')
@@ -108,7 +108,7 @@ def test_button_and_keyboard_open_single_display_controls_without_mutating_or_ex
                         assert cell_len(widget.label.plain) <= widget.content_region.width - 2 * widget.styles.line_pad
             await pilot.press('escape')
             await pilot.pause()
-            assert not app.query_one('#setup-note').display
+            assert app.query_one('#setup-progress').region.bottom <= app.query_one('#config-summary').region.y
             await pilot.press('c')
             await pilot.pause()
             assert isinstance(app.screen, ChromeScreen) and not mutations(service)
@@ -282,6 +282,7 @@ def test_compact_setup_renders_account_and_url_prefix_beside_both_controls():
             visible = ''.join(visible.split())
             assert '설정대상·user' in visible
             assert '화면·https://example.com' in visible
+            assert 'Bash자동제안·구문강조설치' in visible
             assert '간편설정실행' in visible and '화면관리' in visible
     asyncio.run(scenario())
 

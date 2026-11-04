@@ -127,12 +127,14 @@ class Operations:
                 return result
             return submit_apply(target, release=self.release, paths=self.paths, host=self.host)
         if action == 'screens-inspect':
-            from .screens import inspect_screens
+            from .screens import inspect_screens, inspect_session
             from .runtime import settings_status, snapshot
             from .frontend import read_status
             from .screen_control import read_status as reload_status
             config = self.config()
             value = inspect_screens(config, host=self.host, paths=self.paths)
+            if payload.get('quick') is True:
+                value['session'] = inspect_session(config, self.host)
             frontend = read_status(paths=self.paths)
             for target in value.get('targets', []):
                 target['reload'] = reload_status(target['id'], paths=self.paths, host=self.host)
@@ -212,6 +214,12 @@ class Operations:
             return {'saved': True, 'config': config.to_dict(), 'state': 'pending', 'exit_code': 2,
                     'reason': ('새 화면을 저장했습니다. 간편 설정에서 화면을 등록한 뒤 시작하세요.' if existing is None
                                else '구성을 저장했습니다. 화면 관리에서 설정 적용을 선택하세요.')}
+        if action == 'screens-login-logs':
+            from .display import _gdm_diagnostics
+            self.config().for_screen(payload.get('target', 'default'))
+            status, journal = _gdm_diagnostics(self.host)
+            lines = [status.actual, *(journal.actual if isinstance(journal.actual, list) else [journal.actual])]
+            return {'log': '\n'.join(lines), 'exit_code': int(journal.state == 'unknown')}
         if action == 'screens-action':
             from .screens import screen_action
             name = payload.get('action')
@@ -314,7 +322,8 @@ class Operations:
                     raise ValueError('사용 가능한 일반 사용자가 아닙니다.')
                 return config
             return JobStore(self.paths, self.host).submit(current_config, self.release, self.release / '.venv/bin/python',
-                                                         expected_config=payload.get('expected_config'), persist_config=True)
+                                                         expected_config=payload.get('expected_config'), persist_config=True,
+                                                         bash_assist=payload.get('bash_assist', False))
         if action == 'runs-list':
             return {'runs': JobStore(self.paths, self.host).list()}
         if action == 'runs-show':

@@ -39,7 +39,8 @@ STAGE_TASKS = {
     ],
     'shell': [
         task('packages', 'Bash·자동완성 패키지', 'shell.package.*'),
-        task('user_shell', '일반 사용자 Bash·테마', 'shell.*', '!shell.package.*', '!shell.root*'),
+        task('user_shell', '일반 사용자 Bash·테마', 'shell.*', '!shell.package.*', '!shell.root*', '!shell.*.bash_assist'),
+        task('bash_assist', 'Bash 자동 제안·구문 강조', 'shell.*.bash_assist'),
         task('root_shell', 'root Bash·테마 (선택)', 'shell.root*', option='root_bash'),
     ],
     'ssh': [
@@ -143,6 +144,8 @@ def child_rows(stage, *, report=None, job=None, parent_state='unknown'):
     rows = []
     current = ''
     for entry in catalog:
+        if entry['id'] == 'bash_assist' and (job or {}).get('bash_assist') is not True:
+            continue
         if (stage == 'chrome' and observed.get('scope') == 'configuration'
                 and entry['id'] in {'session', 'policy', 'health'}):
             continue

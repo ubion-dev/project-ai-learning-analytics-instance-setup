@@ -314,3 +314,20 @@ def test_config_import_cannot_remove_a_selected_target_from_the_control_inventor
     assert operations.paths.config.read_bytes() == config_bytes
     assert {target: store.state_path(target).read_bytes() for target in states} == states
     assert not operations.host.calls
+
+
+
+def test_quick_login_log_reads_current_boot_and_keeps_only_categories(operations, monkeypatch):
+    calls = []
+
+    def run(args, **kwargs):
+        calls.append(args)
+        if args[0] == 'systemctl':
+            return Command(0, stdout='LoadState=loaded\nActiveState=active\n')
+        return Command(0, stdout='authentication failure with private metadata')
+
+    monkeypatch.setattr(operations.host, 'run', run)
+    value = operations.dispatch('screens-login-logs', {'target': 'default'})
+    assert calls[1][:4] == ['journalctl', '-b', '-u', 'gdm.service']
+    assert '로그인·세션 시작 오류 단서' in value['log']
+    assert 'private metadata' not in value['log']

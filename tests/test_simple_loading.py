@@ -166,7 +166,7 @@ def test_fresh_status_clears_the_old_job_panel_color():
             await app.load_state()
             assert app._display_job is None
             assert not app.query_one('#setup-overview').classes
-            assert '검사 결과' in str(app.query_one('#setup-progress', Static).render())
+            assert '간편 설정 실행 가능' in str(app.query_one('#setup-progress', Static).render())
             assert not any(action == 'submit' for action, _ in service.calls)
     asyncio.run(scenario())
 

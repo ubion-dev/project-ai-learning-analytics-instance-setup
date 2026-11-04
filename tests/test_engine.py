@@ -267,6 +267,34 @@ class EngineTests(unittest.TestCase):
             self.assertEqual(sum(r.id == "chrome.apply_only" for r in report.results), 1)
         self.assertEqual(self.host.executed, [])
 
+    def test_opt_in_bash_failure_reports_optional_step_and_preserves_did_progress(self):
+        from ala.progress import progress_rows
+
+        self.engine.bash_assist = True
+        self.host.execution_code = 1
+        applied = self.track_display_apply()
+        stages, substeps = [], []
+        report = self.engine.apply(lambda *args: stages.append(args),
+                                   lambda *args: substeps.append(args))
+        self.assertEqual(report.exit_code, 1)
+        self.assertEqual(applied, [True])
+        self.assertEqual(self.by_id(report, "shell.user.bash_assist").state, "error")
+        self.assertEqual(self.by_id(report, "chrome.apply_only").state, "ok")
+        self.assertIn(("docker", "kept"), stages)
+        self.assertEqual([argv[1:] for argv in self.host.executed],
+                         [(str(SCRIPTS / "setup-bash-assist.sh"), "--user", "user")])
+        self.assertEqual(substeps, [("shell", "user_shell", "kept"),
+                                    ("shell", "bash_assist", "started"), ("shell", "bash_assist", "failed")])
+        job = {'state': 'running', 'bash_assist': True,
+               'stages': [{'id': stage, 'state': state} for stage, state in stages],
+               'substeps': [{'stage': stage, 'id': step, 'state': state} for stage, step, state in substeps]}
+        for observed in (job, dict(job, state='failed', report=report.to_dict())):
+            shell = next(row for row in progress_rows(job=observed) if row['id'] == 'shell')
+            rows = {row['id']: row for row in shell['children']}
+            self.assertEqual(shell['state'], 'error')
+            self.assertEqual(rows['shell.bash_assist']['state'], 'error')
+            self.assertEqual(rows['shell.user_shell']['state'], 'kept')
+
     def test_docker_blocker_keeps_earlier_chrome_registration_result(self):
         applied = self.track_display_apply()
         self.host.packages.add("podman")

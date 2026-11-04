@@ -47,6 +47,15 @@ def site_label(value):
         return '주소 확인 필요'
 
 
+def site_confirmed(value):
+    settings = value.get('settings') or {}
+    health = value.get('health') or {}
+    revision = ((value.get('runtime') or {}).get('committed') or {}).get('revision')
+    return (health.get('target_matches_config')
+            and settings.get('state') not in {'queued', 'running'}
+            and (not revision or health.get('config_revision') == revision))
+
+
 def topology_text(report, width=100, height=7):
     logical = report.get('logical_outputs') or []
     if not logical:
@@ -205,22 +214,27 @@ class TargetEditor(ModalScreen[dict | None]):
 class ScreenPanel(Vertical):
     DEFAULT_CSS = """
     ScreenPanel { height: 1fr; }
-    #screens-summary { height: auto; max-height: 2; margin-bottom: 1; color: #b5e9d9; }
-    #screens-hardware, #screens-result { height: 1; text-wrap: nowrap; text-overflow: ellipsis; }
+    #screens-summary { height: auto; max-height: 2; color: #b5e9d9; }
+    #screens-hardware, #screens-result, #screens-next { height: 1; text-wrap: nowrap; text-overflow: ellipsis; }
     #screens-help { height: 2; }
     #screens-hardware, #screens-help { color: #aabdd0; }
-    #screens-result { color: #b5e9d9; }
+    #screens-result { padding: 0 1; background: #172735; color: #b5e9d9; text-style: bold; }
+    #screens-next { padding: 0 1; color: #e9f0f7; }
     #screens-map { height: 8; padding: 0 1; background: #172735; border: round #34475d; }
     #screens-map.no-layout { height: auto; max-height: 4; }
     #screens-table { height: 1fr; min-height: 3; margin-top: 1; }
     #screens-detail { height: 6; min-height: 3; margin-top: 1; }
-    #screens-actions { height: 3; margin-top: 1; }
+    #screens-actions { height: 3; }
     #screens-actions Button { width: 1fr; min-width: 7; padding: 0; }
     Screen.compact #screens-summary { margin-bottom: 0; max-height: 1; }
     Screen.compact #screens-map { height: auto; max-height: 3; padding: 0; border: none; }
     Screen.compact #screens-table { margin-top: 0; }
     Screen.compact #screens-detail { height: 4; margin-top: 0; }
     Screen.compact #screens-actions { margin-top: 0; }
+    ScreenPanel.tight #screens-map { height: auto; max-height: 2; padding: 0; border: none; }
+    ScreenPanel.tight #screens-help { height: 1; text-wrap: nowrap; text-overflow: ellipsis; }
+    ScreenPanel.tight #screens-table, ScreenPanel.tight #screens-detail { margin-top: 0; }
+    ScreenPanel.tight #screens-detail { height: 4; }
     """
 
     def __init__(self, owner, **kwargs):
@@ -236,19 +250,19 @@ class ScreenPanel(Vertical):
         self.loaded = False
 
     def compose(self):
+        yield Static('표시 대상 확인 중', id='screens-result', markup=False)
+        yield Static('', id='screens-next', markup=False)
+        with Horizontal(id='screens-actions'):
+            for key, (label, help_text) in ACTIONS.items():
+                button = Button(label, id='screens-'+key, disabled=key != 'add')
+                button.tooltip = help_text
+                yield button
+        yield Static('', id='screens-help', markup=False)
         yield Static('화면 관리를 열면 연결된 출력과 창을 조회합니다.', id='screens-summary', markup=False)
         yield Static('', id='screens-hardware', markup=False)
         yield Static('', id='screens-map', markup=False)
         yield DataTable(id='screens-table', cursor_type='row')
-        yield Static('', id='screens-result', markup=False)
         yield TextArea('', id='screens-detail', read_only=True, show_cursor=False, highlight_cursor_line=False)
-        yield Static('', id='screens-help', markup=False)
-        with Horizontal(id='screens-actions'):
-            for key, (label, help_text) in ACTIONS.items():
-                button = Button(label, id='screens-'+key, disabled=key != 'add',
-                                variant='primary' if key == 'apply' else 'default')
-                button.tooltip = help_text
-                yield button
 
     def on_mount(self):
         self.query_one('#screens-table').border_title = '표시 대상 · 실제 관측과 설정을 구분합니다'
@@ -327,8 +341,10 @@ class ScreenPanel(Vertical):
             if self.loaded else '출력·창 조회 확인 필요 · '+str(self.report.get('reason', '조회 중'))))
         self.query_one('#screens-hardware', Static).update(Text(hardware_text(self.report)))
         map_view = self.query_one('#screens-map', Static)
+        short = self.size.height < 32 or self.size.width < 99
+        self.set_class(short and not self.screen.has_class('compact'), 'tight')
         map_view.set_class(not self.report.get('logical_outputs'), 'no-layout')
-        map_view.update(Text(topology_text(self.report, max(20, self.size.width-4), 7 if self.size.height >= 23 else 3)))
+        map_view.update(Text(topology_text(self.report, max(20, self.size.width-4), 3 if short else 7)))
         table = self.query_one('#screens-table', DataTable)
         compact = self.size.width < 100
         table.clear(columns=True)
@@ -390,6 +406,40 @@ class ScreenPanel(Vertical):
         self.render_help()
         self.render_detail()
 
+    def priority(self, value):
+        if not value:
+            if self.report.get('state') == 'unknown':
+                return '표시 대상을 확인할 수 없습니다', 'r로 다시 확인하세요.', None, 'yellow'
+            if not self.loaded:
+                return '표시 대상 확인 중', '조회 결과를 기다리세요.', None, 'cyan'
+            return '등록된 표시 대상이 없습니다', '추가를 선택해 화면을 등록하세요.', 'add', 'yellow'
+        settings = value.get('settings') or {}
+        state = (value.get('service') or {}).get('ActiveState')
+        if (self.mutating or self.owner._active_job or self.selected in self.following
+                or self.selected in self.launches or settings.get('state') in {'queued', 'running'}):
+            return '작업 진행 중', '작업 결과를 확인하세요.', None, 'cyan'
+        if state == 'failed':
+            return 'Chrome 실행 실패', '선택한 화면의 Chrome 로그를 확인하세요.', 'logs', 'red'
+        if state not in {'active', 'inactive', 'activating', 'deactivating'} or settings.get('state') == 'unknown':
+            return '화면 상태 확인 불가', 'r로 다시 확인하고 화면 상세를 살펴보세요.', None, 'yellow'
+        if settings.get('state') in {'failed', 'interrupted'}:
+            return '설정 적용 실패·중단', '선택한 화면의 작업 결과와 원인을 확인하세요.', None, 'red'
+        if settings.get('pending'):
+            return '저장한 설정 적용 대기', '설정 적용을 선택하면 화면이 잠시 끊길 수 있습니다.', 'apply', 'yellow'
+        if state in {'activating', 'deactivating'}:
+            return 'Chrome 상태 전환 중', '조회 결과를 기다리세요.', None, 'cyan'
+        if state == 'inactive':
+            return 'Chrome 중지됨', '표시가 필요하면 시작을 선택하세요.', 'start', 'yellow'
+        if self.report.get('output_state') not in {None, 'ok'}:
+            return 'Chrome 실행 중 · 출력 확인 필요', '출력 조회와 화면 배치 상세를 확인하세요.', None, 'yellow'
+        if (value.get('placement') or {}).get('state') not in {'ok', 'not_applicable'}:
+            return 'Chrome 실행 중 · 창 배치 확인 필요', '선택 대상의 출력과 창 배치를 확인하세요.', None, 'yellow'
+        if self.retry_enabled(value) and (value.get('frontend_status') or {}).get('state') == 'blocked':
+            return 'Chrome 실행 중 · 프론트 배포 보류', '배포 상세를 확인하고 필요하면 재시도하세요.', 'retry', 'yellow'
+        if (value.get('health') or {}).get('state') != 'healthy' or not site_confirmed(value):
+            return 'Chrome 실행 중 · 사이트 확인 필요', '선택한 화면의 Chrome 로그와 적용 주소를 확인하세요.', 'logs', 'yellow'
+        return 'Chrome 실행 중 · 사이트 응답 확인', '실제 표시 상태는 DID 화면에서 확인하세요.', None, 'green'
+
     def render_detail(self):
         value = self.target()
         settings = (value or {}).get('settings') or {}
@@ -423,19 +473,20 @@ class ScreenPanel(Vertical):
                 self.launches.pop(self.selected, None)
         elif not message and settings.get('state') in RESULT_LABELS:
             message = self.result_message('설정 적용', settings)
-        self.query_one('#screens-result', Static).update(message.split('\n', 1)[0])
+        headline, next_action, primary, tone = self.priority(value)
+        parts = (self.selected, headline, message.split('\n', 1)[0])
+        self.query_one('#screens-result', Static).update(Text(' · '.join(filter(None, parts)), style=tone))
+        self.query_one('#screens-next', Static).update('다음 · '+next_action)
+        for key in ACTIONS:
+            button = self.query_one('#screens-'+key, Button)
+            button.variant = 'primary' if key == primary and not button.disabled else 'default'
         lines = []
         if value:
             runtime = value.get('runtime') or {}
-            committed_revision = (runtime.get('committed') or {}).get('revision')
-            health = value.get('health') or {}
-            site_confirmed = (health.get('target_matches_config')
-                              and settings.get('state') not in {'queued', 'running'}
-                              and (not committed_revision or health.get('config_revision') == committed_revision))
             lines += ['저장 주소 · '+site_label(value.get('url')),
                       '적용 주소 · '+site_label(value.get('applied_url', value.get('url'))),
                       '설정 · '+('적용 대기' if settings.get('pending') else '적용 확인 필요' if settings.get('state') == 'unknown' else '반영됨'),
-                      '실제 사이트 · '+(site_label(value['actual_url']) if value.get('actual_url') else '적용 주소의 문서 확인' if site_confirmed else '확인 대기'),
+                      '실제 사이트 · '+(site_label(value['actual_url']) if value.get('actual_url') else '적용 주소의 문서 확인' if site_confirmed(value) else '확인 대기'),
                       '자동 시작 · '+('켜짐' if value.get('autostart') else '꺼짐')]
             if message:
                 lines.append(message)

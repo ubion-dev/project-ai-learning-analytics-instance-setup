@@ -249,6 +249,37 @@ def test_first_setup_persists_defaults_once_under_job_lock(store, monkeypatch, t
     assert store.paths.config.stat().st_mtime_ns == before
 
 
+def test_bash_assist_is_bound_to_the_requested_setup_job(store, monkeypatch, tmp_path):
+    from types import SimpleNamespace
+    from ala.service import Operations
+
+    monkeypatch.setenv('SUDO_USER', 'user')
+    monkeypatch.setattr('ala.service.pwd.getpwnam', lambda name: SimpleNamespace(
+        pw_uid=1000, pw_dir=str(tmp_path), pw_shell='/bin/bash'))
+    operations = Operations(paths=store.paths, host=store.host, release=Path('/release'))
+    expected = operations.config().to_dict()
+    with pytest.raises(ValueError, match='true/false'):
+        operations.dispatch('submit', {'expected_config': expected, 'bash_assist': 'true'})
+    assert not store.paths.runs.exists()
+
+    job = operations.dispatch('submit', {'expected_config': expected, 'bash_assist': True})
+    assert store.load(job['run_id'])['bash_assist'] is True
+    assert json.loads(store.paths.config.read_text()) == expected
+    assert json.loads((store.directory(job['run_id']) / 'config.json').read_text()) == expected
+
+    class OptInEngine:
+        def __init__(self, config, *, host, paths, bash_assist):
+            assert config.to_dict() == expected
+            assert bash_assist is True
+
+        def apply(self, on_stage):
+            return Report([CheckResult('shell.user.bash_assist', 'ok')])
+
+    assert run_worker(job['run_id'], store.paths, store.host, OptInEngine) == 0
+    next_job = operations.dispatch('submit', {'expected_config': expected})
+    assert 'bash_assist' not in next_job
+
+
 def test_unreviewed_or_busy_first_setup_does_not_write_config(store, monkeypatch, tmp_path):
     from types import SimpleNamespace
     from ala.service import Operations
