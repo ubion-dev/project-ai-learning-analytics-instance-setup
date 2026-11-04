@@ -1,9 +1,9 @@
 # ala — AI 학습 분석실 인스턴스 환경 관리
 
 Rocky Linux의 기본 환경과 DID 화면을 SSH에서 설치·검사·관리합니다.
-지원 환경은 **Rocky Linux 10 x86_64 + GNOME 47/GDM + 기존 sudo 사용자**입니다.
+지원 환경은 **Rocky Linux 10 x86_64 + GNOME Shell 47·49/GDM + 기존 sudo 사용자**입니다.
 
-**0.1.0rc22 개발 후보**입니다. 자동 테스트와 실제 GNOME·모니터·재부팅 수용은 별도이며,
+**0.1.0rc23 개발 후보**입니다. 자동 테스트와 실제 GNOME·모니터·재부팅 수용은 별도이며,
 실기기 수용 전에는 전체 장비의 자동 운영을 켜지 않습니다. 기존 RC20 설치는 새 도구로 한 번 이전해야 합니다.
 
 ## 1. 설치
@@ -14,8 +14,8 @@ Rocky Linux의 기본 환경과 DID 화면을 SSH에서 설치·검사·관리�
 ```bash
 (
   set -e
-  VERSION='0.1.0rc22'
-  RELEASE='v0.1.0-rc.22'
+  VERSION='0.1.0rc23'
+  RELEASE='v0.1.0-rc.23'
   BASE_URL="https://github.com/ubion-dev/project-ai-learning-analytics-instance-setup/releases/download/${RELEASE}"
   mkdir -p "$HOME/ala-downloads/$VERSION"
   cd "$HOME/ala-downloads/$VERSION"

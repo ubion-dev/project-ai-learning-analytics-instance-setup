@@ -6,6 +6,7 @@ import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import * as Config from 'resource:///org/gnome/shell/misc/config.js';
 
+const SHELL_MAJOR = Config.PACKAGE_VERSION.split('.')[0];
 const IFACE = `<node><interface name="org.ala.Display1">
 <method name="GetState"><arg type="s" direction="out"/></method>
 <method name="DismissStartupOverview"><arg type="s" direction="out"/></method>
@@ -98,6 +99,13 @@ function windowData(window) {
     return {id:window.get_stable_sequence(),monitor:window.get_monitor(),
         rect:{x:rect.x,y:rect.y,width:rect.width,height:rect.height},fullscreen:window.is_fullscreen()};
 }
+function unmaximize(window) {
+    // Mutter 49 unmaximizes both directions without a flags argument.
+    if (SHELL_MAJOR === '47')
+        window.unmaximize(Meta.MaximizeFlags.BOTH);
+    else
+        window.unmaximize();
+}
 export default class AlaDisplay extends Extension {
     enable() {
         this._uid = new Gio.Credentials().get_unix_user();
@@ -114,7 +122,8 @@ export default class AlaDisplay extends Extension {
     async _handle(invocation,fn) {
         try {
             const [uid] = await call(Gio.DBus.session,'org.freedesktop.DBus','/org/freedesktop/DBus','org.freedesktop.DBus','GetConnectionUnixUser',new GLib.Variant('(s)',[invocation.get_sender()]));
-            if (uid !== this._uid || Config.PACKAGE_VERSION.split('.')[0] !== '47') throw new Error('unsupported');
+            if (uid !== this._uid || !this.metadata['shell-version'].includes(SHELL_MAJOR))
+                throw new Error('unsupported');
             const result = await fn(uid);
             invocation.return_value(new GLib.Variant('(s)',[JSON.stringify({protocol:1,...result})]));
         } catch (_) {
@@ -151,7 +160,7 @@ export default class AlaDisplay extends Extension {
             if (this._startupOverviewHandled)
                 return {state:'ok',overview:'kept'};
             this._startupOverviewHandled = true;
-            // GNOME 47 can open the overview during the startup animation.
+            // GNOME Shell can open the overview during the startup animation.
             // Let it finish first so it cannot undo this one-shot dismissal.
             if (Main.layoutManager._startingUp) {
                 this._overviewStartupSignal = Main.layoutManager.connect('startup-complete', () => {
@@ -201,7 +210,7 @@ export default class AlaDisplay extends Extension {
             const current=validate(request,uid),rechecked=windows(request,uid,current.ticks);
             if (rechecked.length !== 1 || rechecked[0].get_stable_sequence() !== windowId || Main.layoutManager.monitors[index] !== monitor) throw new Error('changed');
             const window=rechecked[0];
-            window.unmake_fullscreen(); window.unmaximize(Meta.MaximizeFlags.BOTH); window.move_to_monitor(index);
+            window.unmake_fullscreen(); unmaximize(window); window.move_to_monitor(index);
             let x=rect.x,width=rect.width;
             if (request.layout === 'left') width=Math.floor(width/2);
             if (request.layout === 'right') {x+=Math.floor(width/2);width-=Math.floor(width/2);}

@@ -1,4 +1,4 @@
-"""DRM connector observation and the GNOME 47 display bridge."""
+"""DRM connector observation and the GNOME display bridge."""
 from __future__ import annotations
 
 import ast
@@ -11,7 +11,7 @@ UUID = 'ala-display@example.com'
 BUS = 'org.ala.Display1'
 OBJECT = '/org/ala/Display1'
 PROTOCOL = 1
-SUPPORTED_GNOME = ('47',)
+SUPPORTED_GNOME = ('47', '49')
 DRM_CONNECTOR = re.compile(r'card[0-9]+-([A-Za-z0-9]+(?:-[A-Za-z0-9]+)*-[0-9]+)')
 
 
@@ -50,7 +50,7 @@ def bridge(method, request=None, *, host=None):
     response = host.run(argv, timeout=5)
     if response.returncode:
         return {'state':'pending','reason':'GNOME 화면 확장에 연결되지 않았습니다.',
-                'next_action':'간편 설정 후 GNOME 재로그인과 GNOME 47 확장 활성화를 확인하세요.'}
+                'next_action':'간편 설정 후 GNOME Shell 47 또는 49 세션에 재로그인하고 확장 활성화를 확인하세요.'}
     try:
         if len(response.stdout.encode()) > 1048576:
             raise ValueError()
@@ -93,7 +93,7 @@ def topology(*,host=None):
         if str(value.get('gnome_version','')).split('.')[0] not in SUPPORTED_GNOME:
             return {'state':'pending','outputs':[],'logical_outputs':[],
                     'reason':'현재 GNOME 버전의 정식 배치를 지원하지 않습니다.',
-                    'next_action':'관리 화면을 실행하는 GNOME 47 세션을 확인하세요.'}
+                    'next_action':'관리 화면을 실행하는 GNOME Shell 47 또는 49 세션을 확인하세요.'}
         raw=value['display_config']
         if not isinstance(raw,list) or len(raw)!=4:
             raise ValueError()
