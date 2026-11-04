@@ -1,5 +1,20 @@
 # 운영과 복구
 
+## 설치·설정 항목 관리
+
+| 영역 | 간편 설정에서 준비하는 항목 |
+|---|---|
+| 공통 | Git, curl, CA 인증서, Bash 자동 완성, Python 3, firewalld, chrony, 패키지·네트워크 관리 도구, Chrome Stable |
+| 시스템 | 일반 사용자 Bash·Oh My Bash 구성, 시간 동기화, DNF Automatic·PackageKit 자동 업데이트 차단 |
+| SSH·컨테이너 | 설정이 켜진 경우 OpenSSH 서버와 SSH 방화벽 규칙. Docker Engine, containerd, Buildx, Compose는 기본 구성에 포함 |
+| 드라이버 | 확인된 장치의 공식 펌웨어·커널 모듈 누락분, 지원되는 NVIDIA 드라이버와 호스트 드라이버가 정상인 경우 NVIDIA Container Toolkit |
+| DID | GNOME 잠금·절전 정책과 Chrome 표시 프로필을 준비합니다. GDM 자동 로그인과 Chrome 부팅 자동 시작은 해당 옵션에 따라 등록합니다. |
+| 선택 | root Bash 구성, Neovim·btop·tmux |
+
+- **이 장비에 필요한 변경**은 `ala setup --plan`으로, **현재 상태**는 `ala check`로 확인합니다. 실제 실행 내역은 `ala runs list`와 `ala runs show RUN_ID`에서 확인합니다.
+- **장비별 옵션**은 `/etc/ala/config.json`에 저장하며 `ala config show`와 `ala config edit`에서 확인·변경합니다. [구성 예시](../examples/instance.json)
+- **코드에서 관리하는 설치 목록**은 [검사 목록과 적용 순서](../ala/engine.py), [실제 설치 스크립트](../scripts/rocky-linux), [장치 패키지 판별](../ala/hardware.py)에 있습니다. 패키지를 추가하거나 빼면 검사 목록과 설치 스크립트를 함께 갱신합니다. OS 전체 업데이트는 [최초 OS 준비](PREPARATION.md)에서 별도로 실행합니다.
+
 ## 상태 조회 시간
 
 상태·계획·검사 API는 독립적인 읽기 전용 검사를 최대 4개 병렬 실행하고, 한 응답 안의 동일 명령·제한 시간·환경 조회를 공유합니다. 다음 조회에는 다시 조사하며 설치 전후 검사와 변경 작업에는 이 조회 캐시를 사용하지 않습니다. 파일/서비스를 바꾸거나 조회 실패를 정상으로 취급하지 않습니다.
