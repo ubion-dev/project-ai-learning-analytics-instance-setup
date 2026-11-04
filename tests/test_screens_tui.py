@@ -3,7 +3,7 @@ import asyncio
 from copy import deepcopy
 from rich.cells import cell_len
 
-from textual.widgets import Button, Input, Static, Tabs, TextArea
+from textual.widgets import Button, Input, Select, Static, Tabs, TextArea
 
 from ala.config import Config
 from ala.model import CheckResult, Report
@@ -17,14 +17,15 @@ class Service:
         self.config = Config(user='user', url='https://example.com/display').to_dict()
         self.report = Report([CheckResult('base.package.chrome', 'ok')]).to_dict()
         self.screens = {'outputs': [{'connector': 'HDMI-1'}, {'connector': 'DP-1'}],
-                        'logical_outputs': [{'id': 'HDMI-1', 'connectors': ['HDMI-1'], 'x': 0, 'y': 0, 'width': 1920, 'height': 1080},
-                                            {'id': 'DP-1', 'connectors': ['DP-1'], 'x': 1920, 'y': 0, 'width': 1920, 'height': 1080}],
+                        'logical_outputs': [{'id': 'HDMI-1', 'connectors': ['HDMI-1'], 'x': 0, 'y': 0, 'width': 1920, 'height': 1080, 'confirmed': True},
+                                            {'id': 'DP-1', 'connectors': ['DP-1'], 'x': 1920, 'y': 0, 'width': 1920, 'height': 1080, 'confirmed': True}],
                         'confirmed_windows': 2,
                         'targets': [self.target('default', 'HDMI-1'), self.target('display-2', 'DP-1')]}
         self.gate = None
 
     def target(self, key, output):
-        return {'id': key, 'url': 'https://example.com/'+key, 'output': output, 'layout': 'fullscreen',
+        return {'id': key, 'url': 'https://example.com/'+key, 'applied_url': 'https://example.com/'+key,
+                'output': output, 'layout': 'fullscreen',
                 'autostart': True, 'frontend': {'enabled': False, 'manifest_url': None},
                 'service': {'ActiveState': 'active'}, 'health': {'state': 'healthy', 'target_matches_config': True},
                 'placement': {'state': 'ok', 'window_count': 1}}
@@ -53,8 +54,16 @@ class Service:
                 self.screens['confirmed_windows'] -= 1
             return {'state': 'ok', 'reason': '대상 종료를 확인했습니다.', 'exit_code': 0}
         if action == 'screens-save':
-            assert payload['expected_config'] == self.config
-            return {'saved': True, 'config': self.config, 'state': 'pending', 'reason': '등록 적용 대기'}
+            if payload['expected_config'] != self.config:
+                raise RuntimeError('다른 작업에서 구성이 변경됐습니다.')
+            saved = payload['target']
+            selected = next(v for v in self.screens['targets'] if v['id'] == saved['id'])
+            selected.update(saved, settings={'pending': saved['url'] != selected['applied_url'], 'state': 'pending'})
+            return {'saved': True, 'config': self.config, 'state': 'pending', 'reason': '설정 적용 대기'}
+        if action == 'screens-apply':
+            selected = next(v for v in self.screens['targets'] if v['id'] == payload['target'])
+            selected['settings'] = {'pending': True, 'state': 'queued', 'operation_id': 'test-apply'}
+            return selected['settings'] | {'exit_code': 2}
         raise AssertionError(action)
 
 
@@ -164,4 +173,110 @@ def test_editor_escape_preserves_config_and_performs_no_save():
             await pilot.pause()
             assert len(app.screen_stack) == 1
             assert not any(a == 'screens-save' for a, _ in service.calls)
+    asyncio.run(scenario())
+
+
+def test_saved_url_change_requires_selected_target_apply_even_with_identical_labels():
+    async def scenario():
+        service = Service()
+        target = service.screens['targets'][0]
+        app = SimpleApp(service=service, initial_section='screens')
+        async with app.run_test(size=(100, 32)) as pilot:
+            await pilot.pause()
+            app.query_one('#screens-edit', Button).focus()
+            await pilot.press('enter')
+            await pilot.pause()
+            new_url = 'https://example.com/default?revision=2#section'
+            app.screen.query_one('#target-url', Input).value = new_url
+            app.screen.query_one('#target-save', Button).focus()
+            await pilot.press('enter')
+            await pilot.pause()
+            detail = app.query_one('#screens-detail', TextArea)
+            assert target['applied_url'] == 'https://example.com/default'
+            assert '설정 · 적용 대기' in detail.text and 'revision=2' not in detail.text
+            assert not any(a == 'screens-apply' for a, _ in service.calls)
+            app.query_one('#screens-apply', Button).focus()
+            await pilot.press('enter')
+            await pilot.pause()
+            assert [p for a, p in service.calls if a == 'screens-apply'] == [{'target': 'default'}]
+            status = app.query_one('#screens-result', Static)
+            assert '설정 적용 · 접수' in str(status.render())
+            target['settings'].update(state='running')
+            await app.query_one('#screens', ScreenPanel).refresh_state()
+            assert '설정 적용 · 진행' in str(status.render())
+            target.update(applied_url=new_url)
+            target['settings'].update(pending=False, state='completed')
+            await app.query_one('#screens', ScreenPanel).refresh_state()
+            assert '설정 적용 · 완료' in str(status.render())
+            assert '설정 · 반영됨' in detail.text
+            assert service.screens['targets'][1]['applied_url'] == 'https://example.com/display-2'
+    asyncio.run(scenario())
+
+
+def test_screen_action_help_distinguishes_restart_reload_and_disabled_frontend_retry():
+    async def scenario():
+        service = Service()
+        service.screens['targets'][0]['frontend'] = {'enabled': True, 'manifest_url': 'https://example.com/deployment.json'}
+        service.screens['targets'][0]['applied_frontend'] = {'enabled': False, 'manifest_url': None}
+        app = SimpleApp(service=service, initial_section='screens')
+        async with app.run_test(size=(80, 24), tooltips=True) as pilot:
+            await pilot.pause()
+            help_line = app.query_one('#screens-help', Static)
+            for key, wording in (('restart', 'Chrome을 다시 시작'), ('reload', 'Chrome을 유지')):
+                button = app.query_one('#screens-'+key, Button)
+                assert wording in str(button.tooltip)
+                button.focus()
+                await pilot.pause()
+                assert wording in str(help_line.render())
+            await pilot.hover('#screens-restart')
+            await pilot.pause(app.TOOLTIP_DELAY + 0.1)
+            assert 'Chrome을 다시 시작' in str(app.query_one('Tooltip').render())
+            retry = app.query_one('#screens-retry', Button)
+            assert retry.disabled
+            assert '프론트 배포 연동이 없습니다' in str(retry.tooltip)
+            assert '프론트 배포 연동이 없습니다' in app.query_one('#screens-detail', TextArea).text
+    asyncio.run(scenario())
+
+
+def test_hdmi_status_and_gnome_error_are_separate_and_editor_keeps_disconnected_selection():
+    async def scenario():
+        service = Service()
+        service.screens.update(
+            outputs=[], logical_outputs=[], output_state='pending', reason='GNOME 확장 연결 대기',
+            output_next_action='GNOME 재로그인 후 확인하세요.',
+            hardware_output_state='ok',
+            hardware_outputs=[{'id': 'card0-HDMI-A-1', 'name': 'HDMI-A-1', 'status': 'connected'}],
+        )
+        app = SimpleApp(service=service, initial_section='screens')
+        async with app.run_test(size=(80, 24)) as pilot:
+            await pilot.pause()
+            assert 'card0-HDMI-A-1 연결됨' in str(app.query_one('#screens-hardware', Static).render())
+            assert 'GNOME 확장 연결 대기' in str(app.query_one('#screens-map', Static).render())
+            assert 'GNOME 재로그인 후 확인하세요' in app.query_one('#screens-detail', TextArea).text
+            app.query_one('#screens-edit', Button).focus()
+            await pilot.press('enter')
+            await pilot.pause()
+            output = app.screen.query_one('#target-output', Select)
+            assert output.value == 'HDMI-1'
+            assert {value for _, value in output._options} == {'', 'HDMI-1'}
+    asyncio.run(scenario())
+
+
+def test_save_conflict_refreshes_config_and_explains_retry():
+    async def scenario():
+        service = Service()
+        app = SimpleApp(service=service, initial_section='screens')
+        async with app.run_test(size=(100, 32)) as pilot:
+            await pilot.pause()
+            panel = app.query_one('#screens', ScreenPanel)
+            edited = next(value for value in Config.from_dict(service.config).screen_targets() if value.id == 'default')
+            old = deepcopy(service.config)
+            service.config['timezone'] = 'UTC'
+            await panel.save_target(edited.to_dict(), old)
+            detail = app.query_one('#screens-detail', TextArea).text
+            assert '다른 작업에서 구성이 변경됐습니다' in detail
+            assert '설정을 다시 열고' in detail
+            assert app._config == service.config
+            await panel.save_target(edited.to_dict(), app._config)
+            assert '설정 저장 · 완료' in str(app.query_one('#screens-result', Static).render())
     asyncio.run(scenario())

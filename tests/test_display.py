@@ -32,6 +32,7 @@ class FakeHost:
         self.real_user_check=False
         self.process_on_start=None
         self.show_failures={}
+        self.overview_available=False
     def run(self, argv, **kwargs):
         self.calls.append((argv,kwargs))
         if argv[:2]==['getent','passwd']:
@@ -44,7 +45,7 @@ class FakeHost:
             return Command(0,'/run/user/test\n') if self.runtime else Command(1,'','no runtime')
         if argv[0]=='runuser':
             if argv[-1]=='prepare':
-                display._prepare_user_files(self.config,self.paths.at('/home/user'))
+                display._prepare_user_files(self.config,self.paths.at('/home/user'),self.paths)
                 return Command(0,json.dumps({'exit_code':0,'state':'ok'}))
             if argv[-1]=='settings':
                 return Command(0,json.dumps({'exit_code':0,'settings':self.settings}))
@@ -81,6 +82,10 @@ class FakeHost:
             return Command(0,'only ala logs\n')
         if argv[:2]==['systemctl','--user']:
             return Command(0)
+        if argv[:2]==['gdbus','wait']:
+            return Command(0 if self.overview_available else 1)
+        if argv[-1:] == ['org.ala.Display1.DismissStartupOverview']:
+            return Command(0, repr((json.dumps({'protocol': 1, 'state': 'ok', 'overview': 'scheduled'}),)))
         raise AssertionError(f'Unexpected command: {argv}')
     def execute(self, argv, **kwargs):
         self.calls.append((argv,kwargs))
@@ -106,6 +111,24 @@ def setup(tmp_path):
 def user_fixture(setup):
     config,paths,host=setup
     return config,paths,host,paths.at('/home/user')
+
+
+def _registered_default(config, paths, host):
+    from ala.runtime import RuntimeStore
+    release = paths.at('/opt/ala/releases/0.1.0rc21')
+    (release / '.venv/bin').mkdir(parents=True)
+    (release / '.venv/bin/python').touch()
+    (release / 'entry.py').touch()
+    (release / 'VERSION').write_text('0.1.0rc21\n')
+    (release / 'COMPATIBILITY.json').write_text(json.dumps({
+        'schema_version': 1, 'runtime_protocol': 1, 'config_schemas': [1, 2],
+    }))
+    boot = paths.at('/proc/sys/kernel/random/boot_id')
+    boot.parent.mkdir(parents=True)
+    boot.write_text('test-boot\n')
+    store = RuntimeStore(paths, host)
+    store.bootstrap('default', release, config)
+    return store
 
 
 class ReadinessClock:
@@ -366,13 +389,113 @@ def test_actual_session_environment_import_is_allowlisted(setup):
     assert _started_commands(host)==[['systemctl','--user','start','--no-block',display.UNIT]]
 
 
+@pytest.mark.parametrize('extension_ready', [True, False])
+def test_login_requests_overview_dismissal_after_queuing_chrome(setup, capsys, extension_ready):
+    config, paths, host, home = user_fixture(setup)
+    host.overview_available = extension_ready
+    assert display.session_start(config=config, home=home, host=host, paths=paths, environment={}) == 0
+    commands = [argv for argv, _ in host.calls]
+    start = commands.index(['systemctl','--user','start','--no-block',display.UNIT])
+    wait = commands.index(['gdbus','wait','--session','--timeout','5','org.ala.Display1'])
+    assert start < wait
+    calls = [argv for argv in commands if argv[-1:] == ['org.ala.Display1.DismissStartupOverview']]
+    assert len(calls) == int(extension_ready)
+    if extension_ready:
+        assert commands.index(calls[0]) > wait
+    outcome = 'scheduled' if extension_ready else 'unavailable'
+    assert f'phase=overview outcome={outcome}' in capsys.readouterr().out
+
+
+def test_desktop_only_login_does_not_request_overview_dismissal(setup):
+    config, paths, host, home = user_fixture(setup)
+    assert display.session_start(config=replace(config, autostart=False), home=home, host=host,
+                                 paths=paths, environment={}) == 0
+    assert not host.calls
+
+
+@pytest.mark.parametrize(('session_count', 'locked'), [(0, 'no'), (2, 'no'), (1, 'yes')])
+def test_login_skips_overview_for_unproven_desktop(setup, session_count, locked):
+    config, paths, host, home = user_fixture(setup)
+    host.sessions = session_count
+    host.locked = locked
+    assert display.session_start(config=config, home=home, host=host, paths=paths, environment={}) == 0
+    assert _started_commands(host)
+    assert not any(argv[0] == 'gdbus' for argv, _ in host.calls)
+
+
+@pytest.mark.parametrize(('committed_changes', 'saved_changes', 'starts'), [
+    ({}, {'autostart': False, 'url': None}, True),
+    ({'autostart': False}, {'autostart': True}, False),
+    ({'url': None}, {'url': 'https://example.com/saved'}, False),
+])
+def test_login_uses_committed_autostart_and_url(setup, monkeypatch, committed_changes, saved_changes, starts):
+    config, paths, host, home = user_fixture(setup)
+    committed = replace(config, **committed_changes)
+    _registered_default(committed, paths, host)
+    saved = replace(config, **saved_changes)
+    resolved = []
+    original = display._session_target_start
+
+    def observe(context, *args):
+        resolved.append(context.url)
+        return original(context, *args)
+
+    monkeypatch.setattr(display, '_session_target_start', observe)
+    assert display.session_start(config=saved, home=home, host=host, paths=paths, environment={}) == 0
+    assert bool(_started_commands(host)) is starts
+    assert resolved == ([committed.url] if starts else [])
+
+
+def test_login_honors_registered_manual_stop_until_next_session(setup, monkeypatch):
+    config, paths, host, home = user_fixture(setup)
+    store = _registered_default(config, paths, host)
+    store.cancel('default')
+    saved = replace(config, autostart=False)
+    assert display.session_start(config=saved, home=home, host=host, paths=paths, environment={}) == 0
+    assert not _started_commands(host)
+
+    original = host.run
+
+    def new_login(argv, **kwargs):
+        if argv[:2] == ['loginctl', 'list-sessions']:
+            return Command(0, f'2 {os.getuid()} user seat0\n')
+        return original(argv, **kwargs)
+
+    monkeypatch.setattr(host, 'run', new_login)
+    assert display.session_start(config=saved, home=home, host=host, paths=paths, environment={}) == 0
+    assert _started_commands(host) == [['systemctl', '--user', 'start', '--no-block', display.UNIT]]
+
+
+def test_login_does_not_start_or_stop_services_for_unproven_selection(setup):
+    config, paths, host, home = user_fixture(setup)
+    _registered_default(replace(config, user='other'), paths, host)
+    host.states[display.LEGACY]['ActiveState'] = 'active'
+    assert display.session_start(config=config, home=home, host=host, paths=paths, environment={}) == 1
+    assert not _started_commands(host)
+    assert host.states[display.LEGACY]['ActiveState'] == 'active'
+
+
+def test_prepare_keeps_shared_login_entry_for_committed_autostart(setup):
+    config, paths, host, home = user_fixture(setup)
+    _registered_default(config, paths, host)
+    display._prepare_user_files(config, home, paths)
+    desktop = home / '.config/autostart/ala-display.desktop'
+    before = desktop.stat().st_mtime_ns
+    saved = replace(config, autostart=False)
+    display._prepare_user_files(saved, home, paths)
+    assert desktop.read_text() == display.desktop_text()
+    assert desktop.stat().st_mtime_ns == before
+
+
 def test_ala31_login_queues_once_without_display_and_does_not_clear_manager(setup,capsys):
     config,paths,host,home=user_fixture(setup)
     host.sessions=0;host.manager='XDG_CURRENT_DESKTOP=GNOME\n'
     assert display.session_start(config=config,home=home,host=host,paths=paths,environment={})==0
     assert len(_started_commands(host))==1
     assert not any('unset-environment' in argv or 'import-environment' in argv or 'reset-failed' in argv for argv,_ in host.calls)
-    assert not any(argv[:2]==['loginctl','list-sessions'] for argv,_ in host.calls)
+    commands = [argv[:2] for argv, _ in host.calls]
+    started = [argv for argv, _ in host.calls].index(_started_commands(host)[0])
+    assert ['loginctl','list-sessions'] not in commands[:started]
     assert display.session_start(config=config,home=home,host=host,paths=paths,environment={})==0
     assert len(_started_commands(host))==1
     assert 'outcome=already_running' in capsys.readouterr().out
@@ -567,7 +690,10 @@ def test_ala31_syslog_receives_identical_fixed_message_only_for_real_session_con
     monkeypatch.setattr(display,'_foreign_profile_pid',lambda *args,**kwargs:None)
     assert display.session_start(config=config,home=home,host=real,paths=Paths(),environment={})==0
     records=[call[2] for call in calls if call[0]=='message']
-    assert records and records[-1]=='[ala-autostart] phase=start outcome=requested rc=0'
+    assert records[-2:] == [
+        '[ala-autostart] phase=start outcome=requested rc=0',
+        '[ala-autostart] phase=overview outcome=unavailable rc=0',
+    ]
 
 
 def test_ala31_syslog_import_and_connection_failures_are_fixed_nonfatal_messages(monkeypatch,capsys):

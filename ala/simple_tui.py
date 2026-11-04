@@ -104,7 +104,7 @@ class SimpleApp(App[None]):
     Button:disabled { background: #1c2835; border: tall #1c2835; color: #a4b5c6; }
     #setup-start { width: 24; }
     #chrome-open { width: 16; height: 3; margin-left: 1; padding: 0 1; }
-    #screens-actions { height: 6; layout: grid; grid-size: 4 2; grid-rows: 3 3; grid-columns: 1fr 1fr 1fr 1fr; grid-gutter: 0 1; }
+    #screens-actions { height: 6; layout: grid; grid-size: 5 2; grid-rows: 3 3; grid-columns: 1fr 1fr 1fr 1fr 1fr; grid-gutter: 0 1; }
     #screens-actions Button { padding: 0; min-width: 7; width: 1fr; }
     #setup-overview { height: auto; margin-bottom: 1; padding: 0 2; border-left: solid #648ba7; }
     #setup-overview.running { background: #142a32; border-left: solid #62cce5; }
@@ -145,10 +145,13 @@ class SimpleApp(App[None]):
     Screen.compact #status-detail { height: 7; margin-top: 0; }
     Screen.compact TextArea { padding: 0 1; }
     Screen.compact #screens-summary { height: 1; margin-bottom: 0; }
-    Screen.compact #screens-map { height: auto; max-height: 3; padding: 0; border: none; }
+    Screen.compact #screens-map, Screen.compact #screens-map.no-layout { height: auto; max-height: 2; padding: 0; border: none; }
     Screen.compact #screens-table { margin-top: 0; }
-    Screen.compact #screens-detail { height: 3; min-height: 3; margin-top: 0; }
-    Screen.compact #screens-actions { margin-top: 0; }
+    Screen.compact #screens-detail { height: 5; min-height: 5; margin-top: 0; }
+    Screen.compact #screens-help { height: 1; text-wrap: nowrap; text-overflow: ellipsis; }
+    Screen.compact #screens-actions { height: 4; grid-rows: 2 2; margin-top: 0; }
+    Screen.compact #screens-actions Button { height: 2; border: none; padding: 0; }
+    Screen.compact #screens-actions Button:focus { background: #244859; color: #ccf7e8; text-style: bold; }
     """
 
     def __init__(self, *, service, initial_section='setup', **kwargs):

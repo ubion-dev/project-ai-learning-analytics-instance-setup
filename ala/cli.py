@@ -132,9 +132,11 @@ def main(argv=None, *, service=None):
                 if argv[0] == '_auto-bootstrap' and len(argv) == 2:
                     from .auto_update import run_bootstrap
                     return run_bootstrap(argv[1])
-                if argv[0] == '_runtime-worker' and len(argv) == 2:
+                if argv[0] == '_runtime-worker' and len(argv) in {2, 3}:
                     from .runtime import run_worker
-                    return run_worker(argv[1])
+                    if len(argv) == 2:
+                        return run_worker(argv[1])
+                    return run_worker(argv[1], settings_operation_id=argv[2])
                 return 64
             if argv[0] == '_frontend-control' and len(argv) == 2:
                 from .frontend import control_request

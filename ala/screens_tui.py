@@ -5,13 +5,33 @@ from copy import deepcopy
 from urllib.parse import urlsplit, urlunsplit
 
 from rich.text import Text
-from textual import on
+from textual import events, on
 from textual.app import ComposeResult
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen
 from textual.widgets import Button, DataTable, Input, Label, Select, Static, Switch, TextArea
 
 from .chrome_tui import safe_logs, safe_text
+
+
+ACTIONS = {
+    'start': ('시작', '현재 적용된 설정으로 이 화면의 Chrome을 시작합니다.'),
+    'stop': ('중지', '이 화면의 Chrome 실행을 중지합니다.'),
+    'restart': ('재시작', '현재 적용된 설정으로 이 화면의 Chrome을 다시 시작합니다.'),
+    'reload': ('페이지 새로고침', 'Chrome을 유지하고 현재 적용된 사이트를 다시 읽습니다.'),
+    'apply': ('설정 적용', '저장한 설정을 이 화면에 반영합니다. 실행 중인 Chrome은 잠깐 재시작될 수 있습니다.'),
+    'edit': ('설정', '사이트와 출력 등 이 화면의 설정을 편집합니다.'),
+    'add': ('추가', '관리할 화면을 추가합니다.'),
+    'logs': ('로그', '이 화면의 Chrome 로그를 표시합니다.'),
+    'retry': ('배포 재시도', '프론트 배포 연동에서 실패한 갱신을 다시 시도합니다.'),
+}
+RETRY_DISABLED = '배포 재시도 · 현재 적용된 설정에 프론트 배포 연동이 없습니다.'
+RESULT_LABELS = {
+    'queued': '접수', 'running': '진행', 'completed': '완료',
+    'failed': '실패', 'pending': '대기', 'cancelled': '취소', 'unknown': '확인 불가', 'interrupted': '중단',
+    'selected_unverified': '설정 확정 · 중지 유지',
+}
+_AUTO_OUTPUT = ''
 
 
 def site_label(value):
@@ -30,7 +50,11 @@ def site_label(value):
 def topology_text(report, width=100, height=7):
     logical = report.get('logical_outputs') or []
     if not logical:
-        return '출력 배치 확인 불가 · 활성 그래픽 세션과 GNOME 연결을 확인하세요.'
+        if report.get('output_state') == 'ok':
+            return 'GNOME 활성 출력 없음'
+        reason = safe_text(report.get('reason') or '활성 그래픽 세션과 GNOME 연결을 확인하세요.')
+        action = safe_text(report.get('output_next_action') or '')
+        return '\n'.join(filter(None, ('GNOME 배치 확인 불가 · '+reason, action)))
     valid = []
     for item in logical:
         geometry = item.get('geometry', item)
@@ -71,6 +95,19 @@ def topology_text(report, width=100, height=7):
     return '\n'.join(''.join(row).rstrip() for row in grid)
 
 
+def hardware_text(report):
+    label = '물리 출력 · '
+    connectors = report.get('hardware_outputs') or []
+    if report.get('hardware_output_state') != 'ok' and not connectors:
+        return label + '확인 불가'
+    if not connectors:
+        return label + 'DRM 커넥터 없음'
+    states = {'connected': '연결됨', 'disconnected': '연결 안 됨', 'unknown': '확인 불가'}
+    ordered = sorted(connectors, key=lambda port: (port.get('status') != 'connected', port['id']))
+    return label + ' · '.join(f"{safe_text(port['id'])} {states.get(port.get('status'), '확인 불가')}"
+                              for port in ordered)
+
+
 class TargetEditor(ModalScreen[dict | None]):
     BINDINGS = [('escape', 'cancel', '취소')]
     CSS = """
@@ -80,6 +117,7 @@ class TargetEditor(ModalScreen[dict | None]):
     #target-editor Label { height: 1; margin-top: 1; }
     #target-editor Input, #target-editor Select { height: 3; }
     #target-error { height: auto; color: #ee8795; }
+    #target-help { height: 1; color: #aabdd0; text-wrap: nowrap; text-overflow: ellipsis; }
     #target-buttons { height: 3; margin-top: 1; }
     #target-buttons Button { width: 1fr; }
     #target-editor Switch { height: 3; }
@@ -93,15 +131,23 @@ class TargetEditor(ModalScreen[dict | None]):
     def compose(self) -> ComposeResult:
         value = self.target or {'id': '', 'autostart': True}
         frontend = value.get('frontend') or {}
+        current = value.get('output')
+        options = [(safe_text(output), output) for output in self.outputs]
+        if value['id'] == 'default':
+            options.insert(0, ('자동 · 활성 논리 출력 하나', _AUTO_OUTPUT))
+        if current and current not in self.outputs:
+            options.append((safe_text(current) + ' · 기존 지정', current))
         with Vertical(id='target-editor'):
-            yield Static('표시 대상 설정 · 저장만으로 현재 창은 변경하지 않습니다.')
+            yield Static('표시 대상 설정 · 저장 후 화면 관리에서 설정 적용을 선택하세요.')
             with VerticalScroll(id='target-fields'):
                 yield Label('대상 ID')
                 yield Input(value.get('id', ''), id='target-id', disabled=self.target is not None, placeholder='display-1')
                 yield Label('표시 사이트')
                 yield Input(value.get('url') or '', id='target-url', placeholder='https://example.com/display')
-                yield Label('출력 연결자 · 비우면 단일 활성 출력 자동 선택')
-                yield Input(value.get('output') or '', id='target-output', placeholder=', '.join(self.outputs) or 'HDMI-1')
+                yield Label('출력 · GNOME이 확인한 활성 논리 화면')
+                yield Select(options, value=current or (_AUTO_OUTPUT if value['id'] == 'default' else Select.NULL),
+                             allow_blank=value['id'] != 'default',
+                             prompt='출력 선택' if self.outputs else '활성 출력 확인 대기', id='target-output')
                 yield Label('창 배치')
                 yield Select([('전체화면', 'fullscreen'), ('테스트 · 왼쪽 절반', 'left'), ('테스트 · 오른쪽 절반', 'right')], value=value.get('layout', 'fullscreen'), allow_blank=False, id='target-layout')
                 yield Label('로그인 후 자동 시작')
@@ -111,12 +157,22 @@ class TargetEditor(ModalScreen[dict | None]):
                 yield Label('배포 정보 주소 · 프론트 계약 연동 후 사용')
                 yield Input(frontend.get('manifest_url') or '', id='target-manifest', placeholder='https://example.com/version.json')
             yield Static('', id='target-error', markup=False)
+            yield Static('', id='target-help', markup=False)
             with Horizontal(id='target-buttons'):
-                yield Button('저장', id='target-save', variant='primary')
-                yield Button('취소', id='target-cancel')
+                save = Button('저장', id='target-save', variant='primary')
+                save.tooltip = '편집 내용을 저장하고 화면 관리로 돌아갑니다.'
+                yield save
+                cancel = Button('취소', id='target-cancel')
+                cancel.tooltip = '이번 편집을 취소합니다.'
+                yield cancel
 
     def on_mount(self):
         self.query_one('#target-url' if self.target else '#target-id', Input).focus()
+
+    def on_descendant_focus(self, event: events.DescendantFocus):
+        widget = event.widget
+        self.query_one('#target-help', Static).update(
+            str(widget.tooltip or '') if isinstance(widget, Button) else '')
 
     @on(Button.Pressed)
     def pressed(self, event):
@@ -124,9 +180,13 @@ class TargetEditor(ModalScreen[dict | None]):
             self.action_cancel()
         elif event.button.id == 'target-save':
             from .config import ScreenConfig
+            output = self.query_one('#target-output', Select).value
+            if output is Select.NULL and self.target is None:
+                self.query_one('#target-error', Static).update('GNOME 활성 출력이 감지되면 출력 목록에서 선택하세요.')
+                return
             value = {'id': self.query_one('#target-id', Input).value,
                      'url': self.query_one('#target-url', Input).value or None,
-                     'output': self.query_one('#target-output', Input).value or None,
+                     'output': output if isinstance(output, str) and output else None,
                      'layout': self.query_one('#target-layout', Select).value,
                      'autostart': self.query_one('#target-autostart', Switch).value,
                      'frontend': {'enabled': self.query_one('#target-frontend', Switch).value,
@@ -146,7 +206,12 @@ class ScreenPanel(Vertical):
     DEFAULT_CSS = """
     ScreenPanel { height: 1fr; }
     #screens-summary { height: auto; max-height: 2; margin-bottom: 1; color: #b5e9d9; }
+    #screens-hardware, #screens-result { height: 1; text-wrap: nowrap; text-overflow: ellipsis; }
+    #screens-help { height: 2; }
+    #screens-hardware, #screens-help { color: #aabdd0; }
+    #screens-result { color: #b5e9d9; }
     #screens-map { height: 8; padding: 0 1; background: #172735; border: round #34475d; }
+    #screens-map.no-layout { height: auto; max-height: 4; }
     #screens-table { height: 1fr; min-height: 3; margin-top: 1; }
     #screens-detail { height: 6; min-height: 3; margin-top: 1; }
     #screens-actions { height: 3; margin-top: 1; }
@@ -165,18 +230,25 @@ class ScreenPanel(Vertical):
         self.selected = None
         self.reading = False
         self.mutating = False
-        self.message = ''
+        self.messages = {}
+        self.following = {}
+        self.launches = {}
         self.loaded = False
-        self.compact = None
 
     def compose(self):
         yield Static('화면 관리를 열면 연결된 출력과 창을 조회합니다.', id='screens-summary', markup=False)
+        yield Static('', id='screens-hardware', markup=False)
         yield Static('', id='screens-map', markup=False)
         yield DataTable(id='screens-table', cursor_type='row')
+        yield Static('', id='screens-result', markup=False)
         yield TextArea('', id='screens-detail', read_only=True, show_cursor=False, highlight_cursor_line=False)
+        yield Static('', id='screens-help', markup=False)
         with Horizontal(id='screens-actions'):
-            for key, label in [('start', '시작'), ('stop', '중지'), ('restart', '재시작'), ('reload', '갱신'), ('edit', '설정'), ('add', '추가'), ('logs', '로그'), ('retry', '배포 재시도')]:
-                yield Button(label, id='screens-'+key, disabled=key != 'add')
+            for key, (label, help_text) in ACTIONS.items():
+                button = Button(label, id='screens-'+key, disabled=key != 'add',
+                                variant='primary' if key == 'apply' else 'default')
+                button.tooltip = help_text
+                yield button
 
     def on_mount(self):
         self.query_one('#screens-table').border_title = '표시 대상 · 실제 관측과 설정을 구분합니다'
@@ -218,6 +290,24 @@ class ScreenPanel(Vertical):
     def target(self):
         return next((v for v in self.report.get('targets', []) if v.get('id') == self.selected), None)
 
+    def render_help(self):
+        widget = self.screen.focused
+        key = (widget.id or '').removeprefix('screens-') if isinstance(widget, Button) else ''
+        help_text = str(widget.tooltip or '') if key in ACTIONS else '버튼을 선택하면 동작 설명이 표시됩니다.'
+        if key == 'apply' and self.screen.has_class('compact') and help_text == ACTIONS['apply'][1]:
+            help_text = '이 화면에 설정을 반영합니다. Chrome이 잠깐 재시작될 수 있습니다.'
+        self.query_one('#screens-help', Static).update(help_text)
+
+    def on_descendant_focus(self, event: events.DescendantFocus):
+        self.render_help()
+
+    @staticmethod
+    def retry_enabled(value):
+        if not value:
+            return False
+        frontend = value.get('applied_frontend', value.get('frontend')) or {}
+        return frontend.get('enabled') is True and bool(frontend.get('manifest_url'))
+
     def render_report(self):
         if not self.is_mounted:
             return
@@ -235,7 +325,10 @@ class ScreenPanel(Vertical):
         self.query_one('#screens-summary', Static).update(Text(
             f'{output_label} · 관리 대상 {len(targets)}개 · 확인된 창 {confirmed_label}'
             if self.loaded else '출력·창 조회 확인 필요 · '+str(self.report.get('reason', '조회 중'))))
-        self.query_one('#screens-map', Static).update(Text(topology_text(self.report, max(20, self.size.width-4), 7 if self.size.height >= 23 else 3)))
+        self.query_one('#screens-hardware', Static).update(Text(hardware_text(self.report)))
+        map_view = self.query_one('#screens-map', Static)
+        map_view.set_class(not self.report.get('logical_outputs'), 'no-layout')
+        map_view.update(Text(topology_text(self.report, max(20, self.size.width-4), 7 if self.size.height >= 23 else 3)))
         table = self.query_one('#screens-table', DataTable)
         compact = self.size.width < 100
         table.clear(columns=True)
@@ -255,15 +348,16 @@ class ScreenPanel(Vertical):
             placement = value.get('placement') or {}
             run = run_labels.get(service.get('ActiveState'), '확인 불가')
             runtime = value.get('runtime') or {}
-            update_pending = bool(runtime.get('committed') and runtime.get('desired')
-                                  and runtime['committed'] != runtime['desired'])
+            settings = value.get('settings') or {}
+            code_pending = (runtime.get('committed') or {}).get('version') != (runtime.get('desired') or {}).get('version')
+            update_pending = settings.get('pending') or code_pending
             if update_pending:
                 run = run.replace(' ', '')+'·적용대기'
             site = '중지됨' if service.get('ActiveState') == 'inactive' else health_labels.get(health.get('state'), '확인 불가')
             deployment = value.get('frontend_status') or {}
-            if (value.get('frontend') or {}).get('enabled') and deployment.get('state') == 'blocked':
+            if self.retry_enabled(value) and deployment.get('state') == 'blocked':
                 site += ' · 배포 보류'
-            output = value.get('output') or '단일 출력 자동'
+            output = value.get('output') or ('자동' if value['id'] == 'default' else '미선택')
             color = 'green' if site == '정상' else 'dim' if site == '중지됨' else 'yellow'
             items = (f'{value["id"]} · {output}', site_label(value.get('applied_url', value.get('url'))), Text(run+'·'+site, style='yellow' if update_pending else color)) if compact else (
                 value['id'], output, site_label(value.get('applied_url', value.get('url'))), Text(run, style='yellow' if update_pending else ''), Text(site, style=color),
@@ -271,28 +365,93 @@ class ScreenPanel(Vertical):
             table.add_row(*items, key=value['id'])
         if self.selected:
             table.move_cursor(row=next(i for i, v in enumerate(targets) if v['id'] == self.selected), animate=False)
+        target = self.target()
+        settings = (target or {}).get('settings') or {}
+        applying = settings.get('state') in {'queued', 'running'}
         locked = self.mutating or bool(self.owner._active_job)
-        for key in ('start', 'stop', 'restart', 'reload', 'edit', 'logs', 'retry'):
-            self.query_one('#screens-'+key, Button).disabled = not bool(self.target()) or locked
-        self.query_one('#screens-add', Button).disabled = locked
+        for key, (_, help_text) in ACTIONS.items():
+            button = self.query_one('#screens-'+key, Button)
+            disabled = locked or (key != 'add' and not target)
+            if key == 'apply':
+                disabled |= not settings.get('pending') or applying
+                if applying:
+                    help_text = '이 화면의 설정을 적용하고 있습니다.'
+                elif not settings.get('pending'):
+                    help_text = settings.get('reason') or '먼저 변경한 설정을 저장하세요.'
+            if key == 'retry' and target and not self.retry_enabled(target):
+                disabled = True
+                help_text = RETRY_DISABLED
+            if applying and key in {'start', 'restart', 'reload', 'edit', 'retry'}:
+                disabled = True
+                help_text = '설정 적용이 끝나면 사용할 수 있습니다.'
+            button.disabled = bool(disabled)
+            button.tooltip = safe_text(help_text)
+        self.query_one('#screens-reload', Button).label = '새로고침' if compact else ACTIONS['reload'][0]
+        self.render_help()
         self.render_detail()
 
     def render_detail(self):
         value = self.target()
-        lines = [self.message] if self.message else []
+        settings = (value or {}).get('settings') or {}
+        message = self.messages.get(self.selected, '')
+        follow = self.following.get(self.selected)
+        launch = self.launches.get(self.selected)
+        if follow and value:
+            action, source, key, identifier = follow
+            latest = value.get(source) or {}
+            if latest.get(key) == identifier:
+                message = self.result_message(ACTIONS[action][0], latest)
+                self.messages[self.selected] = message
+                if latest.get('state') not in {'queued', 'running'}:
+                    self.following.pop(self.selected, None)
+        elif launch and value:
+            action, previous_pid = launch
+            label = ACTIONS[action][0]
+            service = value.get('service') or {}
+            current_pid = service.get('MainPID')
+            placement = (value.get('placement') or {}).get('state')
+            if service.get('ActiveState') == 'failed':
+                outcome, reason = '실패', 'Chrome 서비스 로그를 확인하세요.'
+            elif (value.get('state') == 'running' and service.get('ActiveState') == 'active'
+                  and current_pid and current_pid != previous_pid and placement in {'ok', 'not_applicable'}):
+                outcome, reason = '완료', '관리 Chrome의 실행을 확인했습니다.'
+            else:
+                outcome, reason = '진행', '관리 Chrome 실행 확인을 기다립니다.'
+            message = f'{label} · {outcome} · {reason}'
+            if outcome != '진행':
+                self.messages[self.selected] = message
+                self.launches.pop(self.selected, None)
+        elif not message and settings.get('state') in RESULT_LABELS:
+            message = self.result_message('설정 적용', settings)
+        self.query_one('#screens-result', Static).update(message.split('\n', 1)[0])
+        lines = []
         if value:
-            lines += [str(value['id'])+' · 설정 주소 '+site_label(value.get('url')),
-                      '적용 주소 · '+site_label(value.get('applied_url', value.get('url'))),
-                      '실제 사이트 · '+(site_label(value['actual_url']) if value.get('actual_url') else '적용 주소의 문서 확인' if (value.get('health') or {}).get('target_matches_config') else '확인 불가'),
-                      '자동 시작 · '+('켜짐' if value.get('autostart') else '꺼짐')]
             runtime = value.get('runtime') or {}
+            committed_revision = (runtime.get('committed') or {}).get('revision')
+            health = value.get('health') or {}
+            site_confirmed = (health.get('target_matches_config')
+                              and settings.get('state') not in {'queued', 'running'}
+                              and (not committed_revision or health.get('config_revision') == committed_revision))
+            lines += ['저장 주소 · '+site_label(value.get('url')),
+                      '적용 주소 · '+site_label(value.get('applied_url', value.get('url'))),
+                      '설정 · '+('적용 대기' if settings.get('pending') else '적용 확인 필요' if settings.get('state') == 'unknown' else '반영됨'),
+                      '실제 사이트 · '+(site_label(value['actual_url']) if value.get('actual_url') else '적용 주소의 문서 확인' if site_confirmed else '확인 대기'),
+                      '자동 시작 · '+('켜짐' if value.get('autostart') else '꺼짐')]
+            if message:
+                lines.append(message)
+            if settings.get('state') == 'unknown' and settings.get('reason'):
+                lines.append(safe_text(settings['reason']))
+                if settings.get('next_action'):
+                    lines.append(safe_text(settings['next_action']))
+            if not self.retry_enabled(value):
+                lines.append(RETRY_DISABLED)
             if runtime.get('committed'):
                 selected = runtime['committed'].get('version', '확인 불가')
                 running = (value.get('health') or {}).get('supervisor_version', '확인 불가')
                 desired = (runtime.get('desired') or {}).get('version', selected)
                 lines.append(f'화면 관리 버전 · 선택 {selected} / 실행 {running} / 후보 {desired}')
-                if runtime.get('desired') != runtime.get('committed'):
-                    lines.append('새 코드·설정 적용 대기 · 매일 03:00–04:00 한국 시간')
+                if desired != selected:
+                    lines.append('새 화면 코드 적용 대기 · 자동 운영 시 03:00–04:00 한국 시간')
                 last = runtime.get('last_result') or {}
                 if last.get('state'):
                     labels = {'completed': '적용 완료', 'failed': '적용 실패', 'cancelled': '취소됨',
@@ -313,9 +472,15 @@ class ScreenPanel(Vertical):
                     for field in ('reason', 'next_action'):
                         if item.get(field):
                             lines.append(safe_text(item[field]))
-        elif self.report.get('reason'):
-            lines.append(safe_text(self.report['reason']))
-        self.query_one('#screens-detail', TextArea).load_text('\n'.join(lines) or '표시 대상을 추가하세요.')
+        lines.append(hardware_text(self.report))
+        if self.report.get('hardware_output_reason'):
+            lines.append(safe_text(self.report['hardware_output_reason']))
+        if self.report.get('output_state') not in {None, 'ok'}:
+            lines.append(topology_text(self.report))
+        detail = self.query_one('#screens-detail', TextArea)
+        content = '\n'.join(lines)
+        if detail.text != content:
+            detail.load_text(content)
 
     @on(DataTable.RowHighlighted, '#screens-table')
     def highlighted(self, event):
@@ -331,52 +496,91 @@ class ScreenPanel(Vertical):
         key = (event.button.id or '').removeprefix('screens-')
         if key in {'edit', 'add'}:
             self.edit_target(new=key == 'add')
-        elif key in {'start', 'stop', 'restart', 'reload', 'logs', 'retry'} and not event.button.disabled:
+        elif key in ACTIONS and not event.button.disabled:
             self.owner.run_worker(self.perform(key), group='screen-control', exclusive=False, exit_on_error=False)
 
     def edit_target(self, new=False):
-        if self.mutating:
+        if self.mutating or self.query_one('#screens-add' if new else '#screens-edit', Button).disabled:
             return
         current = self.target()
         value = None if new else {k: current.get(k) for k in ('id', 'url', 'output', 'layout', 'autostart', 'frontend')} if current else None
         if not new and value is None:
             return
         expected = deepcopy(self.owner._config)
-        outputs = [str(v.get('connector', v.get('id', ''))) for v in self.report.get('outputs', [])]
+        outputs = [v['id'] for v in self.report.get('logical_outputs', []) if v.get('confirmed')]
         def saved(target):
             if target is not None:
                 self.owner.run_worker(self.save_target(target, expected), exit_on_error=False)
         self.owner.push_screen(TargetEditor(value, outputs), saved)
 
     async def save_target(self, value, expected):
+        if self.mutating:
+            return
+        target = value['id']
+        shown_target = target if self.target() and target == self.selected else self.selected
+        self.mutating = True
+        self.following.pop(shown_target, None)
+        self.launches.pop(shown_target, None)
+        self.messages[shown_target] = '설정 저장 · 진행'
+        self.render_report()
         try:
             response = await self.owner.service.call('screens-save', {'target': value, 'expected_config': expected})
             self.owner._config = deepcopy(response['config'])
-            self.message = response.get('reason', '저장 완료')
-            self.selected = value['id']
+            self.messages[target] = self.result_message('설정 저장', response, state='완료')
+            if shown_target != target:
+                self.messages.pop(shown_target, None)
+            self.selected = target
         except Exception as exc:
-            self.message = '저장 실패 · '+safe_text(str(exc))
+            reason = '설정 저장 · 실패 · '+safe_text(str(exc))
+            try:
+                latest = await self.owner.service.call('config-show')
+                self.owner._config = deepcopy(latest['config'])
+                action = '설정을 다시 열고 현재 값을 확인한 뒤 저장하세요.'
+            except Exception:
+                action = '상태 확인 탭에서 r로 다시 조회한 뒤 설정을 저장하세요.'
+            self.messages[shown_target] = reason+'\n'+action
+        finally:
+            self.mutating = False
         await self.refresh_state()
+
+    @staticmethod
+    def result_message(label, value, *, state=None):
+        state = state or RESULT_LABELS.get(value.get('state')) or {
+            0: '완료', 2: '대기',
+        }.get(value.get('exit_code'), '실패')
+        summary = ' · '.join(filter(None, (label, state, safe_text(value.get('reason') or ''))))
+        return summary + ('\n'+safe_text(value['next_action']) if value.get('next_action') else '')
 
     async def perform(self, action):
         if self.mutating or not self.target():
             return
+        if self.query_one('#screens-'+action, Button).disabled:
+            return
         self.mutating = self.owner._chrome_mutating = True
         target = self.selected
+        previous_pid = (self.target().get('service') or {}).get('MainPID')
+        label = ACTIONS[action][0]
         self.owner.update_button()
-        self.message = '대상 '+str(target)+' · 요청 중'
+        self.following.pop(target, None)
+        self.launches.pop(target, None)
+        self.messages[target] = label+' · 요청 중'
         self.render_report()
         try:
-            value = await self.owner.service.call('frontend-retry' if action == 'retry' else 'screens-action',
-                                                  {'target': target} if action == 'retry' else {'action': action, 'target': target})
+            command = {'apply': 'screens-apply', 'retry': 'frontend-retry'}.get(action, 'screens-action')
+            payload = {'target': target, 'action': action} if command == 'screens-action' else {'target': target}
+            value = await self.owner.service.call(command, payload)
             if action == 'logs':
-                self.message = safe_logs(value.get('log', ''))
+                self.messages[target] = self.result_message(label, value)+'\n'+safe_logs(value.get('log', ''))
             else:
-                self.message = safe_text(value.get('reason') or value.get('state') or '결과 확인 필요')
-                if value.get('next_action'):
-                    self.message += '\n'+safe_text(value['next_action'])
+                accepted = value.get('submitted') or (action == 'retry' and value.get('exit_code') == 2)
+                self.messages[target] = self.result_message(label, value, state='접수' if accepted else None)
+                if action in {'start', 'restart'} and value.get('submitted'):
+                    self.launches[target] = (action, previous_pid)
+                source, key = {'apply': ('settings', 'operation_id'), 'reload': ('reload', 'run_id')}.get(action, (None, None))
+                if key and value.get('state') == 'queued' and value.get(key):
+                    self.following[target] = (action, source, key, value[key])
         except Exception as exc:
-            self.message = '요청 확인 실패 · '+safe_text(str(exc))
+            self.messages[target] = label+' · 실패 · '+safe_text(str(exc))
         finally:
             self.mutating = self.owner._chrome_mutating = False
             if self.owner.is_running:

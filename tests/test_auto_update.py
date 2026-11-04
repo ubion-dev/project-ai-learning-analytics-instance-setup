@@ -1,12 +1,13 @@
 from datetime import datetime, timezone
 import json
+from pathlib import Path
 
 import pytest
 
-from ala import auto_update, signature
-from ala.config import Config
+from ala import auto_update, runtime, signature
+from ala.config import Config, ScreenConfig
 from ala.runtime import RuntimeStore
-from ala.system import Command, Paths
+from ala.system import Command, Paths, atomic_json
 
 
 @pytest.fixture
@@ -148,6 +149,46 @@ def test_unsigned_or_failed_target_stops_later_targets(fixture):
     signature.record_verified({'state': 'verified', 'version': '2.0.0', 'verifier_version': signature.COSIGN_VERSION}, paths=paths)
     assert auto_update.nightly(paths=paths, host=host, now=now, apply=apply)['state'] == 'failed'
     assert calls == ['one']
+
+
+@pytest.mark.parametrize('new_release', [False, True])
+def test_nightly_retains_applied_screen_settings_from_rc21_saved_backlog(fixture, new_release):
+    paths, host, (old, new) = fixture
+    store = RuntimeStore(paths, host)
+    committed = Config(user='user', url='https://example.com/current')
+    saved = Config(user='user', schema_version=2, url=committed.url, timezone='UTC' if new_release else committed.timezone,
+                   screens=(ScreenConfig(url='https://example.com/saved', output='HDMI-1'),))
+    store.bootstrap('default', old, committed)
+    desired = store.stage('default', new if new_release else old, saved)['desired']
+    paths.config.parent.mkdir(parents=True)
+    atomic_json(paths.config, saved.to_dict(), 0o644)
+    before = paths.config.read_bytes()
+    signature.record_verified({'state': 'verified', 'version': desired['version'],
+                               'verifier_version': signature.COSIGN_VERSION}, paths=paths)
+    original_run = host.run
+
+    def run(args, **kwargs):
+        if args[-1] == '--version':
+            return Command(0, Path(args[-2]).parent.name + '\n')
+        return original_run(args, **kwargs)
+
+    host.run = run
+    calls = []
+
+    def control(action, *_args, **_kwargs):
+        calls.append(action)
+        return {'service': {'ActiveState': 'inactive'}}
+
+    result = auto_update.nightly(paths=paths, host=host, now=datetime(2026, 1, 1, 18, 0, tzinfo=timezone.utc),
+                                 apply=lambda target, **kwargs: runtime.apply_target(target, control=control, **kwargs))
+
+    assert result['results'][0]['state'] == ('selected_unverified' if new_release else 'kept')
+    assert calls == (['status'] if new_release else [])
+    state = store.load('default')
+    assert state['committed']['release'] == desired['release'] and state['committed'] == state['desired']
+    applied = Config.from_dict(store._validate_selection(state['committed']))
+    assert applied.screen_targets() == committed.screen_targets() and applied.timezone == saved.timezone
+    assert paths.config.read_bytes() == before
 
 
 def test_check_finishing_after_disable_never_resurrects_enabled_flag(fixture, monkeypatch):

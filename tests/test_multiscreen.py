@@ -84,6 +84,32 @@ def test_readonly_inventory_never_places_or_starts(monkeypatch):
     assert calls==['outputs','status','status']
 
 
+def test_connected_hdmi_is_visible_when_gnome_cannot_confirm_placement(tmp_path, monkeypatch):
+    paths = Paths(tmp_path)
+    connector = paths.at('/sys/class/drm/card0-HDMI-A-1')
+    connector.mkdir(parents=True)
+    status = connector / 'status'
+    status.write_text('connected\n')
+    unchanged = status.stat().st_mtime_ns
+    failure = {'state': 'pending', 'reason': 'GNOME 화면 확장에 연결되지 않았습니다.',
+               'next_action': 'GNOME 재로그인을 확인하세요.'}
+    calls = []
+    monkeypatch.setattr(display, '_user_call', lambda c,h,p,a: calls.append(a) or failure)
+    monkeypatch.setattr(display, 'chrome_action', lambda a,*args,**kw: calls.append(a) or {
+        'state': 'stopped', 'service': {'ActiveState': 'inactive'}})
+    report = screens.inspect_screens(fleet(), paths=paths)
+    assert report['hardware_outputs'] == [
+        {'id': 'card0-HDMI-A-1', 'name': 'HDMI-A-1', 'status': 'connected'}]
+    assert report['hardware_output_state'] == 'ok'
+    assert report['output_state'] == 'pending' and report['logical_outputs'] == []
+    assert report['reason'] == failure['reason']
+    assert report['output_next_action'] == failure['next_action']
+    assert report['targets'][0]['placement']['state'] == 'pending'
+    assert screens.screen_action('start', fleet(), paths=paths)['state'] == 'pending'
+    assert calls == ['outputs', 'status', 'status', 'status', 'outputs']
+    assert status.stat().st_mtime_ns == unchanged
+
+
 def test_budget_caps_each_subprocess_to_remaining(monkeypatch):
     ticks=iter([10,12,14,16])
     monkeypatch.setattr(display.time,'monotonic',lambda:next(ticks))
@@ -118,6 +144,12 @@ def test_multi_login_queues_each_target_once_and_retains_existing(tmp_path):
     class Host:
         def run(self,argv,**kwargs):
             calls.append(argv)
+            if argv[:2] == ['loginctl', 'list-sessions']:return Command(0, '1 user seat0\n')
+            if argv[:2] == ['loginctl', 'show-session']:
+                return Command(0, f'User={os.getuid()}\nType=wayland\nClass=user\nRemote=no\nActive=yes\nLockedHint=no\n')
+            if argv[:2]==['gdbus','wait']:return Command(0)
+            if argv[-1:] == ['org.ala.Display1.DismissStartupOverview']:
+                return Command(0, repr((json.dumps({'protocol': 1, 'state': 'ok', 'overview': 'kept'}),)))
             if argv[2]=='show-environment':return Command(0,'WAYLAND_DISPLAY=wayland-0\n')
             if argv[2]=='show':return Command(0,'ActiveState='+states[argv[3]]+'\nResult=success\nLoadState=loaded\nMainPID=0\n')
             if argv[2]=='start':states[argv[-1]]='active';return Command(0)
@@ -125,6 +157,7 @@ def test_multi_login_queues_each_target_once_and_retains_existing(tmp_path):
             raise AssertionError(argv)
     host=Host()
     assert display.session_start(config=config,home=tmp_path,host=host,paths=Paths(tmp_path),environment={})==0
+    assert len([args for args in calls if args[-1:] == ['org.ala.Display1.DismissStartupOverview']]) == 1
     assert display.session_start(config=config,home=tmp_path,host=host,paths=Paths(tmp_path),environment={})==0
     assert [args for args in calls if args[2]=='start']==[['systemctl','--user','start','--no-block','ala-chrome@'+'right.service']]
     assert not any(args[2] in {'stop','restart','reset-failed'} for args in calls)
