@@ -1,0 +1,21 @@
+{
+  "schema": 1,
+  "repo": "project-ai-learning-analytics-instance-setup",
+  "group": "AI 학습분석실",
+  "summary": "ala: AI 학습분석실 인스턴스의 Rocky Linux 기본 환경과 DID 화면(Chrome)을 SSH에서 설치·검사·관리하는 CLI/TUI",
+  "uses_tools": [],
+  "parts": [
+    {
+      "id": "ala",
+      "kind": "cli",
+      "summary": "공개 GitHub 릴리스 묶음을 받아 install.sh로 설치하고, `ala`로 간편 설정·상태 확인·화면 관리를 한다. 패키지·Docker·GPU·SSH·자동 로그인·Chrome 부팅 등록을 준비한다",
+      "os": ["linux"],
+      "notes": "DID 화면에 띄울 웹 주소(로그인 없는 DID URL)는 설정으로 받는다",
+      "requires": [],
+      "external": [
+        { "name": "Rocky Linux 10·GNOME", "need": "required", "via": "Rocky Linux 10 x86_64, GNOME Shell 47·49와 GDM, 기존 sudo 사용자" },
+        { "name": "python3", "need": "required", "min": "3.12", "check": "python3 --version", "via": "ala(pyproject requires-python, textual)" }
+      ]
+    }
+  ]
+}
