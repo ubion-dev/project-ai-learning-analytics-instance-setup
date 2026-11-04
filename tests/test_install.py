@@ -80,6 +80,12 @@ class Installation:
         (source / 'ala/__init__.py').write_text(f'__version__ = "{version}"\n')
         (source / 'entry.py').write_text('raise SystemExit(7)\n' if broken_entry else f'print("{version}")\n')
         (source / 'pyproject.toml').write_text(f'[project]\nname = "ala-install-fixture"\nversion = "{version}"\n')
+        # A protocol-1 release must carry its bridge and frontend contract even
+        # in the tiny installer fixture. Their hashes remain manifest-checked.
+        for name in builder.REQUIRED_DISPLAY_FILES:
+            destination = source / name
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(REPO / name, destination)
         legacy = source / 'scripts/rocky-linux'
         (legacy / 'lib').mkdir(parents=True)
         (legacy / 'bin').mkdir()
@@ -302,3 +308,41 @@ def test_self_update_cannot_downgrade_or_repeat(installation):
         result = installation.install(candidate, ALA_UPDATE_ONLY='1')
         assert result.returncode == 1
         assert installation.current.resolve() == previous
+
+
+def test_active_display_reservation_defers_install_without_publishing_pointer(installation):
+    import time
+    bundle, _ = installation.bundle()
+    state = installation.root / 'var/lib/ala-runtime/targets/default/state.json'
+    state.parent.mkdir(parents=True)
+    state.write_text(json.dumps({'generation': 1, 'operation': {
+        'kind': 'runtime', 'generation': 1, 'boot_id': 'test-boot', 'expires_monotonic': time.monotonic() + 300}}))
+    result = installation.install(bundle)
+    assert result.returncode == 1 and '화면 코드 전환' in result.stderr
+    assert not installation.current.is_symlink()
+
+
+def test_automatic_installer_rechecks_new_config_schema_under_common_lock(installation):
+    bundle, _ = installation.bundle()
+    compatibility = bundle / 'COMPATIBILITY.json'
+    value = json.loads(compatibility.read_text())
+    value['config_schemas'] = [1]
+    compatibility.write_text(json.dumps(value))
+    manifest_path = bundle / 'MANIFEST.json'
+    manifest = json.loads(manifest_path.read_text())
+    manifest['files']['COMPATIBILITY.json'] = hashlib.sha256(compatibility.read_bytes()).hexdigest()
+    manifest_path.write_text(json.dumps(manifest))
+    # The old downloader could have observed schema 1 before this explicit
+    # configuration save. The installer sees the current schema inside its lock.
+    config = installation.root / 'etc/ala/config.json'
+    config.parent.mkdir(parents=True)
+    config.write_text(json.dumps({'schema_version': 2, 'user': 'user', 'screens': [{'id': 'default'}]}))
+    result = installation.install(bundle, ALA_REQUIRE_COMPATIBILITY='1')
+    assert result.returncode == 1 and '구성 schema' in result.stderr
+    assert not installation.current.is_symlink()
+
+
+def test_automatic_installer_accepts_current_compatible_contract(installation):
+    bundle, _ = installation.bundle()
+    result = installation.install(bundle, ALA_REQUIRE_COMPATIBILITY='1')
+    assert result.returncode == 0, result.stderr

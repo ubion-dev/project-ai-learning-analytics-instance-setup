@@ -22,6 +22,7 @@ class FakeHost:
         self.states={display.UNIT: {'ActiveState':'inactive','MainPID':'0','Result':'success','LoadState':'loaded'},
                      display.LEGACY: {'ActiveState':'inactive','MainPID':'0','Result':'success','LoadState':'not-found'}}
         self.settings={schema+'.'+key:expected for schema,key,expected in display.SETTINGS}
+        self.settings.update({'org.gnome.shell.disable-user-extensions':'false','org.gnome.shell.enabled-extensions':"['ala-display@example.com']"})
         self.script_result={'exit_code':2, 'state':'pending', 'reason':'Chrome 미실행'}
         self.get_default='graphical.target'
         self.gdm_enabled='enabled'
@@ -243,7 +244,7 @@ def test_unit_uses_graphical_session_and_bounded_crash_recovery():
     assert 'RestartPreventExitStatus=78' in unit
     assert 'StartLimitIntervalSec=300' in unit
     assert 'StartLimitBurst=5' in unit
-    assert '_chrome-run' in unit
+    assert '_runtime-dispatch' in unit
 
 
 def test_user_start_does_not_replace_legacy_or_active_chrome(setup):
@@ -956,7 +957,7 @@ def test_registration_uses_stable_launcher_across_tool_releases(monkeypatch):
     first=(display.unit_text(),display.desktop_text())
     monkeypatch.setattr(display,'RELEASE',Path('/opt/ala/releases/0.1.0rc15'))
     assert (display.unit_text(),display.desktop_text())==first
-    assert '"/usr/local/bin/ala" "_chrome-run"' in first[0]
+    assert '"/usr/local/bin/ala" "_runtime-dispatch" "default"' in first[0]
     assert '"/usr/local/bin/ala" "_session"' in first[1]
     assert '/opt/ala/releases/' not in ''.join(first)
 

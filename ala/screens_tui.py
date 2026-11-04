@@ -1,0 +1,384 @@
+"""Display topology and per-target controls; opening this view never changes a host."""
+from __future__ import annotations
+
+from copy import deepcopy
+from urllib.parse import urlsplit, urlunsplit
+
+from rich.text import Text
+from textual import on
+from textual.app import ComposeResult
+from textual.containers import Horizontal, Vertical, VerticalScroll
+from textual.screen import ModalScreen
+from textual.widgets import Button, DataTable, Input, Label, Select, Static, Switch, TextArea
+
+from .chrome_tui import safe_logs, safe_text
+
+
+def site_label(value):
+    """Show only origin/path; query strings and fragments never enter the overview."""
+    if not isinstance(value, str):
+        return '주소 미설정'
+    try:
+        p = urlsplit(value)
+        if p.scheme not in {'http', 'https'} or not p.hostname or p.username or p.password:
+            return '주소 확인 필요'
+        return safe_text(urlunsplit((p.scheme, p.netloc, p.path, '', '')))
+    except ValueError:
+        return '주소 확인 필요'
+
+
+def topology_text(report, width=100, height=7):
+    logical = report.get('logical_outputs') or []
+    if not logical:
+        return '출력 배치 확인 불가 · 활성 그래픽 세션과 GNOME 연결을 확인하세요.'
+    valid = []
+    for item in logical:
+        geometry = item.get('geometry', item)
+        if all(type(geometry.get(k)) is int for k in ('x', 'y', 'width', 'height')) and geometry['width'] > 0 and geometry['height'] > 0:
+            connectors = item.get('connectors', [])
+            name = item.get('id') or ', '.join(str(v) for v in connectors) or '출력'
+            valid.append((safe_text(name), geometry))
+    if not valid:
+        return '출력은 감지했지만 배치 좌표는 확인하지 못했습니다.'
+    if width < 95 or height < 7:
+        return '\n'.join(f'{name} · {g["width"]}×{g["height"]} · ({g["x"]}, {g["y"]})' for name, g in valid)
+    width, height = min(width, 124), min(height, 10)
+    left = min(g['x'] for _, g in valid)
+    top = min(g['y'] for _, g in valid)
+    span_x = max(g['x'] + g['width'] for _, g in valid) - left
+    span_y = max(g['y'] + g['height'] for _, g in valid) - top
+    grid = [[' '] * width for _ in range(height)]
+    def put(x, y, text):
+        if 0 <= y < height:
+            for i, ch in enumerate(text):
+                if 0 <= x+i < width:
+                    grid[y][x+i] = ch
+    for name, g in valid:
+        x = int((g['x']-left) * (width-1) / span_x)
+        y = int((g['y']-top) * (height-1) / span_y)
+        w = max(8, int(g['width'] * (width-1) / span_x))
+        h = max(3, int(g['height'] * (height-1) / span_y))
+        w, h = min(w, width-x), min(h, height-y)
+        if w < 4 or h < 3:
+            return topology_text(report, width=80, height=3)
+        put(x, y, '┌' + '─'*(w-2) + '┐')
+        for row in range(y+1, y+h-1):
+            put(x, row, '│' + ' '*(w-2) + '│')
+        put(x, y+h-1, '└' + '─'*(w-2) + '┘')
+        put(x+2, y+1, name[:max(0, w-4)])
+        if h > 3:
+            put(x+2, y+2, f'{g["width"]}×{g["height"]}'[:max(0, w-4)])
+    return '\n'.join(''.join(row).rstrip() for row in grid)
+
+
+class TargetEditor(ModalScreen[dict | None]):
+    BINDINGS = [('escape', 'cancel', '취소')]
+    CSS = """
+    TargetEditor { align: center middle; background: #000000 65%; }
+    #target-editor { width: 76; max-width: 96%; height: 29; max-height: 96%; padding: 1 2; background: #17212d; border: round #83e3c4; }
+    #target-fields { height: 1fr; }
+    #target-editor Label { height: 1; margin-top: 1; }
+    #target-editor Input, #target-editor Select { height: 3; }
+    #target-error { height: auto; color: #ee8795; }
+    #target-buttons { height: 3; margin-top: 1; }
+    #target-buttons Button { width: 1fr; }
+    #target-editor Switch { height: 3; }
+    """
+
+    def __init__(self, target=None, outputs=()):
+        super().__init__()
+        self.target = deepcopy(target) if target else None
+        self.outputs = outputs
+
+    def compose(self) -> ComposeResult:
+        value = self.target or {'id': '', 'autostart': True}
+        frontend = value.get('frontend') or {}
+        with Vertical(id='target-editor'):
+            yield Static('표시 대상 설정 · 저장만으로 현재 창은 변경하지 않습니다.')
+            with VerticalScroll(id='target-fields'):
+                yield Label('대상 ID')
+                yield Input(value.get('id', ''), id='target-id', disabled=self.target is not None, placeholder='display-1')
+                yield Label('표시 사이트')
+                yield Input(value.get('url') or '', id='target-url', placeholder='https://example.com/display')
+                yield Label('출력 연결자 · 비우면 단일 활성 출력 자동 선택')
+                yield Input(value.get('output') or '', id='target-output', placeholder=', '.join(self.outputs) or 'HDMI-1')
+                yield Label('창 배치')
+                yield Select([('전체화면', 'fullscreen'), ('테스트 · 왼쪽 절반', 'left'), ('테스트 · 오른쪽 절반', 'right')], value=value.get('layout', 'fullscreen'), allow_blank=False, id='target-layout')
+                yield Label('로그인 후 자동 시작')
+                yield Switch(value=value.get('autostart', True), id='target-autostart')
+                yield Label('프론트 배포 감지')
+                yield Switch(value=frontend.get('enabled', False), id='target-frontend')
+                yield Label('배포 정보 주소 · 프론트 계약 연동 후 사용')
+                yield Input(frontend.get('manifest_url') or '', id='target-manifest', placeholder='https://example.com/version.json')
+            yield Static('', id='target-error', markup=False)
+            with Horizontal(id='target-buttons'):
+                yield Button('저장', id='target-save', variant='primary')
+                yield Button('취소', id='target-cancel')
+
+    def on_mount(self):
+        self.query_one('#target-url' if self.target else '#target-id', Input).focus()
+
+    @on(Button.Pressed)
+    def pressed(self, event):
+        if event.button.id == 'target-cancel':
+            self.action_cancel()
+        elif event.button.id == 'target-save':
+            from .config import ScreenConfig
+            value = {'id': self.query_one('#target-id', Input).value,
+                     'url': self.query_one('#target-url', Input).value or None,
+                     'output': self.query_one('#target-output', Input).value or None,
+                     'layout': self.query_one('#target-layout', Select).value,
+                     'autostart': self.query_one('#target-autostart', Switch).value,
+                     'frontend': {'enabled': self.query_one('#target-frontend', Switch).value,
+                                  'manifest_url': self.query_one('#target-manifest', Input).value or None}}
+            try:
+                ScreenConfig.from_dict(value)
+            except (ValueError, TypeError) as exc:
+                self.query_one('#target-error', Static).update(safe_text(str(exc)))
+                return
+            self.dismiss(value)
+
+    def action_cancel(self):
+        self.dismiss(None)
+
+
+class ScreenPanel(Vertical):
+    DEFAULT_CSS = """
+    ScreenPanel { height: 1fr; }
+    #screens-summary { height: auto; max-height: 2; margin-bottom: 1; color: #b5e9d9; }
+    #screens-map { height: 8; padding: 0 1; background: #172735; border: round #34475d; }
+    #screens-table { height: 1fr; min-height: 3; margin-top: 1; }
+    #screens-detail { height: 6; min-height: 3; margin-top: 1; }
+    #screens-actions { height: 3; margin-top: 1; }
+    #screens-actions Button { width: 1fr; min-width: 7; padding: 0; }
+    Screen.compact #screens-summary { margin-bottom: 0; max-height: 1; }
+    Screen.compact #screens-map { height: auto; max-height: 3; padding: 0; border: none; }
+    Screen.compact #screens-table { margin-top: 0; }
+    Screen.compact #screens-detail { height: 4; margin-top: 0; }
+    Screen.compact #screens-actions { margin-top: 0; }
+    """
+
+    def __init__(self, owner, **kwargs):
+        super().__init__(**kwargs)
+        self.owner = owner
+        self.report = {}
+        self.selected = None
+        self.reading = False
+        self.mutating = False
+        self.message = ''
+        self.loaded = False
+        self.compact = None
+
+    def compose(self):
+        yield Static('화면 관리를 열면 연결된 출력과 창을 조회합니다.', id='screens-summary', markup=False)
+        yield Static('', id='screens-map', markup=False)
+        yield DataTable(id='screens-table', cursor_type='row')
+        yield TextArea('', id='screens-detail', read_only=True, show_cursor=False, highlight_cursor_line=False)
+        with Horizontal(id='screens-actions'):
+            for key, label in [('start', '시작'), ('stop', '중지'), ('restart', '재시작'), ('reload', '갱신'), ('edit', '설정'), ('add', '추가'), ('logs', '로그'), ('retry', '배포 재시도')]:
+                yield Button(label, id='screens-'+key, disabled=key != 'add')
+
+    def on_mount(self):
+        self.query_one('#screens-table').border_title = '표시 대상 · 실제 관측과 설정을 구분합니다'
+        self.query_one('#screens-detail').border_title = '선택 대상 · 상태와 다음 조치'
+        self.set_interval(3, self.poll)
+        self.render_report()
+
+    def on_resize(self):
+        if self.is_mounted:
+            self.call_after_refresh(self.render_report)
+
+    def active(self):
+        return self.is_mounted and self.owner.is_running and self.owner.query_one('#pages').current == 'screens'
+
+    def activate(self):
+        self.run_worker(self.refresh_state(), group='screens-read', exclusive=True, exit_on_error=False)
+
+    async def poll(self):
+        if self.active() and not self.reading and not self.mutating:
+            await self.refresh_state()
+
+    async def refresh_state(self):
+        if self.reading or not self.is_mounted:
+            return
+        self.reading = True
+        try:
+            value = await self.owner.service.call('screens-inspect')
+            if not isinstance(value, dict) or not isinstance(value.get('targets'), list):
+                raise ValueError('잘못된 화면 조회 응답')
+            self.report = value
+            self.loaded = True
+        except Exception as exc:
+            self.report = {'targets': [], 'reason': safe_text(str(exc)), 'state': 'unknown'}
+        finally:
+            self.reading = False
+        if self.is_mounted:
+            self.render_report()
+
+    def target(self):
+        return next((v for v in self.report.get('targets', []) if v.get('id') == self.selected), None)
+
+    def render_report(self):
+        if not self.is_mounted:
+            return
+        targets = self.report.get('targets', [])
+        if self.selected not in {v.get('id') for v in targets}:
+            self.selected = targets[0].get('id') if targets else None
+        physical = len(self.report.get('outputs') or [])
+        logical = len(self.report.get('logical_outputs') or [])
+        confirmed = self.report.get('confirmed_windows')
+        if type(confirmed) is not int:
+            counts = [v.get('placement', {}).get('confirmed_window_count', v.get('placement', {}).get('window_count')) for v in targets]
+            confirmed = sum(v for v in counts if type(v) is int) if any(type(v) is int for v in counts) else '확인 불가'
+        output_label = f'출력 {physical}개 · 논리 화면 {logical}개' if self.report.get('output_state', 'ok') == 'ok' else '출력 조회 대기·확인 필요'
+        confirmed_label = str(confirmed)+'개' if type(confirmed) is int else '확인 불가'
+        self.query_one('#screens-summary', Static).update(Text(
+            f'{output_label} · 관리 대상 {len(targets)}개 · 확인된 창 {confirmed_label}'
+            if self.loaded else '출력·창 조회 확인 필요 · '+str(self.report.get('reason', '조회 중'))))
+        self.query_one('#screens-map', Static).update(Text(topology_text(self.report, max(20, self.size.width-4), 7 if self.size.height >= 23 else 3)))
+        table = self.query_one('#screens-table', DataTable)
+        compact = self.size.width < 100
+        table.clear(columns=True)
+        available = max(50, self.size.width - (10 if compact else 16))
+        columns = (('대상 · 출력', min(20, available//3)),
+                   ('적용 사이트', max(12, available-min(20, available//3)-22)),
+                   ('실행 · 사이트', 22)) if compact else (
+                   ('대상', 14), ('출력', 13), ('적용 사이트', max(16, available-66)),
+                   ('실행 · 적용', 17), ('사이트', 12), ('창 배치', 10))
+        for label, width in columns:
+            table.add_column(label, width=width)
+        run_labels = {'active': '실행 중', 'activating': '시작 중', 'inactive': '중지됨', 'failed': '실패'}
+        health_labels = {'healthy': '정상', 'recovering': '복구 중', 'waiting_site': '응답 대기', 'unknown': '확인 불가'}
+        for value in targets:
+            service = value.get('service') or {}
+            health = value.get('health') or {}
+            placement = value.get('placement') or {}
+            run = run_labels.get(service.get('ActiveState'), '확인 불가')
+            runtime = value.get('runtime') or {}
+            update_pending = bool(runtime.get('committed') and runtime.get('desired')
+                                  and runtime['committed'] != runtime['desired'])
+            if update_pending:
+                run = run.replace(' ', '')+'·적용대기'
+            site = '중지됨' if service.get('ActiveState') == 'inactive' else health_labels.get(health.get('state'), '확인 불가')
+            deployment = value.get('frontend_status') or {}
+            if (value.get('frontend') or {}).get('enabled') and deployment.get('state') == 'blocked':
+                site += ' · 배포 보류'
+            output = value.get('output') or '단일 출력 자동'
+            color = 'green' if site == '정상' else 'dim' if site == '중지됨' else 'yellow'
+            items = (f'{value["id"]} · {output}', site_label(value.get('applied_url', value.get('url'))), Text(run+'·'+site, style='yellow' if update_pending else color)) if compact else (
+                value['id'], output, site_label(value.get('applied_url', value.get('url'))), Text(run, style='yellow' if update_pending else ''), Text(site, style=color),
+                {'ok': '확인됨', 'pending': '배치 대기', 'unknown': '확인 불가'}.get(placement.get('state'), '확인 불가'))
+            table.add_row(*items, key=value['id'])
+        if self.selected:
+            table.move_cursor(row=next(i for i, v in enumerate(targets) if v['id'] == self.selected), animate=False)
+        locked = self.mutating or bool(self.owner._active_job)
+        for key in ('start', 'stop', 'restart', 'reload', 'edit', 'logs', 'retry'):
+            self.query_one('#screens-'+key, Button).disabled = not bool(self.target()) or locked
+        self.query_one('#screens-add', Button).disabled = locked
+        self.render_detail()
+
+    def render_detail(self):
+        value = self.target()
+        lines = [self.message] if self.message else []
+        if value:
+            lines += [str(value['id'])+' · 설정 주소 '+site_label(value.get('url')),
+                      '적용 주소 · '+site_label(value.get('applied_url', value.get('url'))),
+                      '실제 사이트 · '+(site_label(value['actual_url']) if value.get('actual_url') else '적용 주소의 문서 확인' if (value.get('health') or {}).get('target_matches_config') else '확인 불가'),
+                      '자동 시작 · '+('켜짐' if value.get('autostart') else '꺼짐')]
+            runtime = value.get('runtime') or {}
+            if runtime.get('committed'):
+                selected = runtime['committed'].get('version', '확인 불가')
+                running = (value.get('health') or {}).get('supervisor_version', '확인 불가')
+                desired = (runtime.get('desired') or {}).get('version', selected)
+                lines.append(f'화면 관리 버전 · 선택 {selected} / 실행 {running} / 후보 {desired}')
+                if runtime.get('desired') != runtime.get('committed'):
+                    lines.append('새 코드·설정 적용 대기 · 매일 03:00–04:00 한국 시간')
+                last = runtime.get('last_result') or {}
+                if last.get('state'):
+                    labels = {'completed': '적용 완료', 'failed': '적용 실패', 'cancelled': '취소됨',
+                              'pending': '준비 대기', 'selected_unverified': '코드 선택 완료 · 실행 미검증'}
+                    lines.append('최근 화면 작업 · '+labels.get(last['state'], '결과 확인 필요'))
+                    if last.get('reason'):
+                        lines.append(safe_text(last['reason']))
+            for key in ('service', 'health', 'placement', 'runtime', 'frontend_status', 'reload'):
+                item = value.get(key) or {}
+                if isinstance(item, dict):
+                    state = item.get('state', item.get('ActiveState'))
+                    if state:
+                        label = {'service': 'Chrome 실행', 'health': '사이트', 'placement': '창 배치', 'runtime': '화면 코드', 'frontend_status': '프론트 배포', 'reload': '수동 새로고침'}[key]
+                        description = {'active': '실행 중', 'inactive': '중지됨', 'healthy': '정상', 'recovering': '연결 복구 중', 'pending': '적용 대기', 'ok': '정상', 'unknown': '확인 불가', 'completed': '완료', 'failed': '실패', 'interrupted': '중단됨', 'queued': '접수됨', 'running': '진행 중', 'idle': '기록 없음', 'blocked': '조치 필요'}.get(state, safe_text(state))
+                        lines.append(f'{label} · {description}')
+                    if key == 'frontend_status' and item.get('deployment_seq') is not None:
+                        lines.append('배포 순번 '+safe_text(item['deployment_seq'])+' · 빌드 '+safe_text(item.get('build_id')))
+                    for field in ('reason', 'next_action'):
+                        if item.get(field):
+                            lines.append(safe_text(item[field]))
+        elif self.report.get('reason'):
+            lines.append(safe_text(self.report['reason']))
+        self.query_one('#screens-detail', TextArea).load_text('\n'.join(lines) or '표시 대상을 추가하세요.')
+
+    @on(DataTable.RowHighlighted, '#screens-table')
+    def highlighted(self, event):
+        self.selected = event.row_key.value
+        self.render_detail()
+
+    @on(DataTable.RowSelected, '#screens-table')
+    def selected_row(self, event):
+        self.edit_target()
+
+    @on(Button.Pressed)
+    def pressed(self, event):
+        key = (event.button.id or '').removeprefix('screens-')
+        if key in {'edit', 'add'}:
+            self.edit_target(new=key == 'add')
+        elif key in {'start', 'stop', 'restart', 'reload', 'logs', 'retry'} and not event.button.disabled:
+            self.owner.run_worker(self.perform(key), group='screen-control', exclusive=False, exit_on_error=False)
+
+    def edit_target(self, new=False):
+        if self.mutating:
+            return
+        current = self.target()
+        value = None if new else {k: current.get(k) for k in ('id', 'url', 'output', 'layout', 'autostart', 'frontend')} if current else None
+        if not new and value is None:
+            return
+        expected = deepcopy(self.owner._config)
+        outputs = [str(v.get('connector', v.get('id', ''))) for v in self.report.get('outputs', [])]
+        def saved(target):
+            if target is not None:
+                self.owner.run_worker(self.save_target(target, expected), exit_on_error=False)
+        self.owner.push_screen(TargetEditor(value, outputs), saved)
+
+    async def save_target(self, value, expected):
+        try:
+            response = await self.owner.service.call('screens-save', {'target': value, 'expected_config': expected})
+            self.owner._config = deepcopy(response['config'])
+            self.message = response.get('reason', '저장 완료')
+            self.selected = value['id']
+        except Exception as exc:
+            self.message = '저장 실패 · '+safe_text(str(exc))
+        await self.refresh_state()
+
+    async def perform(self, action):
+        if self.mutating or not self.target():
+            return
+        self.mutating = self.owner._chrome_mutating = True
+        target = self.selected
+        self.owner.update_button()
+        self.message = '대상 '+str(target)+' · 요청 중'
+        self.render_report()
+        try:
+            value = await self.owner.service.call('frontend-retry' if action == 'retry' else 'screens-action',
+                                                  {'target': target} if action == 'retry' else {'action': action, 'target': target})
+            if action == 'logs':
+                self.message = safe_logs(value.get('log', ''))
+            else:
+                self.message = safe_text(value.get('reason') or value.get('state') or '결과 확인 필요')
+                if value.get('next_action'):
+                    self.message += '\n'+safe_text(value['next_action'])
+        except Exception as exc:
+            self.message = '요청 확인 실패 · '+safe_text(str(exc))
+        finally:
+            self.mutating = self.owner._chrome_mutating = False
+            if self.owner.is_running:
+                self.owner.update_button()
+        await self.refresh_state()

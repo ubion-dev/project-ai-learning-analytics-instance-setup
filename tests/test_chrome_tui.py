@@ -9,8 +9,19 @@ from textual.widgets import Button, Static, Tabs, TextArea
 
 from ala.chrome_tui import ChromeScreen, navigation_details, safe_logs
 from ala.model import CheckResult, Report
-from ala.simple_tui import SimpleApp
+from ala.simple_tui import SimpleApp as ManagementApp
 from test_simple_tui import FakeService
+
+
+class SimpleApp(ManagementApp):
+    """Keep legacy modal component regression; main UX is tested in test_screens_tui.
+
+    The approved three-tab UX replaced the c shortcut. This explicit component
+    harness retains the original control/diagnostic safety assertions.
+    """
+    def action_chrome(self):
+        if len(self.screen_stack) == 1:
+            self.push_screen(ChromeScreen(self))
 
 
 class ChromeService(FakeService):
@@ -69,7 +80,7 @@ def test_button_and_keyboard_open_single_display_controls_without_mutating_or_ex
         app = SimpleApp(service=service)
         async with app.run_test(size=(80, 24)) as pilot:
             await pilot.pause()
-            assert len(app.query_one('#tabs', Tabs).query('Tab')) == 2
+            assert len(app.query_one('#tabs', Tabs).query('Tab')) == 3
             button = app.query_one('#chrome-open', Button)
             assert cell_len(button.label.plain) <= button.content_region.width - 2 * button.styles.line_pad
             await pilot.click('#chrome-open')

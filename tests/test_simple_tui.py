@@ -50,7 +50,7 @@ def test_keyboard_one_action_applies_current_config_and_prevents_duplicates():
         app = SimpleApp(service=service)
         async with app.run_test(size=(80, 24)) as pilot:
             await pilot.pause()
-            assert len(app.query_one('#tabs', Tabs).query('Tab')) == 2
+            assert len(app.query_one('#tabs', Tabs).query('Tab')) == 3
             start = app.query_one('#setup-start', Button)
             assert app.focused is start
             assert not start.disabled and start.region.bottom <= 23

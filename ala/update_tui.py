@@ -20,7 +20,7 @@ STATES = {'idle', 'queued', 'running', 'completed', 'failed', 'interrupted', 'un
 LABELS = {'idle': '진행 중인 업데이트 없음', 'queued': '업데이트 시작 대기',
           'running': '업데이트 진행 중', 'completed': '업데이트 설치 완료',
           'failed': '업데이트 실패', 'interrupted': '업데이트 중단됨', 'unknown': '업데이트 상태 확인 불가'}
-PHASES = {'queued': '작업 접수', 'checking': '업데이트 조건 확인', 'downloading': '배포 파일 다운로드',
+PHASES = {'queued': '작업 접수', 'checking': '업데이트 조건 확인', 'downloading': '배포 파일 다운로드', 'signature': '배포 서명·발행자 검증',
           'checksum': '다운로드 해시 검사', 'manifest': '배포 파일 검증', 'installing': '새 버전 설치',
           'rechecking': '설치 버전·실행 재검사', 'completed': '완료', 'failed': '실패'}
 
@@ -95,6 +95,7 @@ class UpdateScreen(ModalScreen):
             with Horizontal(id='update-controls'):
                 yield Button('다시 확인', id='update-check')
                 yield Button('업데이트 시작', id='update-start', variant='primary', disabled=True)
+                yield Button('자동 운영', id='update-automatic')
                 yield Button('닫기', id='update-close')
             yield Static('Esc 닫기 · 창을 닫아도 시작한 업데이트는 계속됩니다.', id='update-help')
 
@@ -117,6 +118,11 @@ class UpdateScreen(ModalScreen):
     @on(Button.Pressed, '#update-close')
     def close_pressed(self):
         self.action_close()
+
+    @on(Button.Pressed, '#update-automatic')
+    def automatic_pressed(self):
+        from .automatic_tui import AutomaticScreen
+        self.owner.push_screen(AutomaticScreen(self.owner))
 
     @on(Button.Pressed, '#update-check')
     def check_pressed(self):

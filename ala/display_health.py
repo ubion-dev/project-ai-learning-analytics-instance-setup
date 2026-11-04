@@ -12,6 +12,7 @@ import socket
 import ssl
 import stat
 import time
+import uuid
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -64,8 +65,11 @@ def probe_url(url, *, opener=None):
         return Probe(False, None, 'HTTP 연결 확인 실패')
 
 
-def state_path(home):
-    return Path(home) / '.local/state/ala/chrome-health.json'
+def state_path(home, target_id='default'):
+    from .frontend import _target
+    _target(target_id)
+    base = Path(home) / '.local/state/ala'
+    return base / 'chrome-health.json' if target_id == 'default' else base / 'screens' / target_id / 'chrome-health.json'
 
 
 def _safe_path(path):
@@ -142,14 +146,16 @@ def _read_json(path):
         return json.loads(content)
 
 
-def read_health(home, paths, supervisor_pid, url, *, now=None):
+def read_health(home, paths, supervisor_pid, url, *, now=None, target_id='default'):
     """Read only; never create a state file or infer health from an old record."""
     loaded = False
     try:
-        value = _read_json(state_path(home))
+        value = _read_json(state_path(home, target_id))
         loaded = True
         if not isinstance(value, dict) or value.get('state') not in STATES:
             raise ValueError('감시 상태 형식이 올바르지 않습니다.')
+        if value.get('target_id', 'default') != target_id:
+            raise ValueError('다른 화면 대상의 감시 기록입니다.')
         if value.get('supervisor_pid') != supervisor_pid or value.get('boot_id') != boot_id(paths):
             raise ValueError('현재 서비스·부팅의 감시 기록이 아닙니다.')
         if value.get('supervisor_start_ticks') != process_identity(paths, supervisor_pid):
@@ -181,8 +187,21 @@ def read_health(home, paths, supervisor_pid, url, *, now=None):
 
 class Supervisor:
     def __init__(self, config, home, argv, *, paths=None, opener=None,
-                 transport_factory=None, clock=None, monotonic=None, stop_requested=None):
+                 transport_factory=None, clock=None, monotonic=None, stop_requested=None,
+                 target_id='default', config_revision='', frontend=None, placement_callback=None):
+        from .frontend import FrontendConfig, _target
         self.config, self.home, self.argv = config, Path(home), list(argv)
+        self.target_id = _target(target_id)
+        if not isinstance(config_revision, str) or len(config_revision) > 128:
+            raise ValueError('화면 구성 revision이 올바르지 않습니다.')
+        self.config_revision = config_revision
+        self.frontend = FrontendConfig.from_dict(frontend) if isinstance(frontend, dict) else frontend or FrontendConfig()
+        self.run_nonce = uuid.uuid4().hex
+        self._control = None
+        self._last_control = None
+        self.placement_callback = placement_callback
+        self._next_placement = 0
+        self._next_frontend_observation = 0
         self.paths = paths or Paths()
         self.opener = opener
         self.transport_factory = transport_factory or PipeBrowser
@@ -202,6 +221,8 @@ class Supervisor:
         self.managed_navigation = False
         self.observed_document_url = None
         self.value = {'state': 'waiting_site', 'browser_pid': None, 'supervisor_pid': os.getpid(),
+                      'target_id': self.target_id, 'config_revision': config_revision, 'run_nonce': self.run_nonce,
+                      'control': None,
                       'supervisor_version': __version__,
                       'navigation': {'display_requests': 0, 'recovery_requests': 0, 'browser_navigations': 0,
                                      'last_command': None, 'last_browser_navigation': None, 'last_error': None},
@@ -211,7 +232,7 @@ class Supervisor:
                       'config_fingerprint': fingerprint(config.url)}
 
     def _save(self):
-        path = state_path(self.home)
+        path = state_path(self.home, self.target_id)
         _safe_path(path)
         path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         info = path.parent.stat()
@@ -300,7 +321,7 @@ class Supervisor:
             raise CDPError('표시용 탭의 주 문서를 확인하지 못했습니다.')
         self._save()
 
-    def _navigate(self, url):
+    def _navigate(self, url, *, ensure_document=False):
         kind = 'recovery' if url == RECOVERY_URL else 'display'
         navigation = self.value['navigation']
         navigation[kind + '_requests'] += 1
@@ -324,6 +345,22 @@ class Supervisor:
                 raise CDPError('로컬 복구 안내를 표시하지 못했습니다.')
             self._fallback('표시 주소로 이동하는 중 네트워크 오류가 발생했습니다.')
             return
+        if result.get('frameId') == self.frame and not result.get('loaderId') and ensure_document:
+            # Removing/changing a SPA fragment may be a same-document move.
+            # An explicit reload still needs one real document load. Do not
+            # infer a deployment from that fragment or repeat this operation.
+            operation = (self._control or {}).get('operation_token')
+            if self.stopping or self.stop_requested() or (operation is not None and not self._valid_operation(operation)):
+                self.navigating = False
+                self._finish_control(False)
+                return
+            self.loader = self.request = None
+            self.document_ok = self.loaded = False
+            self.navigating = self.managed_navigation = True
+            self.observed_document_url = self.config.url
+            self.deadline = self.monotonic() + NAVIGATION_TIMEOUT
+            self._call('Page.reload', {'ignoreCache': True})
+            return
         if result.get('frameId') != self.frame or not result.get('loaderId'):
             navigation['last_error'] = {'kind': 'navigation_error', 'at': stamp(self.clock())}
             raise CDPError('표시용 탭의 문서 이동 식별자를 확인하지 못했습니다.')
@@ -337,6 +374,8 @@ class Supervisor:
             self.deadline = self.monotonic() + NAVIGATION_TIMEOUT
 
     def _fallback(self, reason):
+        if self._control is not None:
+            self._finish_control(False)
         self.had_outage = True
         was_displaying = self.value['target_matches_config'] or self.navigating
         self.navigating = False
@@ -385,6 +424,112 @@ class Supervisor:
                               next_action='앱 내부 데이터·실제 모니터 표시는 별도 수용 범위입니다.')
             self._save()
 
+    def _finish_control(self, success):
+        request = self._control
+        if request is None:
+            return
+        self.value['control'] = {'nonce': request['nonce'], 'state': 'completed' if success else 'failed',
+                                 'deployment_seq': request['deployment_seq'],
+                                 'build_id': request['expected_build_id'] if success else None,
+                                 'app_ready': success if request['expected_build_id'] is not None else None}
+        self._control = None
+        self._save()
+
+    def observe_frontend(self):
+        from .frontend import TOKEN
+        expression = "(()=>({build_id:document.querySelector('meta[name=\"ala-build-id\"]')?.content??null,ready:document.querySelector('meta[name=\"ala-app-ready\"]')?.content==='true'}))()"
+        response = self._call('Runtime.evaluate', {'expression': expression, 'returnByValue': True})
+        value = response.get('result', {}).get('value')
+        build = value.get('build_id') if isinstance(value, dict) else None
+        ready = value.get('ready') if isinstance(value, dict) else None
+        result = {'build_id': build if isinstance(build, str) and TOKEN.fullmatch(build) else None,
+                  'app_ready': ready if type(ready) is bool else None, 'observed_at': stamp(self.clock())}
+        self.value['frontend'] = result
+        self._save()
+        return result
+
+    def frontend_tick(self):
+        if not self.frontend.enabled or self.value['state'] != 'healthy' or self.navigating or self.monotonic() < self._next_frontend_observation:
+            return
+        self._next_frontend_observation = self.monotonic() + 5
+        try:
+            self.observe_frontend()
+        except CDPError:
+            self.value['frontend'] = {'build_id': None, 'app_ready': None, 'observed_at': stamp(self.clock())}
+            self._save()
+
+    def control_tick(self):
+        """Only this supervisor can use its own CDP session for a fixed request."""
+        from .frontend import _read_owned, control_path, valid_request
+        if self.stopping or self.stop_requested() or self.session is None:
+            return
+        if self._control is not None:
+            operation = self._control.get('operation_token')
+            if operation is not None and not self._valid_operation(operation):
+                self._finish_control(False)
+                return
+            if self.clock() > self._control['expires_at']:
+                self._finish_control(False)
+            elif self.value['state'] == 'healthy' and self.document_ok and self.loaded and not self.navigating:
+                expected = self._control['expected_build_id']
+                if expected is None:
+                    self._finish_control(True)
+                else:
+                    # Fixed read-only expression, never interpolate URL/build ID
+                    # or evaluate script text from configuration or a request.
+                    try:
+                        value = self.observe_frontend()
+                        if value['build_id'] == expected and value['app_ready'] is True:
+                            self._finish_control(True)
+                    except CDPError:
+                        self._finish_control(False)
+            return
+        try:
+            request = _read_owned(control_path(self.home, self.target_id))
+        except FileNotFoundError:
+            return
+        except (OSError, ValueError, TypeError):
+            return
+        if not isinstance(request, dict) or request.get('nonce') == self._last_control:
+            return
+        if not valid_request(request, self.target_id, self.config_revision, self.run_nonce, now=self.clock()):
+            return
+        if self.navigating:
+            return
+        self._last_control = request['nonce']
+        if request.get('operation_token') is not None and not self._valid_operation(request['operation_token']):
+            self.value['control'] = {'nonce': request['nonce'], 'state': 'rejected'}
+            self._save()
+            return
+        if request['source'] == 'frontend' and not self.frontend.enabled:
+            self.value['control'] = {'nonce': request['nonce'], 'state': 'rejected'}
+            self._save()
+            return
+        self._control = request
+        self.value['control'] = {'nonce': request['nonce'], 'state': 'pending'}
+        self._save()
+        self._navigate(self.config.url, ensure_document=True)
+
+    def _valid_operation(self, token):
+        from . import runtime
+        try:
+            return runtime.check(token, paths=self.paths)
+        except (OSError, ValueError, RuntimeError, KeyError, TypeError):
+            return False
+
+    def placement_tick(self):
+        if self.placement_callback is None or self.monotonic() < self._next_placement or self.stopping or self.stop_requested():
+            return
+        self._next_placement = self.monotonic() + 5
+        try:
+            value = self.placement_callback(dict(self.value))
+            if not isinstance(value, dict):
+                raise ValueError('invalid placement result')
+        except (OSError, ValueError, RuntimeError, TypeError, KeyError, AttributeError):
+            value = {'state': 'unknown', 'reason': '관리 창 배치를 확인하지 못했습니다.'}
+        self.value['placement'] = value
+        self._save()
+
     def event(self, event):
         method, params = event.get('method'), event.get('params', {})
         if not isinstance(method, str) or not isinstance(params, dict):
@@ -396,6 +541,13 @@ class Supervisor:
         if method in {'Inspector.detached', 'Inspector.targetCrashed'}:
             raise CDPError('표시용 탭 제어가 종료되었습니다.')
         if method == 'Network.requestWillBeSent' and params.get('type') == 'Document' and params.get('frameId') == self.frame:
+            if not self.loader and self.navigating and self.managed_navigation:
+                requested = params.get('request', {}).get('url')
+                loader = params.get('loaderId')
+                if (not isinstance(requested, str) or urllib.parse.urldefrag(requested)[0] != urllib.parse.urldefrag(self.config.url)[0]
+                        or not isinstance(loader, str) or not loader):
+                    raise CDPError('명시적 새로고침의 실제 주 문서를 확인하지 못했습니다.')
+                self.loader = loader
             if self.loader and params.get('loaderId') != self.loader:
                 if params.get('request', {}).get('url') not in self.allowed_reload_urls:
                     raise CDPError('관리 탭이 설정한 주소와 다른 새 주 문서로 이동했습니다.')
@@ -467,6 +619,9 @@ class Supervisor:
                     self.event(event)
                 if self.deadline is not None and self.monotonic() > self.deadline:
                     self._fallback('표시용 주 문서 로드 확인 시간이 초과되었습니다.')
+                self.control_tick()
+                self.frontend_tick()
+                self.placement_tick()
             self.value.update(state='unknown', reason='표시 서비스가 중지되었습니다.', next_action='다음 시작 시 감시를 다시 시작합니다.')
             self._save()
             return 0

@@ -1,4 +1,4 @@
-"""Two-task TUI for one-click setup and read-only expected-state checks."""
+"""Setup, expected-state checks and independent per-screen management."""
 from __future__ import annotations
 
 import asyncio
@@ -19,6 +19,7 @@ from . import __version__
 from .console import LABELS, PRIORITY, group_name
 from .model import redact
 from .progress import progress_rows, STATE_LABELS, STATE_STYLES
+from .screens_tui import ScreenPanel
 
 ACTIVE = {'queued', 'running'}
 JOB_LABELS = {'queued': '시작 대기', 'running': '실행 중', 'completed': '완료',
@@ -90,7 +91,7 @@ class SimpleApp(App[None]):
     #query-status { display: none; height: 1; padding: 0 3; color: #8ed4ed; }
     #body { height: 1fr; margin-top: 1; }
     #pages { width: 100%; height: 1fr; padding: 0 3 1 3; }
-    #setup, #status { height: 1fr; }
+    #setup, #status, #screens { height: 1fr; }
     #setup-toolbar { height: auto; margin-bottom: 1; padding: 0 2; background: #172735; border-left: solid #648ba7; }
     #setup-context { width: 1fr; height: auto; }
     #config-summary { height: auto; max-height: 3; text-style: bold; text-wrap: nowrap; text-overflow: ellipsis; }
@@ -103,6 +104,8 @@ class SimpleApp(App[None]):
     Button:disabled { background: #1c2835; border: tall #1c2835; color: #a4b5c6; }
     #setup-start { width: 24; }
     #chrome-open { width: 16; height: 3; margin-left: 1; padding: 0 1; }
+    #screens-actions { height: 6; layout: grid; grid-size: 4 2; grid-rows: 3 3; grid-columns: 1fr 1fr 1fr 1fr; grid-gutter: 0 1; }
+    #screens-actions Button { padding: 0; min-width: 7; width: 1fr; }
     #setup-overview { height: auto; margin-bottom: 1; padding: 0 2; border-left: solid #648ba7; }
     #setup-overview.running { background: #142a32; border-left: solid #62cce5; }
     #setup-overview.pending { background: #2b2518; border-left: solid #e6ba63; }
@@ -141,11 +144,17 @@ class SimpleApp(App[None]):
     Screen.compact #status-summary, Screen.compact .actions { margin-bottom: 0; }
     Screen.compact #status-detail { height: 7; margin-top: 0; }
     Screen.compact TextArea { padding: 0 1; }
+    Screen.compact #screens-summary { height: 1; margin-bottom: 0; }
+    Screen.compact #screens-map { height: auto; max-height: 3; padding: 0; border: none; }
+    Screen.compact #screens-table { margin-top: 0; }
+    Screen.compact #screens-detail { height: 3; min-height: 3; margin-top: 0; }
+    Screen.compact #screens-actions { margin-top: 0; }
     """
 
-    def __init__(self, *, service, **kwargs):
+    def __init__(self, *, service, initial_section='setup', **kwargs):
         super().__init__(**kwargs)
         self.service = service
+        self.initial_section = initial_section
         self._config = None
         self._active_job = None
         self._submitting = False
@@ -172,7 +181,7 @@ class SimpleApp(App[None]):
     def compose(self) -> ComposeResult:
         yield Static(f'ala {__version__} · 서버 환경 관리' + (' · 관리자' if os.geteuid() == 0 else ''), id='heading', markup=False)
         yield Static('화면이 작습니다. 80×24 이상으로 늘려주세요.', id='small-terminal', markup=False)
-        yield Tabs(Tab('간편 설정', id='setup-tab'), Tab('상태 확인', id='status-tab'), id='tabs')
+        yield Tabs(Tab('간편 설정', id='setup-tab'), Tab('상태 확인', id='status-tab'), Tab('화면 관리', id='screens-tab'), id='tabs')
         yield Static('현재 구성을 확인하고 있습니다.', id='notice', markup=False)
         yield Static('', id='update-notice', markup=False)
         yield Static('', id='query-status', markup=False)
@@ -197,6 +206,7 @@ class SimpleApp(App[None]):
                     yield Static('아직 확인하지 않았습니다.', id='status-summary', markup=False)
                     yield DataTable(id='status-table', cursor_type='row')
                     yield DetailArea('', id='status-detail', read_only=True, show_cursor=False, highlight_cursor_line=False)
+                yield ScreenPanel(self, id='screens')
         yield Footer()
 
     def on_mount(self):
@@ -215,6 +225,8 @@ class SimpleApp(App[None]):
         self.set_interval(1.5, self.poll_update)
         self.run_worker(self.poll_update(), group='update-status', exit_on_error=False)
         self.run_worker(self.load_state(), group='load', exclusive=True, exit_on_error=False)
+        if self.initial_section == 'screens':
+            self.query_one('#tabs', Tabs).active = 'screens-tab'
         if not self.is_headless:
             self.run_worker(self.check_update(), group='updates', exit_on_error=False)
 
@@ -394,12 +406,14 @@ class SimpleApp(App[None]):
     def activate_tab(self, event):
         if not self.is_running:
             return
-        section = 'setup' if event.tab.id == 'setup-tab' else 'status'
+        section = {'setup-tab': 'setup', 'status-tab': 'status', 'screens-tab': 'screens'}[event.tab.id]
         self.query_one('#pages', ContentSwitcher).current = section
-        target = '#setup-start' if section == 'setup' else '#status-table'
+        target = '#setup-start' if section == 'setup' else '#screens-table' if section == 'screens' else '#status-table'
         self.call_after_refresh(self.query_one(target).focus)
         if section == 'setup':
             self.call_after_refresh(self._fit_setup_table)
+        elif section == 'screens':
+            self.query_one('#screens', ScreenPanel).activate()
 
     @on(Button.Pressed, '#status-refresh')
     def refresh_pressed(self):
@@ -412,6 +426,9 @@ class SimpleApp(App[None]):
         self.query_one('#tabs', Tabs).active = 'setup-tab'
 
     def action_refresh(self):
+        if self.is_running and self.query_one('#pages').current == 'screens':
+            self.query_one('#screens', ScreenPanel).activate()
+            return
         if not self.is_running or self._loading or self._submitting:
             return
         self.run_worker(self.load_state(), group='load', exclusive=True, exit_on_error=False)
@@ -675,9 +692,8 @@ class SimpleApp(App[None]):
             self.push_screen(UpdateScreen(self))
 
     def action_chrome(self):
-        from .chrome_tui import ChromeScreen
         if len(self.screen_stack) == 1:
-            self.push_screen(ChromeScreen(self))
+            self.query_one('#tabs', Tabs).active = 'screens-tab'
 
     @on(Button.Pressed, '#chrome-open')
     def chrome_pressed(self):
