@@ -1,1 +1,1 @@
-{"uuid":"ala-display@example.com","name":"ala managed display bridge","description":"PID-bound observation and placement for ala managed Chrome windows","shell-version":["47"],"version":1}
+{"uuid":"ala-display@example.com","name":"ala managed display bridge","description":"PID-bound observation and placement for ala managed Chrome windows","shell-version":["47","49"],"version":1}

@@ -1,4 +1,5 @@
 """Exercise the GNOME extension with mocked GJS objects under Node."""
+import json
 from pathlib import Path
 import re
 import shutil
@@ -11,8 +12,10 @@ EXTENSION = Path(__file__).resolve().parents[1] / 'assets/gnome-extension/ala-di
 HARNESS = """
 import assert from 'node:assert/strict';
 
-class Extension {}
-const Config = {PACKAGE_VERSION: '47.4'};
+class Extension {
+    constructor() { this.metadata = metadata; }
+}
+const Meta = {MaximizeFlags: {BOTH: 3}};
 const config = {user: 'user', display: true};
 let configMode = 0o644;
 let callerUid = 1000;
@@ -107,15 +110,17 @@ function completeStartup() {
 """
 
 
-def run_extension(scenario):
+def run_extension(scenario, version='47.4'):
     node = shutil.which('node')
     if node is None:
         pytest.skip('Node is required for the extension harness')
     source = re.sub(r'^import [^\n]+;\n', '', EXTENSION.read_text(encoding='utf-8'), flags=re.MULTILINE)
     source = source.replace('export default class AlaDisplay', 'class AlaDisplay', 1)
+    metadata = EXTENSION.with_name('metadata.json').read_text(encoding='utf-8')
+    setup = f'const metadata = {metadata.strip()};\nconst Config = {{PACKAGE_VERSION: {json.dumps(version)}}};\n'
     result = subprocess.run(
         [node, '--input-type=module', '-'],
-        input=HARNESS + source + '\n' + scenario,
+        input=setup + HARNESS + source + '\n' + scenario,
         capture_output=True,
         text=True,
         timeout=10,
@@ -142,7 +147,8 @@ assert.equal(Main.overview.visibleTarget, true);
 
 
 @pytest.mark.parametrize('startup_state', ['ready', 'disabled', 'locked'])
-def test_dismissal_waits_for_shell_startup_and_disconnects(startup_state):
+@pytest.mark.parametrize('version', ['47.4', '49.4'])
+def test_dismissal_waits_for_shell_startup_and_disconnects(startup_state, version):
     run_extension(f"""
 const extension = new AlaDisplay();
 extension.enable();
@@ -158,7 +164,28 @@ if ('{startup_state}' === 'locked')
 completeStartup();
 assert.equal(hideCalls, {int(startup_state == 'ready')});
 assert.equal(startupHandlers.size, 0);
-""")
+""", version)
+
+
+def test_unsupported_shell_does_not_hide_overview():
+    run_extension("""
+const extension = new AlaDisplay();
+extension.enable();
+assert.notEqual((await requestDismissal(extension)).state, 'ok');
+assert.equal(hideCalls, 0);
+""", '48.1')
+
+
+@pytest.mark.parametrize(('version', 'flags'), [('47.4', '[Meta.MaximizeFlags.BOTH]'), ('49.4', '[]')])
+def test_unmaximize_uses_matching_mutter_api(version, flags):
+    run_extension(f"""
+let calls = 0;
+unmaximize({{unmaximize(...args) {{
+    calls++;
+    assert.deepEqual(args, {flags});
+}}}});
+assert.equal(calls, 1);
+""", version)
 
 
 def test_request_in_flight_does_not_add_handler_after_disable():

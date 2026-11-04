@@ -28,8 +28,9 @@ def state(mirror=False):
 
 
 @pytest.mark.parametrize('mirror',[False,True])
-def test_mutter_inventory_keeps_physical_logical_and_mirrors_separate(mirror):
-    host=BridgeHost(state(mirror))
+@pytest.mark.parametrize('version',['47.4','49.4'])
+def test_mutter_inventory_keeps_physical_logical_and_mirrors_separate(mirror,version):
+    host=BridgeHost(state(mirror) | {'gnome_version':version})
     value=monitors.topology(host=host)
     assert value['state']=='ok' and len(value['outputs'])==2
     assert len(value['logical_outputs'])==(1 if mirror else 2)
