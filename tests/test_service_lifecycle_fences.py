@@ -13,8 +13,9 @@ from ala.system import Paths
 def test_public_default_lifecycle_always_cancels_the_previous_generation(tmp_path,monkeypatch,action,explicit_target):
     calls=[];lock_depth=0
     @contextmanager
-    def lock(_):
+    def lock(_, *, blocking=False):
         nonlocal lock_depth
+        assert blocking == (action == 'stop')
         lock_depth+=1
         assert lock_depth==1
         try:yield
