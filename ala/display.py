@@ -77,8 +77,36 @@ def _context(config,target=None):
     return config if config.target_id==target and hasattr(config,'_target_id') else config.for_screen(target,revision=config.config_revision)
 
 
-def _autostart_enabled(config):
-    return config.display and any(t.autostart for t in config.screen_targets())
+def _committed_screen(config, target, store):
+    """Resolve the protected login selection, or the unregistered legacy target."""
+    state = store.load(target)
+    if state is None:
+        return config.for_screen(target), None
+    selected = state.get('committed')
+    snapshot = Config.from_dict(store._validate_selection(selected))
+    if snapshot.user != config.user:
+        raise PermissionError('확정된 화면 설정의 사용자 계정이 다릅니다.')
+    if not (Path(selected['release']) / 'COMPATIBILITY.json').is_file():
+        if target != 'default' or snapshot != config:
+            raise ValueError('구버전 화면 코드의 최초 이전이 필요합니다.')
+    return snapshot.for_screen(target, revision=selected['revision']), state
+
+
+def _autostart_enabled(config, paths):
+    if not config.display:
+        return False
+    targets = config.screen_targets()
+    if any(target.autostart for target in targets):
+        return True
+    # Provision the shared login entry for either configuration. A saved
+    # change must not remove the entry still used by a committed target.
+    from .runtime import RuntimeStore
+    store = RuntimeStore(paths)
+    for target in targets:
+        context, _ = _committed_screen(config, target.id, store)
+        if context.display and context.autostart:
+            return True
+    return False
 
 
 def unit_text(target='default'):
@@ -373,7 +401,7 @@ def inspect_display_parts(config: Config, host=None, paths=None, *, include_runt
                     results.append(_result(id, state, expected, value.stdout.strip() or value.stderr.strip(), 'ala setup --apply' if state != 'ok' else ''))
         if config.display:
             results.append(_configuration_readiness(results))
-        if _autostart_enabled(config):
+        if _autostart_enabled(config, paths):
             results.append(_file_result('chrome.autostart', autostart, desktop_text(), uid))
         elif autostart.exists() or autostart.is_symlink():
             state = 'blocked' if autostart.is_symlink() or DESKTOP_MARKER not in autostart.read_text() else 'change_required'
@@ -486,11 +514,11 @@ def _write_managed(path, content, backups=None, mode=0o644):
     return True
 
 
-def _prepare_user_files(config, home: Path):
+def _prepare_user_files(config, home: Path, paths):
     """Called with the target UID, so user-controlled home paths never grant root writes."""
     desktop = home / '.config/autostart/ala-display.desktop'
     changed = False
-    if _autostart_enabled(config):
+    if _autostart_enabled(config, paths):
         if desktop.exists() and DESKTOP_MARKER not in desktop.read_text():
             raise ValueError('관리되지 않은 ala-display.desktop이 있습니다.')
         # Root provisioning backed up any previous managed file before delegating.
@@ -586,7 +614,7 @@ def apply_display(config: Config, host=None, paths=None):
             _safe_parents(desktop)
             if not desktop.is_file() or DESKTOP_MARKER not in desktop.read_text():
                 raise ValueError('관리되지 않은 자동 실행 파일을 변경하지 않습니다.')
-            desired=desktop_text() if _autostart_enabled(config) else None
+            desired=desktop_text() if _autostart_enabled(config, paths) else None
             info=desktop.stat()
             if desktop.read_text()!=desired or info.st_uid!=uid or stat.S_IMODE(info.st_mode)!=0o644:
                 _backup_file(desktop,paths.backups)
@@ -981,7 +1009,7 @@ def user_action(action, *, target='default', config=None, home=None, host=None, 
     unit=unit_name(target if action=='environment' else config.target_id)
     home = Path(home)
     if action == 'prepare':
-        changed = _prepare_user_files(config, home)
+        changed = _prepare_user_files(config, home, paths)
         extension=_extension_activation(host,apply=True) if config.display else None
         if extension and extension['state']!='ok':return extension | {'exit_code':2 if extension['state']=='pending' else 1}
         result = host.run(['systemctl','--user','daemon-reload'])
@@ -1203,9 +1231,27 @@ def session_start(*, config=None, home=None, host=None, paths=None, environment=
     except Exception:
         log('configuration','rejected',1)
         raise
-    if not config.display or not any(t.autostart and t.url for t in config.screen_targets()):
-        log('configuration','disabled')
-        return 0
+    from .runtime import RuntimeStore
+    store = RuntimeStore(paths, host)
+    targets = []
+    codes = []
+    if config.display:
+        for target in config.screen_targets():
+            try:
+                context, state = _committed_screen(config, target.id, store)
+                if not (context.display and context.autostart and context.url):
+                    continue
+                if state is not None and store.is_stopped(state):
+                    log('configuration', 'manual_stop')
+                    continue
+                targets.append(context)
+            except (OSError, ValueError, RuntimeError, KeyError):
+                log('configuration', 'selection_rejected', 1)
+                codes.append(1)
+    if not targets:
+        if not codes:
+            log('configuration','disabled')
+        return 1 if codes else 0
     log('configuration','accepted')
     try:
         host = _session_connection(host, paths)
@@ -1232,10 +1278,8 @@ def session_start(*, config=None, home=None, host=None, paths=None, environment=
         log('environment','imported')
     else:
         log('environment','manager_retained')
-    codes=[]
-    for target in config.screen_targets():
-        if target.autostart and target.url:
-            codes.append(_session_target_start(config.for_screen(target.id),home,host,paths,log))
+    for context in targets:
+        codes.append(_session_target_start(context,home,host,paths,log))
     return 1 if 1 in codes else 2 if 2 in codes else 0
 
 

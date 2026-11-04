@@ -6,14 +6,12 @@ runtime lease or acquire that lock, including calls from the nightly worker.
 from __future__ import annotations
 
 from dataclasses import replace
-
-from dataclasses import replace
 import os
 
 from .config import Config
 from .system import Host, Paths
 from . import display
-from .monitors import resolve_output
+from .monitors import hardware_topology, resolve_output
 
 
 def _context(config,target):
@@ -46,6 +44,11 @@ def _conflict(config,target,inventory,*,host=None,paths=None,selected=None):
     selected=selected or _applied_context(config,target,host,paths)
     found=resolve_output(inventory,selected.output,auto=target=='default')
     if found['state']!='ok':return found
+    # A pinned snapshot can predate other targets. Use the protected current
+    # list for membership, then resolve each other target's applied settings.
+    if selected.runtime_pin and paths and (paths.config.exists() or paths.config.is_symlink()):
+        from .runtime import RuntimeStore
+        config=Config.from_dict(RuntimeStore(paths,host)._read(paths.config))
     logical=found['output']['id']
     for other in config.screen_targets():
         if other.id==target:continue
@@ -60,10 +63,12 @@ def _conflict(config,target,inventory,*,host=None,paths=None,selected=None):
 
 def inspect_screens(config:Config,host=None,paths=None):
     host,paths=host or Host(),paths or Paths()
+    hardware=hardware_topology(paths)
     try:
         inventory=_inventory(config,host,paths) if config.display else {'state':'not_applicable'}
     except (OSError,ValueError,RuntimeError):
-        inventory={'state':'unknown','reason':'사용자 화면 출력 조회를 완료하지 못했습니다.'}
+        inventory={'state':'unknown','reason':'사용자 화면 출력 조회를 완료하지 못했습니다.',
+                   'next_action':'화면 계정과 활성 GNOME 로그인 세션을 확인하세요.'}
     targets=[]
     for screen in config.screen_targets():
         try:
@@ -90,8 +95,9 @@ def inspect_screens(config:Config,host=None,paths=None):
     failures=any(t['state'] in {'unknown','error','blocked'} or t['placement']['state'] in {'unknown','error','blocked'} for t in targets)
     pending=inventory.get('state') not in {'ok','not_applicable'} or any(t['state'] not in {'running','stopped','not_applicable'} or t['placement']['state']=='pending' for t in targets)
     code=1 if failures else 2 if pending else 0
-    return {'outputs':inventory.get('outputs',[]),'logical_outputs':inventory.get('logical_outputs',[]),
+    return {**hardware,'outputs':inventory.get('outputs',[]),'logical_outputs':inventory.get('logical_outputs',[]),
             'output_state':inventory.get('state','unknown'),'reason':inventory.get('reason',''),
+            'output_next_action':inventory.get('next_action',''),
             'targets':targets,'exit_code':code,'state':'unknown' if failures else 'pending' if pending else 'ok',
             'limits':'OS 출력·프로세스·관리 창 관측입니다. 외부 패널 수와 실제 표시 내용은 별도 확인이 필요합니다.'}
 
@@ -152,7 +158,8 @@ def screen_action(action,config:Config,target='default',host=None,paths=None,*,t
             if guard['state']!='ok':return guard | {'exit_code':1 if guard['state']=='blocked' else 2}
     result=display.chrome_action(action,context,host=host,paths=paths)
     if action in {'start','restart'} and result.get('state')=='starting':
-        return result | {'exit_code':2,'state':'pending','reason':'실행 요청을 접수했습니다. 프로세스·창·배치·문서 확인을 기다립니다.'}
+        return result | {'exit_code':2,'state':'pending','submitted':True,
+                         'reason':'실행 요청을 접수했습니다. 프로세스·창·배치·문서 확인을 기다립니다.'}
     if action in {'status','check'}:
         if context.schema_version==1 and context.output is None:
             result['placement']={'state':'not_applicable','reason':'기존 기본 화면의 배치를 유지합니다.'}

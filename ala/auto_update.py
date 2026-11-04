@@ -313,7 +313,7 @@ def nightly(*, paths=None, host=None, now=None, apply=None, allowed=None):
             results.append({'state': 'pending', 'target_id': state['target_id'],
                             'reason': '실제 서명 검증된 런타임 후보가 필요합니다.'})
             break
-        result = (apply or apply_target)(state['target_id'], paths=paths, host=host)
+        result = (apply or apply_target)(state['target_id'], paths=paths, host=host, preserve_screen_settings=True)
         results.append(result)
         if result.get('state') in {'failed', 'cancelled', 'unknown'}:
             break

@@ -6,6 +6,7 @@ boot until a separately observed trial is committed.
 """
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import datetime, timezone
 import hashlib
 import json
@@ -212,6 +213,15 @@ class RuntimeStore:
         self._write(self.state_path(target), state)
         return state
 
+    def settings_saved(self, target):
+        """Invalidate old results without staging an unapplied edit for nightly rollout."""
+        state = self.load(target)
+        if state is None or self.active(state):
+            raise RuntimeError('저장한 화면 설정의 변경을 기록할 수 없습니다.')
+        state['generation'] += 1
+        state['operation'] = None
+        self._write(self.state_path(target), state)
+
     @staticmethod
     def _expect(state, generation=None, revision=None):
         if generation is not None and generation != state['generation']:
@@ -258,9 +268,12 @@ class RuntimeStore:
         # cannot prove that an operator's stop intent has expired.
         return not (previous is not None and current is not None and previous != current)
 
-    def reserve(self, target, kind, *, expected_generation=None, expected_revision=None, ttl=240, unit=None):
+    def reserve(self, target, kind, *, expected_generation=None, expected_revision=None, ttl=240, unit=None,
+                settings=None):
         if kind not in KINDS or type(ttl) not in (int, float) or not 0 < ttl <= 900:
             raise ValueError('허용된 화면 작업과 제한 시간이 필요합니다.')
+        if settings is not None and kind != 'runtime':
+            raise ValueError('화면 설정 후보에는 런타임 전환이 필요합니다.')
         from .jobs import JobStore
         if any(row.get('state') in {'queued', 'running'} for row in JobStore(self.paths, self.host).list()):
             raise RuntimeError('설치 작업 완료 후 화면 작업을 시작하세요.')
@@ -268,7 +281,7 @@ class RuntimeStore:
         if state is None:
             raise ValueError('화면 런타임의 최초 등록이 필요합니다.')
         self._expect(state, expected_generation, expected_revision)
-        if self.is_stopped(state):
+        if self.is_stopped(state) and settings is None:
             raise RuntimeError('수동 중지한 화면은 자동 작업으로 켜지 않습니다.')
         if self.active(state):
             raise RuntimeError('이 대상의 화면 작업이 진행 중입니다.')
@@ -278,6 +291,12 @@ class RuntimeStore:
                      'expires_monotonic': self.monotonic() + ttl, 'unit': unit,
                      'candidate': state.get('desired') if kind == 'runtime' else None,
                      'phase': 'reserved'}
+        if settings is not None:
+            for key in ('committed', 'desired'):
+                self._validate_selection(settings[key])
+                if settings[key]['release'] != state[key]['release']:
+                    raise ValueError('설정 적용은 기존 화면 코드 선택을 유지해야 합니다.')
+            operation.update(settings_only=True, candidate=settings['committed'], settings_desired=settings['desired'])
         state['operation'] = operation
         self._write(self.state_path(target), state)
         return {'target_id': target, **operation}
@@ -285,27 +304,38 @@ class RuntimeStore:
     def valid(self, token):
         state = self.load(token['target_id'])
         operation = (state or {}).get('operation') or {}
-        return bool(state and self.active(state) and not self.is_stopped(state)
+        return bool(state and self.active(state) and (operation.get('settings_only') or not self.is_stopped(state))
                     and operation.get('operation_id') == token.get('operation_id')
                     and operation.get('generation') == token.get('generation')
                     and operation.get('revision') == token.get('revision'))
 
-    def finish(self, token, *, success=True, reason=''):
+    def finish(self, token, *, success=True, reason='', outcome=None, next_action=''):
         state = self.load(token['target_id'])
         if state is None or not self.valid(token):
             raise RuntimeError('이미 취소·교체·중단된 화면 작업입니다.')
         operation = state['operation']
         if success and operation['kind'] == 'runtime':
             state['committed'] = operation['candidate']
-        state['last_result'] = {'operation_id': operation['operation_id'], 'kind': operation['kind'],
-                                'state': 'completed' if success else 'failed', 'ended_at': _stamp(),
-                                'reason': reason}
+            if operation.get('settings_only'):
+                state['desired'] = operation['settings_desired']
+        self._record_result(state, operation, outcome or ('completed' if success else 'failed'), reason, next_action)
         state['operation'] = None
         self._write(self.state_path(token['target_id']), state)
         return state
 
+    @staticmethod
+    def _record_result(state, operation, outcome, reason='', next_action=''):
+        result = {'operation_id': operation['operation_id'], 'kind': operation['kind'],
+                  'state': outcome, 'ended_at': _stamp(), 'reason': reason}
+        if next_action:
+            result['next_action'] = next_action
+        if operation.get('settings_only'):
+            state['last_settings_result'] = result | {'generation': state['generation']}
+        else:
+            state['last_result'] = result
+
     def phase(self, token, phase):
-        if phase not in {'trial', 'observing', 'rollback'} or token.get('kind') != 'runtime':
+        if phase not in {'preflight', 'trial', 'observing', 'rollback'} or token.get('kind') != 'runtime':
             raise ValueError('허용된 런타임 전환 단계가 필요합니다.')
         if not self.valid(token):
             raise RuntimeError('이미 취소·교체·중단된 화면 작업입니다.')
@@ -323,8 +353,7 @@ class RuntimeStore:
         state['stop_boot_id'] = self.boot_id() if stopped else None
         state['stop_session_id'] = self._session(state) if stopped else None
         if state.get('operation'):
-            state['last_result'] = {'operation_id': state['operation']['operation_id'],
-                                    'kind': state['operation']['kind'], 'state': 'cancelled', 'ended_at': _stamp()}
+            self._record_result(state, state['operation'], 'cancelled', '다른 화면 제어 요청으로 작업이 취소됐습니다.')
         state['operation'] = None
         self._write(self.state_path(target), state)
         return state
@@ -341,6 +370,46 @@ def snapshot(target='default', *, paths=None, host=None):
     store = RuntimeStore(paths, host)
     state = store.load(target)
     return state | {'stopped': store.is_stopped(state)} if state is not None else None
+
+
+def _target_config(config, target):
+    return next((screen for screen in config.screen_targets() if screen.id == target), None)
+
+
+def _with_screen(config, screen, *, saved_schema):
+    if config.schema_version == saved_schema == 1:
+        return replace(config, url=screen.url, autostart=screen.autostart)
+    screens = {item.id: item for item in config.screen_targets()}
+    screens[screen.id] = screen
+    return replace(config, schema_version=2, screens=tuple(screens.values()))
+
+
+def settings_status(config, target, *, paths=None, host=None, state=None):
+    """Expose the confirmed configuration, even while a trial window is running."""
+    from .config import Config
+    store = RuntimeStore(paths, host)
+    committed = (state or {}).get('committed')
+    if committed is None:
+        return {'state': 'unknown', 'pending': False, 'reason': '화면 관리 버전 최초 등록이 필요합니다.',
+                'next_action': '업데이트 관리에서 선택 화면 코드 적용을 확인하세요.'}
+    applied = _target_config(Config.from_dict(store._validate_selection(committed)), target)
+    saved = _target_config(config, target)
+    pending = applied != saved
+    value = {'state': 'pending' if pending else 'applied', 'pending': pending,
+             'applied_url': applied.url if applied else None,
+             'applied_frontend': applied.frontend.to_dict() if applied else None}
+    operation = state.get('operation') or {}
+    if operation.get('settings_only'):
+        value['operation_id'] = operation['operation_id']
+        if store.active(state) and store.trial_owner_active(state):
+            return value | {'state': 'queued' if operation.get('phase') == 'reserved' else 'running',
+                            'reason': '저장한 설정을 적용하는 중입니다.'}
+        return value | {'state': 'interrupted', 'reason': '화면 설정 작업의 실행이 중단됐습니다.',
+                        'next_action': '현재 화면을 확인한 뒤 설정 적용을 다시 실행하세요.'}
+    last = state.get('last_settings_result') or {}
+    if last.get('generation') == state['generation']:
+        value.update({key: last[key] for key in ('operation_id', 'state', 'reason', 'next_action') if key in last})
+    return value
 
 
 def reserve(target, kind='frontend', *, paths=None, host=None, **kwargs):
@@ -531,7 +600,7 @@ def guard_config_change(current, new, *, paths=None, host=None):
         selected = state['committed']
         if not (Path(selected['release']) / 'COMPATIBILITY.json').is_file():
             if store._validate_selection(selected) != data:
-                raise ValueError('기존 화면을 유지하려면 먼저 schema1 구성 그대로 최초 야간 런타임 이전을 완료하세요.')
+                raise ValueError('기존 화면 설정을 유지한 채 업데이트 관리의 선택 화면 코드 적용으로 최초 이전을 완료하세요.')
 
 
 def code_ready(report, version, revision=None):
@@ -554,8 +623,37 @@ def code_ready(report, version, revision=None):
                    if row.get('id', '').startswith(('chrome.process', 'chrome.option.', 'chrome.forbidden', 'chrome.window')))
 
 
+def _prepare_nightly_selection(store, target):
+    """Rebase RC21's previously staged edits before automatic code rollout."""
+    from .config import Config
+    from .signature import verified_release
+
+    with change_lock(store.paths):
+        state = store.load(target)
+        if state is None or state['desired'] == state['committed']:
+            return state
+        if store.active(state):
+            raise RuntimeError('이 대상의 화면 작업이 진행 중입니다.')
+        desired = state['desired']
+        if not verified_release(desired['version'], paths=store.paths):
+            raise RuntimeError('실제 서명 검증된 런타임 후보가 필요합니다.')
+        current = Config.from_dict(store._validate_selection(state['committed']))
+        candidate = Config.from_dict(store._validate_selection(desired))
+        applied = _target_config(current, target)
+        if applied is None:
+            raise ValueError('확정된 화면 설정을 확인하지 못했습니다.')
+        normalized = _with_screen(candidate, applied, saved_schema=current.schema_version)
+        if current.schema_version == 1 and len(normalized.screen_targets()) == 1:
+            # RC21 screen edits upgraded the container to schema 2. Keep an
+            # otherwise unchanged legacy default from restarting just for that.
+            normalized = replace(normalized, schema_version=1, screens=(), url=applied.url, autostart=applied.autostart)
+        if normalized != candidate:
+            state = store.stage(target, desired['release'], normalized, expected_generation=state['generation'])
+        return state
+
+
 def apply_target(target, *, paths=None, host=None, control=None, monotonic=None, sleep=None,
-                 unit='ala-runtime-nightly.service'):
+                 unit='ala-runtime-nightly.service', settings_operation_id=None, preserve_screen_settings=False):
     """Observe outside the root lock; commit only the same live generation.
 
     The caller enforces the maintenance window. Each phase has a separate
@@ -563,65 +661,112 @@ def apply_target(target, *, paths=None, host=None, control=None, monotonic=None,
     """
     store = RuntimeStore(paths, host, monotonic=monotonic)
     clock, pause = store.monotonic, sleep or time.sleep
-    state = store.load(target)
+    if preserve_screen_settings:
+        try:
+            state = _prepare_nightly_selection(store, target)
+        except (OSError, ValueError, RuntimeError) as exc:
+            return {'state': 'pending', 'target_id': target, 'reason': str(exc)}
+    else:
+        state = store.load(target)
     if state is None:
         return {'state': 'pending', 'reason': '화면 런타임의 최초 등록이 필요합니다.'}
-    if state['desired'] == state['committed']:
+    token = None
+    if settings_operation_id is not None:
+        # systemd-run returns after exec. The worker may start while submit still
+        # holds the reservation lock, so wait to claim the exact queued operation.
+        with change_lock(store.paths, blocking=True):
+            state = store.load(target)
+            operation = (state or {}).get('operation') or {}
+            if (not operation.get('settings_only') or operation['operation_id'] != settings_operation_id
+                    or operation.get('phase') != 'reserved' or operation.get('unit') != unit):
+                return {'state': 'cancelled', 'target_id': target}
+            token = {'target_id': target, **operation}
+            if not store.valid(token):
+                return {'state': 'cancelled', 'target_id': target}
+            store.phase(token, 'preflight')
+    previous = state['committed']
+    candidate = token['candidate'] if token is not None else state['desired']
+    if previous == candidate and token is None:
         return {'state': 'kept', 'reason': '중지된 화면 또는 적용할 후보가 없는 화면입니다.'}
-    previous, candidate = state['committed'], state['desired']
     if control is None:
         from .config import Config
         from .screens import screen_action
         def control(action, selection, *, timeout):
-            from dataclasses import replace
             config = Config.from_dict(store._validate_selection(selection)).for_screen(target)
             config = replace(config, runtime_pin=selection)
             return screen_action(action, config, target=target, paths=store.paths, host=store.host, timeout=timeout, internal=True)
 
     def invoke(action, selection, deadline):
-        remaining = deadline - clock()
-        if remaining <= 0:
-            raise RuntimeError('화면 코드 전환 단계의 제한 시간이 초과됐습니다.')
-        result = control(action, selection, timeout=min(30, remaining))
+        def run():
+            remaining = deadline - clock()
+            if remaining <= 0:
+                raise RuntimeError('화면 전환 단계의 제한 시간이 초과됐습니다.')
+            return control(action, selection, timeout=min(30, remaining))
+
+        if action in {'start', 'stop'}:
+            # Fence a short lifecycle request against manual stop/restart. Polling,
+            # preflight, and the stable observation window stay outside this lock.
+            with change_lock(store.paths, blocking=True):
+                if not store.valid(token):
+                    raise RuntimeError('화면 작업이 취소됐습니다.')
+                result = run()
+        else:
+            result = run()
         if clock() >= deadline:
-            raise RuntimeError('화면 코드 전환 단계의 제한 시간이 초과됐습니다.')
+            raise RuntimeError('화면 전환 단계의 제한 시간이 초과됐습니다.')
         return result
 
+    def conclude(outcome, reason, next_action='', *, commit=False):
+        result = {'state': outcome, 'target_id': target, 'reason': reason,
+                  'next_action': next_action, 'exit_code': 1 if outcome == 'failed' else 2}
+        if settings_operation_id is not None:
+            with change_lock(store.paths, blocking=True):
+                if not store.valid(token):
+                    return {'state': 'cancelled', 'target_id': target}
+                store.finish(token, success=commit, reason=reason, outcome=outcome, next_action=next_action)
+        return result | ({'selection': candidate} if commit else {})
+
     start_deadline = clock() + 90
-    before = invoke('status', previous, start_deadline)
-    service = before.get('service') or {}
-    if service.get('QueryError'):
-        return {'state': 'pending', 'reason': '화면 실행 상태를 확인하지 못해 선택을 유지합니다.'}
-    if service.get('ActiveState') in {'inactive', 'failed'}:
-        # Inactive migration must not require starting a window (URL may not
-        # exist yet). This proves code selection, never visual acceptance.
-        tested = store.host.run([str(Path(candidate['release']) / '.venv/bin/python'), '-I', '-B',
-                                 str(Path(candidate['release']) / 'entry.py'), '--version'])
-        if tested.returncode or tested.stdout.strip() != candidate['version']:
-            return {'state': 'failed', 'reason': '후보의 고정 실행 버전을 확인하지 못했습니다.'}
+    try:
+        before = invoke('status', previous, start_deadline)
+        service = before.get('service') or {}
+        if service.get('QueryError') or service.get('ActiveState') not in {'inactive', 'failed', 'active', 'activating'}:
+            return conclude('pending', before.get('reason') or '화면 실행 상태를 확인하지 못해 선택을 유지합니다.',
+                            before.get('next_action') or '사용자 서비스와 GNOME 로그인 상태를 확인하세요.')
+        if service['ActiveState'] in {'inactive', 'failed'}:
+            # Inactive selection is independent of whether a window can be started.
+            tested = store.host.run([str(Path(candidate['release']) / '.venv/bin/python'), '-I', '-B',
+                                     str(Path(candidate['release']) / 'entry.py'), '--version'])
+            if tested.returncode or tested.stdout.strip() != candidate['version']:
+                return conclude('failed', '후보의 고정 실행 버전을 확인하지 못했습니다.', '화면 코드 설치 상태를 확인하세요.')
+            if settings_operation_id is not None:
+                return conclude('selected_unverified', '설정을 적용했습니다. 화면은 중지 상태입니다.', commit=True)
+            with change_lock(store.paths):
+                latest = store.load(target)
+                store._expect(latest, state['generation'], previous['revision'])
+                if store.active(latest):
+                    raise RuntimeError('이 대상의 화면 작업이 진행 중입니다.')
+                latest['committed'] = candidate
+                latest['generation'] += 1
+                latest['operation'] = None
+                latest['last_result'] = {'kind': 'runtime', 'state': 'selected_unverified', 'ended_at': _stamp(),
+                                         'reason': '미실행 화면의 코드 선택만 완료했습니다. 실제 화면 수용은 대기 중입니다.'}
+                store._write(store.state_path(target), latest)
+            return conclude('selected_unverified', '코드 선택 완료·실행 미검증. 중지된 화면을 켜지 않았습니다.', commit=True)
+        if store.is_stopped(state):
+            return conclude('pending', '수동 중지 이후 화면이 실행 중인 상태입니다.', '현재 화면의 중지 상태를 확인하세요.')
+        preflight = invoke('preflight', candidate, start_deadline)
+        if preflight.get('exit_code', 1) != 0:
+            return conclude('pending', preflight.get('reason') or '로그인 세션·출력·실행 준비 확인이 필요합니다.',
+                            preflight.get('next_action') or '화면 준비 상태를 확인한 뒤 다시 적용하세요.')
+    except (OSError, RuntimeError, ValueError):
+        if settings_operation_id is None:
+            raise
+        return conclude('failed', '화면 적용 사전 확인을 완료하지 못했습니다.', '상태와 로그를 확인한 뒤 다시 적용하세요.')
+    if token is None:
         with change_lock(store.paths):
-            latest = store.load(target)
-            store._expect(latest, state['generation'], previous['revision'])
-            if store.active(latest):
-                raise RuntimeError('이 대상의 화면 작업이 진행 중입니다.')
-            latest['committed'] = candidate
-            latest['generation'] += 1
-            latest['operation'] = None
-            latest['last_result'] = {'kind': 'runtime', 'state': 'selected_unverified', 'ended_at': _stamp(),
-                                     'reason': '미실행 화면의 코드 선택만 완료했습니다. 실제 화면 수용은 대기 중입니다.'}
-            store._write(store.state_path(target), latest)
-        return {'state': 'selected_unverified', 'target_id': target, 'selection': candidate, 'exit_code': 2,
-                'reason': '코드 선택 완료·실행 미검증. 중지된 화면을 켜지 않았습니다.'}
-    if service.get('ActiveState') not in {'active', 'activating'} or store.is_stopped(state):
-        return {'state': 'pending', 'reason': '현재 화면 실행 또는 수동 중지 상태를 확인하세요.'}
-    preflight = invoke('preflight', candidate, start_deadline)
-    if preflight.get('exit_code', 1) != 0:
-        return {'state': 'pending', 'target_id': target,
-                'reason': '후보의 로그인 세션·출력·실행 준비가 확인되지 않아 기존 화면을 유지합니다.'}
-    with change_lock(store.paths):
-        token = store.reserve(target, 'runtime', expected_generation=state['generation'],
-                              expected_revision=previous['revision'], ttl=300,
-                              unit=unit)
+            token = store.reserve(target, 'runtime', expected_generation=state['generation'],
+                                  expected_revision=previous['revision'], ttl=300, unit=unit)
 
     def valid():
         return store.valid(token)
@@ -673,7 +818,7 @@ def apply_target(target, *, paths=None, host=None, control=None, monotonic=None,
         if not wait_ready(candidate, clock() + 60, stable=True):
             raise RuntimeError('후보 화면 코드의 안정 관측에 실패했습니다.')
         with change_lock(store.paths):
-            result = store.finish(token, success=True)
+            result = store.finish(token, success=True, reason='저장한 설정을 적용했습니다.' if settings_operation_id else '')
         return {'state': 'completed', 'target_id': target, 'selection': result['committed']}
     except (OSError, RuntimeError, ValueError):
         if not valid():
@@ -693,14 +838,15 @@ def apply_target(target, *, paths=None, host=None, control=None, monotonic=None,
             return {'state': 'cancelled', 'target_id': target}
         try:
             with change_lock(store.paths):
-                store.finish(token, success=False, reason='후보 적용 실패; 이전 화면 복원 ' + ('완료' if restored else '확인 불가'))
+                store.finish(token, success=False, reason='후보 적용 실패 · 이전 화면 복원 ' + ('완료' if restored else '확인 불가'),
+                             next_action='선택한 화면의 출력과 로그를 확인하세요.' if settings_operation_id else '')
         except RuntimeError:
             return {'state': 'cancelled', 'target_id': target}
         return {'state': 'failed', 'target_id': target, 'restored': restored,
                 'reason': '후보 적용에 실패해 나머지 대상의 적용을 보류합니다.'}
 
 
-def submit_apply(target='default', *, release=None, paths=None, host=None):
+def submit_apply(target='default', *, release=None, paths=None, host=None, settings_config=None):
     """An explicit operator transition may run outside the automatic window."""
     paths, host = paths or Paths(), host or Host()
     target_id(target)
@@ -708,6 +854,9 @@ def submit_apply(target='default', *, release=None, paths=None, host=None):
     with change_lock(paths):
         state = store.load(target)
         if state is None:
+            if settings_config is not None:
+                return {'state': 'pending', 'exit_code': 2, 'reason': '확정된 화면 관리 버전이 필요합니다.',
+                        'next_action': '업데이트 관리에서 선택 화면 코드 적용으로 최초 이전을 완료하세요.'}
             raise ValueError('화면 런타임의 최초 등록이 필요합니다.')
         if store.active(state):
             raise RuntimeError('이 대상의 화면 작업이 진행 중입니다.')
@@ -717,17 +866,55 @@ def submit_apply(target='default', *, release=None, paths=None, host=None):
         properties = dict(line.split('=', 1) for line in active.stdout.splitlines() if '=' in line)
         if properties.get('ActiveState') in {'active', 'activating', 'deactivating', 'reloading'}:
             raise RuntimeError('이 대상의 명시적 런타임 적용이 진행 중입니다.')
+        token = None
+        if settings_config is not None:
+            from .config import Config
+            saved = settings_config()
+            screen = _target_config(saved, target)
+            if screen is None:
+                raise ValueError('해당 화면 ID가 구성에 없습니다.')
+            committed = state['committed']
+            config = Config.from_dict(store._validate_selection(committed))
+            if screen == _target_config(config, target):
+                return {'state': 'kept', 'exit_code': 0, 'reason': '저장한 설정이 이미 적용돼 있습니다.'}
+            if not (Path(committed['release']) / 'COMPATIBILITY.json').is_file():
+                return {'state': 'pending', 'exit_code': 2, 'reason': '기존 화면 코드가 적용 스냅샷을 지원하지 않습니다.',
+                        'next_action': '업데이트 관리에서 선택 화면 코드 적용으로 최초 이전을 완료하세요.'}
+            # Rebase the pending code snapshot too. A later code rollout must
+            # retain the applied edit while preserving its own version and other settings.
+            desired = state['desired']
+            desired_config = Config.from_dict(store._validate_selection(desired))
+            try:
+                candidate = store.selection(committed['release'], _with_screen(config, screen, saved_schema=saved.schema_version))
+                desired_candidate = store.selection(desired['release'], _with_screen(desired_config, screen, saved_schema=saved.schema_version))
+            except ValueError:
+                return {'state': 'pending', 'exit_code': 2, 'reason': '저장한 설정을 기존 화면 선택과 함께 적용할 수 없습니다.',
+                        'next_action': '겹치는 출력 설정과 업데이트 관리의 선택 화면 코드 적용을 확인하세요.'}
+            token = store.reserve(target, 'runtime', ttl=300, unit=unit,
+                                  settings={'committed': candidate, 'desired': desired_candidate})
+        worker_args = ['_runtime-worker', target]
+        if token is not None:
+            worker_args.append(token['operation_id'])
         result = host.run(['systemd-run', '--unit=' + unit, '--collect', '--expand-environment=no',
                            '--property=Type=exec', '--property=TimeoutStartSec=infinity',
                            str(pinned / '.venv/bin/python'), '-I', str(pinned / 'entry.py'),
-                           '_runtime-worker', target], timeout=30)
+                           *worker_args], timeout=30)
         if result.returncode:
+            if token is not None:
+                reason = '화면 설정 적용 작업을 시작하지 못했습니다.'
+                next_action = '사용자 서비스와 시스템 작업 상태를 확인한 뒤 다시 적용하세요.'
+                store.finish(token, success=False, reason=reason, next_action=next_action)
+                return {'state': 'failed', 'exit_code': 1, 'reason': reason, 'next_action': next_action,
+                        'operation_id': token['operation_id']}
             raise RuntimeError('화면 런타임 적용 서비스의 시작을 확인하지 못했습니다.')
     return {'state': 'queued', 'target_id': target, 'unit': unit, 'exit_code': 2,
-            'next_action': '화면 관리에서 적용 상태를 확인하세요. 현재 화면은 실제 전환 단계까지 유지됩니다.'}
+            'reason': '화면 설정 적용을 접수했습니다.' if settings_config is not None else '화면 코드 적용을 접수했습니다.',
+            'next_action': '화면 관리에서 적용 상태를 확인하세요. 현재 화면은 실제 전환 단계까지 유지됩니다.'} | (
+                {'operation_id': token['operation_id']} if token is not None else {})
 
 
-def run_worker(target='default', *, paths=None, host=None):
+def run_worker(target='default', *, paths=None, host=None, settings_operation_id=None):
     result = apply_target(target, paths=paths, host=host,
-                          unit='ala-runtime-apply-' + target_id(target) + '.service')
+                          unit='ala-runtime-apply-' + target_id(target) + '.service',
+                          settings_operation_id=settings_operation_id)
     return 1 if result['state'] in {'failed', 'unknown', 'cancelled'} else 2 if result['state'] in {'pending', 'selected_unverified'} else 0

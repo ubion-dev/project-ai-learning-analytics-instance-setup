@@ -133,6 +133,49 @@ def save_initial_config(operations, config):
     atomic_json(operations.paths.config, config.to_dict(), 0o644)
 
 
+def test_screen_save_does_not_stage_unapplied_settings_for_nightly(runtime_operations, monkeypatch):
+    from ala import runtime
+
+    operations, store, (old, _) = runtime_operations
+    before = Config(user='user', url='https://example.com/display?view=previous')
+    save_initial_config(operations, before)
+    original = store.bootstrap('default', old, before)
+    saved = screen(url='https://example.com/display?view=updated', output=None,
+                   frontend={'enabled': True, 'manifest_url': 'https://example.com/manifest.json'})
+
+    operations.dispatch('screens-save', {'target': saved, 'expected_config': before.to_dict()})
+
+    state = store.load('default')
+    assert state['committed'] == original['committed']
+    assert state['desired'] == original['desired']
+    assert runtime.apply_target('default', paths=operations.paths, host=operations.host)['state'] == 'kept'
+    assert not operations.host.calls
+
+    monkeypatch.setattr('ala.screens.inspect_screens', lambda *_args, **_kwargs: {'targets': [dict(saved)]})
+    target = operations.dispatch('screens-inspect', {})['targets'][0]
+    assert target['url'] == saved['url'] and target['applied_url'] == before.url
+    assert target['frontend']['enabled'] and not target['applied_frontend']['enabled']
+    assert target['settings']['pending'] and target['settings']['state'] == 'pending'
+
+
+def test_screen_save_preserves_global_settings_if_runtime_write_fails(runtime_operations, monkeypatch):
+    from ala.runtime import RuntimeStore
+
+    operations, store, (old, _) = runtime_operations
+    before = Config(user='user', url='https://example.com/previous')
+    save_initial_config(operations, before)
+    store.bootstrap('default', old, before)
+    before_bytes = operations.paths.config.read_bytes()
+
+    def fail(*_args):
+        raise OSError('fixture storage failure')
+
+    monkeypatch.setattr(RuntimeStore, 'settings_saved', fail)
+    with pytest.raises(OSError):
+        operations.dispatch('screens-save', {'target': screen(), 'expected_config': before.to_dict()})
+    assert operations.paths.config.read_bytes() == before_bytes
+
+
 def test_config_import_stages_new_configuration_without_moving_committed_runtime(runtime_operations):
     operations, store, (old, new) = runtime_operations
     before = Config(user='user', url='https://example.com/previous')

@@ -128,10 +128,11 @@ class Operations:
             return submit_apply(target, release=self.release, paths=self.paths, host=self.host)
         if action == 'screens-inspect':
             from .screens import inspect_screens
-            from .runtime import snapshot
+            from .runtime import settings_status, snapshot
             from .frontend import read_status
             from .screen_control import read_status as reload_status
-            value = inspect_screens(self.config(), host=self.host, paths=self.paths)
+            config = self.config()
+            value = inspect_screens(config, host=self.host, paths=self.paths)
             frontend = read_status(paths=self.paths)
             for target in value.get('targets', []):
                 target['reload'] = reload_status(target['id'], paths=self.paths, host=self.host)
@@ -139,11 +140,23 @@ class Operations:
                     'state': 'unknown' if frontend.get('state') == 'unknown' else 'pending',
                     'reason': frontend.get('reason') or '배포 연동 미관측'})
                 try:
-                    target['runtime'] = snapshot(target['id'], host=self.host, paths=self.paths) or {
+                    state = snapshot(target['id'], host=self.host, paths=self.paths)
+                    target['runtime'] = state or {
                         'state': 'pending', 'reason': '관리 버전 최초 등록 대기'}
+                    settings = settings_status(config, target['id'], host=self.host, paths=self.paths, state=state)
+                    for key in ('applied_url', 'applied_frontend'):
+                        if key in settings:
+                            target[key] = settings.pop(key)
+                    target['settings'] = settings
                 except (OSError, ValueError, RuntimeError) as exc:
                     target['runtime'] = {'state': 'unknown', 'reason': str(exc)}
+                    target['settings'] = {'state': 'unknown', 'pending': False,
+                                          'reason': '화면의 확정 설정을 확인하지 못했습니다.'}
             return value
+        if action == 'screens-apply':
+            from .runtime import submit_apply
+            return submit_apply(payload.get('target', 'default'), release=self.release, paths=self.paths,
+                                host=self.host, settings_config=self.config)
         if action == 'frontend-retry':
             from .config import ScreenConfig
             target = payload.get('target')
@@ -188,15 +201,17 @@ class Operations:
                 self._check_target_preservation(current, config)
                 self._check_runtime_change([target.id])
                 protected_directory(self.paths.config.parent, 0o755)
+                store = RuntimeStore(self.paths, self.host)
+                registered = store.load(target.id) is not None
                 if config != current:
+                    if registered:
+                        store.settings_saved(target.id)
                     atomic_json(self.paths.config, config.to_dict(), 0o644)
+                if not registered:
                     self._sync_runtime_configuration(config, [target.id])
-                else:
-                    from .runtime import RuntimeStore
-                    if RuntimeStore(self.paths, self.host).load(target.id) is None:
-                        self._sync_runtime_configuration(config, [target.id])
             return {'saved': True, 'config': config.to_dict(), 'state': 'pending', 'exit_code': 2,
-                    'reason': '구성을 저장했습니다. 간편 설정에서 부팅 등록을 준비하고 화면 관리에서 적용하세요.'}
+                    'reason': ('새 화면을 저장했습니다. 간편 설정에서 화면을 등록한 뒤 시작하세요.' if existing is None
+                               else '구성을 저장했습니다. 화면 관리에서 설정 적용을 선택하세요.')}
         if action == 'screens-action':
             from .screens import screen_action
             name = payload.get('action')
@@ -207,7 +222,7 @@ class Operations:
                 from .screen_control import submit_reload
                 return submit_reload(self.config(), target=target, release=self.release, paths=self.paths, host=self.host)
             if name in {'start', 'stop', 'restart'}:
-                with change_lock(self.paths):
+                with change_lock(self.paths, blocking=name == 'stop'):
                     if any(r['state'] in {'queued', 'running'} for r in JobStore(self.paths, self.host).list()):
                         raise RuntimeError('설치 중에는 화면 변경 작업을 하지 않습니다.')
                     if name in {'start', 'stop', 'restart'}:

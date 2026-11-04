@@ -1,10 +1,9 @@
-"""GNOME 47 display bridge. Observation never changes windows or display topology."""
+"""DRM connector observation and the GNOME 47 display bridge."""
 from __future__ import annotations
 
 import ast
 import json
-import os
-from pathlib import Path
+import re
 
 from .system import Host, Paths
 
@@ -13,6 +12,31 @@ BUS = 'org.ala.Display1'
 OBJECT = '/org/ala/Display1'
 PROTOCOL = 1
 SUPPORTED_GNOME = ('47',)
+DRM_CONNECTOR = re.compile(r'card[0-9]+-([A-Za-z0-9]+(?:-[A-Za-z0-9]+)*-[0-9]+)')
+
+
+def hardware_topology(paths=None):
+    """Read kernel connector status independently of the GNOME session."""
+    root = (paths or Paths()).at('/sys/class/drm')
+    try:
+        entries = sorted(root.iterdir())
+    except OSError:
+        return {'hardware_outputs': [], 'hardware_output_state': 'unknown',
+                'hardware_output_reason': 'Linux DRM 커넥터를 조회하지 못했습니다.'}
+    outputs = []
+    for entry in entries:
+        match = DRM_CONNECTOR.fullmatch(entry.name)
+        if not match:
+            continue
+        try:
+            status = (entry / 'status').read_text(encoding='ascii').strip()
+        except (OSError, UnicodeError):
+            # A connector may disappear between directory enumeration and read.
+            status = 'unknown'
+        if status not in {'connected', 'disconnected'}:
+            status = 'unknown'
+        outputs.append({'id': entry.name, 'name': match.group(1), 'status': status})
+    return {'hardware_outputs': outputs, 'hardware_output_state': 'ok', 'hardware_output_reason': ''}
 
 
 def bridge(method, request=None, *, host=None):
@@ -38,7 +62,8 @@ def bridge(method, request=None, *, host=None):
             raise ValueError()
         return value
     except (SyntaxError,ValueError,TypeError,MemoryError,RecursionError):
-        return {'state':'unknown','reason':'GNOME 화면 확장 응답의 버전·형식을 확인하지 못했습니다.'}
+        return {'state':'unknown','reason':'GNOME 화면 확장 응답의 버전·형식을 확인하지 못했습니다.',
+                'next_action':'설치된 ala 버전과 GNOME 화면 확장의 등록·활성화를 확인하세요.'}
 
 
 def _number(value):
@@ -52,7 +77,8 @@ def topology(*,host=None):
     try:
         if str(value.get('gnome_version','')).split('.')[0] not in SUPPORTED_GNOME:
             return {'state':'pending','outputs':[],'logical_outputs':[],
-                    'reason':'현재 GNOME 버전의 정식 배치를 지원하지 않습니다.'}
+                    'reason':'현재 GNOME 버전의 정식 배치를 지원하지 않습니다.',
+                    'next_action':'관리 화면을 실행하는 GNOME 47 세션을 확인하세요.'}
         raw=value['display_config']
         if not isinstance(raw,list) or len(raw)!=4:
             raise ValueError()
@@ -97,15 +123,18 @@ def topology(*,host=None):
                 'reason':'OS가 인식한 출력입니다. 외부 제어 장비의 패널 수는 확인하지 않습니다.'}
     except (ValueError,KeyError,TypeError,IndexError,StopIteration,AttributeError):
         return {'state':'unknown','outputs':[],'logical_outputs':[],
-                'reason':'Mutter 출력과 compositor 좌표를 연결하지 못했습니다.'}
+                'reason':'Mutter 출력과 compositor 좌표를 연결하지 못했습니다.',
+                'next_action':'GNOME 디스플레이 설정에서 활성 출력과 배치를 확인하세요.'}
 
 
 def resolve_output(inventory, selector, *, auto=False):
     if inventory.get('state')!='ok':
-        return {'state':'pending','reason':inventory.get('reason','출력 확인 대기')}
-    choices=[item for item in inventory.get('logical_outputs',[]) if item.get('confirmed')]
+        return {'state':'pending','reason':inventory.get('reason','출력 확인 대기'),
+                'next_action':inventory.get('next_action','')}
+    logical_outputs=inventory.get('logical_outputs',[])
+    choices=[item for item in logical_outputs if item.get('confirmed')]
     if selector is None:
-        matches=choices if auto and len(choices)==1 else []
+        matches=choices if auto and len(logical_outputs)==1 else []
     else:
         matches=[item for item in choices if selector==item['id'] or selector in item['connectors']]
     if len(matches)!=1:

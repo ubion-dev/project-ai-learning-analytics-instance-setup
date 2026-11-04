@@ -5,7 +5,7 @@ import pytest
 
 from ala.config import Config,ScreenConfig
 from ala import monitors
-from ala.system import Command
+from ala.system import Command, Paths
 
 
 class BridgeHost:
@@ -48,6 +48,48 @@ def test_ambiguous_or_missing_output_never_defaults_to_primary():
     value=monitors.topology(host=BridgeHost(state()))
     assert monitors.resolve_output(value,None,auto=True)['state']=='pending'
     assert monitors.resolve_output(value,'unknown')['state']=='pending'
+    value['logical_outputs'][1]['confirmed']=False
+    assert monitors.resolve_output(value,None,auto=True)['state']=='pending'
+    assert monitors.resolve_output(value,'HDMI-1')['state']=='ok'
+
+
+def test_hardware_topology_preserves_card_identity_and_observes_hotplug(tmp_path):
+    paths = Paths(tmp_path)
+    drm = paths.at('/sys/class/drm')
+    drm.mkdir(parents=True)
+    # Real DRM class entries are symlinks to connector devices in sysfs.
+    connector = paths.at('/sys/devices/card0-HDMI-A-1')
+    connector.mkdir(parents=True)
+    (drm / connector.name).symlink_to(connector)
+    (connector / 'status').write_text('connected\n')
+    second = drm / 'card1-HDMI-A-1'
+    second.mkdir()
+    (second / 'status').write_text('disconnected\n')
+    (drm / 'card0-DP-1').symlink_to(drm / 'gone')
+    (drm / 'card0').mkdir()
+    (drm / 'renderD128').mkdir()
+
+    result = monitors.hardware_topology(paths)
+    assert result['hardware_output_state'] == 'ok'
+    assert result['hardware_outputs'] == [
+        {'id': 'card0-DP-1', 'name': 'DP-1', 'status': 'unknown'},
+        {'id': 'card0-HDMI-A-1', 'name': 'HDMI-A-1', 'status': 'connected'},
+        {'id': 'card1-HDMI-A-1', 'name': 'HDMI-A-1', 'status': 'disconnected'},
+    ]
+    (connector / 'status').write_text('disconnected\n')
+    assert monitors.hardware_topology(paths)['hardware_outputs'][1]['status'] == 'disconnected'
+
+
+def test_missing_drm_inventory_is_distinct_from_no_connectors(tmp_path):
+    paths = Paths(tmp_path)
+    missing = monitors.hardware_topology(paths)
+    assert missing['hardware_output_state'] == 'unknown'
+    assert missing['hardware_outputs'] == []
+    assert missing['hardware_output_reason']
+    paths.at('/sys/class/drm').mkdir(parents=True)
+    empty = monitors.hardware_topology(paths)
+    assert empty['hardware_output_state'] == 'ok'
+    assert empty['hardware_outputs'] == []
 
 
 @pytest.mark.parametrize('payload',[None,{},['bad'],{'protocol':2,'state':'ok'}])

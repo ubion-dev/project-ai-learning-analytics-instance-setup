@@ -44,7 +44,7 @@ class FakeHost:
             return Command(0,'/run/user/test\n') if self.runtime else Command(1,'','no runtime')
         if argv[0]=='runuser':
             if argv[-1]=='prepare':
-                display._prepare_user_files(self.config,self.paths.at('/home/user'))
+                display._prepare_user_files(self.config,self.paths.at('/home/user'),self.paths)
                 return Command(0,json.dumps({'exit_code':0,'state':'ok'}))
             if argv[-1]=='settings':
                 return Command(0,json.dumps({'exit_code':0,'settings':self.settings}))
@@ -106,6 +106,24 @@ def setup(tmp_path):
 def user_fixture(setup):
     config,paths,host=setup
     return config,paths,host,paths.at('/home/user')
+
+
+def _registered_default(config, paths, host):
+    from ala.runtime import RuntimeStore
+    release = paths.at('/opt/ala/releases/0.1.0rc21')
+    (release / '.venv/bin').mkdir(parents=True)
+    (release / '.venv/bin/python').touch()
+    (release / 'entry.py').touch()
+    (release / 'VERSION').write_text('0.1.0rc21\n')
+    (release / 'COMPATIBILITY.json').write_text(json.dumps({
+        'schema_version': 1, 'runtime_protocol': 1, 'config_schemas': [1, 2],
+    }))
+    boot = paths.at('/proc/sys/kernel/random/boot_id')
+    boot.parent.mkdir(parents=True)
+    boot.write_text('test-boot\n')
+    store = RuntimeStore(paths, host)
+    store.bootstrap('default', release, config)
+    return store
 
 
 class ReadinessClock:
@@ -364,6 +382,70 @@ def test_actual_session_environment_import_is_allowlisted(setup):
     assert 'DISPLAY' not in imported[0]
     assert imported[1]['env']['WAYLAND_DISPLAY']=='wayland-0'
     assert _started_commands(host)==[['systemctl','--user','start','--no-block',display.UNIT]]
+
+
+@pytest.mark.parametrize(('committed_changes', 'saved_changes', 'starts'), [
+    ({}, {'autostart': False, 'url': None}, True),
+    ({'autostart': False}, {'autostart': True}, False),
+    ({'url': None}, {'url': 'https://example.com/saved'}, False),
+])
+def test_login_uses_committed_autostart_and_url(setup, monkeypatch, committed_changes, saved_changes, starts):
+    config, paths, host, home = user_fixture(setup)
+    committed = replace(config, **committed_changes)
+    _registered_default(committed, paths, host)
+    saved = replace(config, **saved_changes)
+    resolved = []
+    original = display._session_target_start
+
+    def observe(context, *args):
+        resolved.append(context.url)
+        return original(context, *args)
+
+    monkeypatch.setattr(display, '_session_target_start', observe)
+    assert display.session_start(config=saved, home=home, host=host, paths=paths, environment={}) == 0
+    assert bool(_started_commands(host)) is starts
+    assert resolved == ([committed.url] if starts else [])
+
+
+def test_login_honors_registered_manual_stop_until_next_session(setup, monkeypatch):
+    config, paths, host, home = user_fixture(setup)
+    store = _registered_default(config, paths, host)
+    store.cancel('default')
+    saved = replace(config, autostart=False)
+    assert display.session_start(config=saved, home=home, host=host, paths=paths, environment={}) == 0
+    assert not _started_commands(host)
+
+    original = host.run
+
+    def new_login(argv, **kwargs):
+        if argv[:2] == ['loginctl', 'list-sessions']:
+            return Command(0, f'2 {os.getuid()} user seat0\n')
+        return original(argv, **kwargs)
+
+    monkeypatch.setattr(host, 'run', new_login)
+    assert display.session_start(config=saved, home=home, host=host, paths=paths, environment={}) == 0
+    assert _started_commands(host) == [['systemctl', '--user', 'start', '--no-block', display.UNIT]]
+
+
+def test_login_does_not_start_or_stop_services_for_unproven_selection(setup):
+    config, paths, host, home = user_fixture(setup)
+    _registered_default(replace(config, user='other'), paths, host)
+    host.states[display.LEGACY]['ActiveState'] = 'active'
+    assert display.session_start(config=config, home=home, host=host, paths=paths, environment={}) == 1
+    assert not _started_commands(host)
+    assert host.states[display.LEGACY]['ActiveState'] == 'active'
+
+
+def test_prepare_keeps_shared_login_entry_for_committed_autostart(setup):
+    config, paths, host, home = user_fixture(setup)
+    _registered_default(config, paths, host)
+    display._prepare_user_files(config, home, paths)
+    desktop = home / '.config/autostart/ala-display.desktop'
+    before = desktop.stat().st_mtime_ns
+    saved = replace(config, autostart=False)
+    display._prepare_user_files(saved, home, paths)
+    assert desktop.read_text() == display.desktop_text()
+    assert desktop.stat().st_mtime_ns == before
 
 
 def test_ala31_login_queues_once_without_display_and_does_not_clear_manager(setup,capsys):

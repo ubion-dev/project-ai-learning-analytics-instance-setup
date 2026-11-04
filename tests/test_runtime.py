@@ -8,9 +8,9 @@ import stat
 import pytest
 
 from ala import runtime
-from ala.config import Config
+from ala.config import Config, ScreenConfig
 from ala.jobs import change_lock
-from ala.system import Command, Paths
+from ala.system import Command, Paths, atomic_json
 
 
 class Clock:
@@ -20,12 +20,18 @@ class Clock:
 
 
 class Host:
-    def __init__(self): self.calls = []
+    def __init__(self):
+        self.calls = []
+        self.units = set()
     def run(self, args, **kwargs):
         self.calls.append((args, kwargs))
         if args[-1:] == ['--version']:
             return Command(0, Path(args[-2]).parent.name + '\n')
-        if args[0] == 'systemd-run': return Command(0)
+        if args[0] == 'systemd-run':
+            self.units.add(args[1].removeprefix('--unit='))
+            return Command(0)
+        if args[:2] == ['systemctl', 'show'] and args[2] in self.units:
+            return Command(0, 'ActiveState=active\n')
         return Command(1)
 
 
@@ -61,14 +67,20 @@ def ready(version, *, health='healthy'):
             'placement': {'state': 'ok'}, 'results': [], 'exit_code': 0}
 
 
-def controller(paths, *, fail=False, pending_stop=False, cancel_on_start=False):
+def controller(paths, *, fail=False, pending_stop=False, cancel_during_observation=False):
     calls = []
     active = True
     stop_count = 0
     def control(action, selection, **kwargs):
         nonlocal active, stop_count
-        # No long observation or process control holds the common root lock.
-        with change_lock(paths): pass
+        # Lifecycle requests are fenced against competing mutations. Long
+        # observations must not hold the common root lock.
+        if action in {'start', 'stop'}:
+            with pytest.raises(RuntimeError), change_lock(paths):
+                pytest.fail('lifecycle request must hold the common lock')
+        else:
+            with change_lock(paths):
+                pass
         calls.append((action, selection['version']))
         if action == 'preflight': return {'state': 'ready', 'exit_code': 0}
         if action == 'stop':
@@ -80,11 +92,11 @@ def controller(paths, *, fail=False, pending_stop=False, cancel_on_start=False):
             return {'state': 'stopped', 'exit_code': 0}
         if action == 'start':
             active = True
-            if cancel_on_start:
-                runtime.cancel('default', paths=paths, host=Host())
             return {'state': 'pending', 'exit_code': 2}
         if action == 'status':
             return {'service': {'ActiveState': 'active' if active else 'inactive'}}
+        if cancel_during_observation:
+            runtime.cancel('default', paths=paths, host=Host())
         result = ready('0.0.0' if fail and selection['version'] == '2.0.0' else selection['version'], health='recovering')
         result['health']['config_revision'] = selection['revision']
         return result
@@ -171,7 +183,7 @@ def test_failed_candidate_restores_old_selection_without_cli_switch(fixture):
 
 def test_stop_generation_wins_over_restore(fixture):
     paths, host, clock, store, *_ = fixture
-    control, calls = controller(paths, cancel_on_start=True)
+    control, calls = controller(paths, cancel_during_observation=True)
     result = runtime.apply_target('default', paths=paths, host=host, control=control,
                                   monotonic=clock, sleep=clock.sleep)
     assert result['state'] == 'cancelled'
@@ -301,3 +313,205 @@ def test_default_controller_preflights_candidate_not_committed_snapshot(fixture,
     assert result['state'] == 'pending'
     assert observed == [(candidate.url, '2.0.0', store.load('default')['desired']['revision'])]
     assert store.load('default')['committed']['version'] == '1.0.0'
+
+
+def queue_settings(fixture, *, stopped=False):
+    paths, host, _, store, _, new, _ = fixture
+    saved = Config(user='user', url='https://example.com/?view=second', timezone='UTC')
+    store.settings_saved('default')
+    if stopped:
+        store.cancel('default', stopped=True)
+    request = runtime.submit_apply('default', release=new, paths=paths, host=host, settings_config=lambda: saved)
+    assert request['state'] == 'queued'
+    return saved, request
+
+
+def apply_queued_settings(fixture, request, control):
+    paths, host, clock, *_ = fixture
+    return runtime.apply_target('default', paths=paths, host=host, control=control, monotonic=clock,
+                                sleep=clock.sleep, unit=request['unit'], settings_operation_id=request['operation_id'])
+
+
+def test_explicit_settings_apply_keeps_running_code_and_preserves_pending_code(fixture):
+    paths, host, _, store, old, _, original = fixture
+    saved, request = queue_settings(fixture)
+    state = store.load('default')
+    pending_code = state['desired']
+    assert state['committed']['release'] == str(old)
+    assert runtime.settings_status(saved, 'default', paths=paths, host=host, state=state) == {
+        'state': 'queued', 'pending': True, 'applied_url': original.url,
+        'applied_frontend': {'enabled': False, 'manifest_url': None},
+        'reason': '저장한 설정을 적용하는 중입니다.', 'operation_id': request['operation_id']}
+    assert host.calls[-2][0][-3:] == ['_runtime-worker', 'default', request['operation_id']]
+    control, calls = controller(paths)
+
+    def observe(action, selection, **kwargs):
+        if action == 'preflight':
+            candidate = Config.from_dict(json.loads(Path(selection['config_path']).read_text()))
+            assert candidate.url == saved.url and candidate.timezone == original.timezone
+            status = runtime.settings_status(saved, 'default', paths=paths, host=host, state=store.load('default'))
+            assert status['state'] == 'running' and status['applied_url'] == original.url
+        return control(action, selection, **kwargs)
+
+    result = apply_queued_settings(fixture, request, observe)
+    state = store.load('default')
+    assert result['state'] == 'completed'
+    assert {version for _, version in calls} == {'1.0.0'}
+    assert state['desired']['release'] == pending_code['release']
+    assert Config.from_dict(json.loads(Path(state['desired']['config_path']).read_text())) == Config(user='user', url=saved.url)
+    assert state['committed']['release'] == str(old)
+    status = runtime.settings_status(saved, 'default', paths=paths, host=host, state=state)
+    assert status['state'] == 'completed' and status['pending'] is False
+    assert status['applied_url'] == saved.url and status['operation_id'] == request['operation_id']
+
+
+def test_settings_apply_persists_preflight_reason_without_stopping(fixture):
+    paths, host, _, store, *_ = fixture
+    saved, request = queue_settings(fixture)
+    calls = []
+
+    def control(action, *_args, **_kwargs):
+        calls.append(action)
+        if action == 'status':
+            return {'service': {'ActiveState': 'active'}}
+        return {'state': 'pending', 'exit_code': 2, 'reason': 'GNOME 확장 연결 대기', 'next_action': '다음 로그인 후 다시 조회하세요.'}
+
+    result = apply_queued_settings(fixture, request, control)
+    state = store.load('default')
+    assert result['state'] == 'pending' and calls == ['status', 'preflight']
+    assert state['operation'] is None
+    status = runtime.settings_status(saved, 'default', paths=paths, host=host, state=state)
+    assert status['state'] == 'pending' and status['pending']
+    assert status['reason'] == 'GNOME 확장 연결 대기'
+    assert status['next_action'] == '다음 로그인 후 다시 조회하세요.'
+    assert status['operation_id'] == request['operation_id']
+
+
+def test_settings_apply_checks_applied_output_of_a_later_added_target(fixture, monkeypatch):
+    from ala import display, screens
+
+    paths, host, clock, store, old, new, original = fixture
+    other = ScreenConfig(id='other', url='https://example.com/other', output='HDMI-1')
+    store.bootstrap('other', old, Config(user='user', schema_version=2, screens=(other,)))
+    saved = Config(user='user', schema_version=2, screens=(
+        ScreenConfig(url=original.url, output='HDMI-1'),
+        ScreenConfig(id='other', url=other.url, output='DP-1'),
+    ))
+    paths.config.parent.mkdir(parents=True)
+    atomic_json(paths.config, saved.to_dict(), 0o644)
+    unit = paths.at('/etc/systemd/user/ala-chrome.service')
+    unit.parent.mkdir(parents=True)
+    unit.write_text(display.unit_text('default'))
+    monkeypatch.setattr(display, '_account', lambda *_args: (1000, 'user', Path('/home/user')))
+    monkeypatch.setattr(display, '_graphical_sessions', lambda *_args: ([('session-one', {'Active': 'yes'})], ''))
+    monkeypatch.setattr(display, '_user_call', lambda _config, _host, _paths, action: {
+        'environment': {'state': 'ready', 'exit_code': 0}, 'windows': {'state': 'ok'},
+    }[action])
+    monkeypatch.setattr(screens, '_inventory', lambda *_args: {'state': 'ok', 'logical_outputs': [
+        {'id': 'HDMI-1', 'connectors': ['HDMI-1'], 'confirmed': True},
+        {'id': 'DP-1', 'connectors': ['DP-1'], 'confirmed': True},
+    ]})
+    calls = []
+    monkeypatch.setattr(display, 'chrome_action', lambda action, *_args, **_kwargs: calls.append(action) or ready('1.0.0'))
+
+    request = runtime.submit_apply('default', release=new, paths=paths, host=host, settings_config=lambda: saved)
+    result = runtime.apply_target('default', paths=paths, host=host, monotonic=clock, sleep=clock.sleep,
+                                  unit=request['unit'], settings_operation_id=request['operation_id'])
+
+    assert result['state'] == 'pending' and calls == ['status']
+    assert '겹칩니다' in result['reason']
+    assert store.load('other')['committed'] == store.load('other')['desired']
+    assert store._validate_selection(store.load('default')['committed']) == original.to_dict()
+
+
+def test_settings_apply_rolls_back_to_previous_revision_of_the_same_code(fixture):
+    paths, host, _, store, *_ = fixture
+    _, request = queue_settings(fixture)
+    state = store.load('default')
+    committed, desired = state['committed'], state['desired']
+    failed_revision = state['operation']['candidate']['revision']
+    control, _ = controller(paths)
+    started = []
+
+    def trial(action, selection, **kwargs):
+        if action == 'start':
+            started.append(selection['revision'])
+        if action == 'check' and selection['revision'] == failed_revision:
+            return {'state': 'failed', 'exit_code': 1}
+        return control(action, selection, **kwargs)
+
+    result = apply_queued_settings(fixture, request, trial)
+    assert result['state'] == 'failed' and result['restored']
+    assert started == [failed_revision, committed['revision']]
+    state = store.load('default')
+    assert state['committed'] == committed and state['desired'] == desired
+    assert state['last_settings_result']['state'] == 'failed'
+    assert '이전 화면 복원 완료' in state['last_settings_result']['reason']
+
+
+def test_stopped_screen_settings_commit_without_clearing_stop_intent(fixture, monkeypatch):
+    paths, host, _, store, *_ = fixture
+    monkeypatch.setattr(runtime.RuntimeStore, '_session', lambda *_: 'session-one')
+    saved, request = queue_settings(fixture, stopped=True)
+    calls = []
+
+    def control(action, *_args, **_kwargs):
+        calls.append(action)
+        return {'service': {'ActiveState': 'inactive'}}
+
+    result = apply_queued_settings(fixture, request, control)
+    state = store.load('default')
+    assert result['state'] == 'selected_unverified' and calls == ['status']
+    assert store.is_stopped(state)
+    assert state['committed']['version'] == '1.0.0' and state['desired']['version'] == '2.0.0'
+    assert runtime.settings_status(saved, 'default', paths=paths, host=host, state=state)['applied_url'] == saved.url
+
+
+def test_settings_apply_keeps_other_targets_in_each_selection(fixture):
+    paths, host, _, store, old, new, _ = fixture
+    shutil.rmtree(store.base)
+    previous_screen = ScreenConfig(url='https://example.com/previous', output='HDMI-1')
+    applied_other = ScreenConfig(id='other', url='https://example.com/other-current', output='DP-1')
+    pending_other = ScreenConfig(id='other', url='https://example.com/other-code-candidate', output='DP-1')
+    saved_screen = ScreenConfig(url='https://example.com/updated', output='HDMI-1')
+    saved_other = ScreenConfig(id='other', url='https://example.com/other-unapplied', output='DP-1')
+    committed = Config(user='user', schema_version=2, screens=(previous_screen, applied_other))
+    desired = Config(user='user', schema_version=2, screens=(previous_screen, pending_other), timezone='UTC')
+    saved = Config(user='user', schema_version=2, screens=(saved_screen, saved_other))
+    store.bootstrap('default', old, committed)
+    store.stage('default', new, desired)
+    other_state = store.bootstrap('other', old, committed)
+
+    request = runtime.submit_apply('default', release=new, paths=paths, host=host, settings_config=lambda: saved)
+    result = apply_queued_settings(fixture, request, lambda *_args, **_kwargs: {'service': {'ActiveState': 'inactive'}})
+
+    assert result['state'] == 'selected_unverified'
+    current = store.load('default')
+    confirmed = Config.from_dict(store._validate_selection(current['committed']))
+    waiting = Config.from_dict(store._validate_selection(current['desired']))
+    assert confirmed.screens == (saved_screen, applied_other)
+    assert waiting.screens == (saved_screen, pending_other) and waiting.timezone == 'UTC'
+    assert store.load('other') == other_state
+
+
+def test_stop_before_queued_settings_worker_runs_prevents_any_transition(fixture):
+    _, _, _, store, *_ = fixture
+    _, request = queue_settings(fixture)
+    store.cancel('default', stopped=True)
+
+    def forbidden(*_args, **_kwargs):
+        pytest.fail('cancelled settings operation must not control Chrome')
+
+    result = apply_queued_settings(fixture, request, forbidden)
+    assert result['state'] == 'cancelled'
+    assert store.load('default')['last_settings_result']['state'] == 'cancelled'
+
+
+def test_legacy_settings_apply_requires_explicit_code_migration(fixture):
+    paths, host, _, store, old, new, _ = fixture
+    (old / 'COMPATIBILITY.json').unlink()
+    saved = Config(user='user', url='https://example.com/updated')
+    value = runtime.submit_apply('default', release=new, paths=paths, host=host, settings_config=lambda: saved)
+    assert value['state'] == 'pending' and '최초 이전' in value['next_action']
+    assert not any(args[0] == 'systemd-run' for args, _ in host.calls)
+    assert store.load('default')['operation'] is None
