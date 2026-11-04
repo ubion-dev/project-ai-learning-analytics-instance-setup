@@ -1280,6 +1280,18 @@ def session_start(*, config=None, home=None, host=None, paths=None, environment=
         log('environment','manager_retained')
     for context in targets:
         codes.append(_session_target_start(context,home,host,paths,log))
+    if 0 in codes:
+        from .monitors import dismiss_startup_overview
+        try:
+            sessions, _ = _graphical_sessions(BudgetHost(host, 3), os.getuid())
+        except (OSError, RuntimeError, ValueError):
+            sessions = None
+        if (sessions and len(sessions) == 1 and sessions[0][1].get('Active') == 'yes'
+                and sessions[0][1].get('LockedHint') == 'no'
+                and environment.get('XDG_SESSION_ID', sessions[0][0]) == sessions[0][0]):
+            log('overview', dismiss_startup_overview(host))
+        else:
+            log('overview', 'session_unavailable')
     return 1 if 1 in codes else 2 if 2 in codes else 0
 
 

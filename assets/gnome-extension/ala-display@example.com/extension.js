@@ -8,6 +8,7 @@ import * as Config from 'resource:///org/gnome/shell/misc/config.js';
 
 const IFACE = `<node><interface name="org.ala.Display1">
 <method name="GetState"><arg type="s" direction="out"/></method>
+<method name="DismissStartupOverview"><arg type="s" direction="out"/></method>
 <method name="Inspect"><arg type="s" direction="in"/><arg type="s" direction="out"/></method>
 <method name="Place"><arg type="s" direction="in"/><arg type="s" direction="out"/></method>
 <method name="Closed"><arg type="s" direction="in"/><arg type="s" direction="out"/></method>
@@ -105,6 +106,7 @@ export default class AlaDisplay extends Extension {
         this._owner = Gio.bus_own_name_on_connection(Gio.DBus.session,'org.ala.Display1',Gio.BusNameOwnerFlags.NONE,null,null);
     }
     disable() {
+        this._disconnectOverviewStartup();
         if (this._owner) Gio.bus_unown_name(this._owner);
         this._owner = null;
         this._object?.unexport(); this._object = null;
@@ -123,6 +125,43 @@ export default class AlaDisplay extends Extension {
         this._handle(invocation,async () => ({state:'ok',gnome_version:Config.PACKAGE_VERSION,
             display_config:await call(Gio.DBus.session,'org.gnome.Mutter.DisplayConfig','/org/gnome/Mutter/DisplayConfig','org.gnome.Mutter.DisplayConfig','GetCurrentState',null),
             compositor_monitors:Main.layoutManager.monitors.map(m => ({x:m.x,y:m.y,width:m.width,height:m.height}))}));
+    }
+    _disconnectOverviewStartup() {
+        if (this._overviewStartupSignal) {
+            Main.layoutManager.disconnect(this._overviewStartupSignal);
+            this._overviewStartupSignal = 0;
+        }
+    }
+    _hideStartupOverview() {
+        if (Main.sessionMode.isGreeter || Main.sessionMode.isLocked)
+            return 'kept';
+        if (!Main.overview.visibleTarget)
+            return 'already_hidden';
+        Main.overview.hide();
+        return 'dismissed';
+    }
+    DismissStartupOverviewAsync(_args,invocation) {
+        const object = this._object;
+        this._handle(invocation, () => {
+            if (!object || object !== this._object) throw new Error('extension inactive');
+            const config = protectedConfig();
+            if (config.user !== GLib.get_user_name() || config.display !== true ||
+                Main.sessionMode.isGreeter || Main.sessionMode.isLocked)
+                throw new Error('overview session');
+            if (this._startupOverviewHandled)
+                return {state:'ok',overview:'kept'};
+            this._startupOverviewHandled = true;
+            // GNOME 47 can open the overview during the startup animation.
+            // Let it finish first so it cannot undo this one-shot dismissal.
+            if (Main.layoutManager._startingUp) {
+                this._overviewStartupSignal = Main.layoutManager.connect('startup-complete', () => {
+                    this._disconnectOverviewStartup();
+                    this._hideStartupOverview();
+                });
+                return {state:'ok',overview:'scheduled'};
+            }
+            return {state:'ok',overview:this._hideStartupOverview()};
+        });
     }
     InspectAsync([text],invocation) {
         this._handle(invocation,async uid => {

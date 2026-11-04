@@ -40,7 +40,7 @@ def hardware_topology(paths=None):
 
 
 def bridge(method, request=None, *, host=None):
-    if method not in {'GetState', 'Inspect', 'Place', 'Closed'}:
+    if method not in {'GetState', 'Inspect', 'Place', 'Closed', 'DismissStartupOverview'}:
         raise ValueError('허용되지 않은 화면 bridge 작업입니다.')
     host = host or Host()
     argv = ['gdbus','call','--session','--dest',BUS,'--object-path',OBJECT,
@@ -64,6 +64,21 @@ def bridge(method, request=None, *, host=None):
     except (SyntaxError,ValueError,TypeError,MemoryError,RecursionError):
         return {'state':'unknown','reason':'GNOME 화면 확장 응답의 버전·형식을 확인하지 못했습니다.',
                 'next_action':'설치된 ala 버전과 GNOME 화면 확장의 등록·활성화를 확인하세요.'}
+
+
+def dismiss_startup_overview(host):
+    """Wait briefly for the user's extension after queuing the display service."""
+    try:
+        ready = host.run(['gdbus', 'wait', '--session', '--timeout', '5', BUS], timeout=6)
+        if ready.returncode == 0:
+            result = bridge('DismissStartupOverview', host=host)
+            if result.get('state') == 'ok' and result.get('overview') in (
+                'dismissed', 'already_hidden', 'scheduled', 'kept',
+            ):
+                return result['overview']
+    except (OSError, RuntimeError, ValueError):
+        pass
+    return 'unavailable'
 
 
 def _number(value):

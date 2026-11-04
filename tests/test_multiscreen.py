@@ -144,6 +144,12 @@ def test_multi_login_queues_each_target_once_and_retains_existing(tmp_path):
     class Host:
         def run(self,argv,**kwargs):
             calls.append(argv)
+            if argv[:2] == ['loginctl', 'list-sessions']:return Command(0, '1 user seat0\n')
+            if argv[:2] == ['loginctl', 'show-session']:
+                return Command(0, f'User={os.getuid()}\nType=wayland\nClass=user\nRemote=no\nActive=yes\nLockedHint=no\n')
+            if argv[:2]==['gdbus','wait']:return Command(0)
+            if argv[-1:] == ['org.ala.Display1.DismissStartupOverview']:
+                return Command(0, repr((json.dumps({'protocol': 1, 'state': 'ok', 'overview': 'kept'}),)))
             if argv[2]=='show-environment':return Command(0,'WAYLAND_DISPLAY=wayland-0\n')
             if argv[2]=='show':return Command(0,'ActiveState='+states[argv[3]]+'\nResult=success\nLoadState=loaded\nMainPID=0\n')
             if argv[2]=='start':states[argv[-1]]='active';return Command(0)
@@ -151,6 +157,7 @@ def test_multi_login_queues_each_target_once_and_retains_existing(tmp_path):
             raise AssertionError(argv)
     host=Host()
     assert display.session_start(config=config,home=tmp_path,host=host,paths=Paths(tmp_path),environment={})==0
+    assert len([args for args in calls if args[-1:] == ['org.ala.Display1.DismissStartupOverview']]) == 1
     assert display.session_start(config=config,home=tmp_path,host=host,paths=Paths(tmp_path),environment={})==0
     assert [args for args in calls if args[2]=='start']==[['systemctl','--user','start','--no-block','ala-chrome@'+'right.service']]
     assert not any(args[2] in {'stop','restart','reset-failed'} for args in calls)
