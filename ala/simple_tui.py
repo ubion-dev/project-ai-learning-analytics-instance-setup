@@ -204,8 +204,15 @@ class SimpleApp(App[None]):
     Button:disabled { background: #292831; border: tall #292831; color: #aaa4b4; }
     #setup-start { width: 24; }
     #chrome-open { width: 16; height: 3; margin-left: 1; padding: 0 1; }
-    #screens-actions { height: 7; layout: grid; grid-size: 5 2; grid-rows: 3 3; grid-columns: 1fr 1fr 1fr 1fr 1fr; grid-gutter: 1 1; }
-    #screens-actions Button { padding: 0; min-width: 7; width: 1fr; }
+    #screens-actions { height: 3; }
+    #screens-actions Button { padding: 0; min-width: 12; width: 1fr; margin-right: 1; }
+    #screens-unassigned, #target-operations, #target-details { background: #211f29; border-top: solid #50475f; }
+    #screens-unassigned CollapsibleTitle, #target-editor CollapsibleTitle { color: #cbc2ef; }
+    #screens-unassigned CollapsibleTitle:focus, #target-editor CollapsibleTitle:focus { background: #514661; color: #f3e8ff; text-style: bold; }
+    #screens-unassigned-list, #target-choices { background: #211f29; border: round #50475f; }
+    #screens-unassigned-list:focus, #target-choices:focus { border: round #e4dcff; }
+    #screens-unassigned-list > .option-list--option-highlighted, #target-choices > .option-list--option-highlighted { background: #514661; color: #f3e8ff; text-style: bold; }
+    #screens-map-scroll, #target-fields, #screens-unassigned-list, #target-choices { scrollbar-color: #a99bc5; scrollbar-color-hover: #cbc2ef; scrollbar-color-active: #e4dcff; scrollbar-background: #211f29; scrollbar-background-hover: #2a2634; scrollbar-background-active: #2a2634; }
     #quick-actions Button { padding: 0; margin-right: 1; }
     #quick-actions Button:last-of-type { margin-right: 0; }
     #setup-overview, #status-overview { height: auto; margin-bottom: 1; padding: 0 2; background: #2a2634; border-left: solid #a99bc5; }
@@ -247,16 +254,9 @@ class SimpleApp(App[None]):
     Screen.compact #status-detail { height: 7; margin-top: 0; }
     Screen.compact TextArea { padding: 0 1; }
     Screen.compact #screens-summary { height: 1; margin-bottom: 0; }
-    Screen.compact #screens-map, Screen.compact #screens-map.no-layout { height: auto; max-height: 2; padding: 0; border: none; }
-    Screen.compact #screens-table { margin-top: 0; }
-    Screen.compact #screens-table { min-height: 4; }
-    Screen.compact #screens-hardware { display: none; }
-    Screen.compact #screens-detail { height: 3; min-height: 3; margin-top: 0; }
     Screen.compact #screens-help { height: 1; text-wrap: nowrap; text-overflow: ellipsis; }
-    Screen.compact #screens-guidance, ScreenPanel.tight #screens-guidance { height: 1; }
-    Screen.compact #screens-actions { height: 5; grid-rows: 2 2; margin-top: 0; }
-    Screen.compact #screens-actions Button { height: 2; border: none; padding: 0; }
-    Screen.compact #screens-actions Button:focus, Screen.compact #quick-actions Button:focus { background: #514661; color: #f3e8ff; text-style: bold; }
+    Screen.compact #screens-actions { height: 3; }
+    Screen.compact #quick-actions Button:focus { background: #514661; color: #f3e8ff; text-style: bold; }
     Screen.compact #quick-actions Button { height: 2; border: none; padding: 0; }
     Screen.compact #quick-logs { width: 21; }
     """
@@ -604,7 +604,7 @@ class SimpleApp(App[None]):
             return
         section = {'setup-tab': 'setup', 'status-tab': 'status', 'screens-tab': 'screens', 'quick-tab': 'quick'}[event.tab.id]
         self.query_one('#pages', ContentSwitcher).current = section
-        target = {'setup': '#setup-start', 'screens': '#screens-table', 'status': '#status-table', 'quick': '#quick-refresh'}[section]
+        target = {'setup': '#setup-start', 'screens': '#screens-map', 'status': '#status-table', 'quick': '#quick-refresh'}[section]
         self.call_after_refresh(self.query_one(target).focus)
         if section == 'setup':
             self.call_after_refresh(self._fit_setup_table)

@@ -10,7 +10,8 @@ from textual import events, on
 from textual.app import ComposeResult
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen
-from textual.widgets import Button, DataTable, Input, Label, Select, Static, Switch, TextArea
+from textual.widgets import Button, Collapsible, Input, Label, OptionList, Select, Static, Switch, TextArea
+from textual.widgets.option_list import Option
 
 from .chrome_tui import safe_logs, safe_text
 from .screen_map import ScreenMap, topology_text
@@ -126,24 +127,37 @@ class TargetEditor(ModalScreen[dict | None]):
     BINDINGS = [('escape', 'cancel', '취소')]
     CSS = """
     TargetEditor { align: center middle; background: #000000 65%; }
-    #target-editor { width: 76; max-width: 96%; height: 29; max-height: 96%; padding: 1 2; background: #211f29; border: round #b5e9d9; }
+    #target-editor { width: 76; max-width: 96%; height: 34; max-height: 96%; padding: 0 1; background: #211f29; border: round #b5e9d9; }
+    #target-title { height: 1; color: #cbc2ef; text-style: bold; }
+    #target-result, #target-next { height: auto; max-height: 2; }
+    #target-result { background: #2a2634; text-style: bold; }
+    #target-primary { height: 3; width: 100%; margin: 0; }
     #target-fields { height: 1fr; }
     #target-editor Label { height: 1; margin-top: 1; }
     #target-editor Input, #target-editor Select { height: 3; }
     #target-error { height: auto; color: #f3b8c5; }
     #target-help { height: 1; color: #aabdd0; text-wrap: nowrap; text-overflow: ellipsis; }
-    #target-buttons { height: 3; margin-top: 1; }
-    #target-buttons Button { width: 1fr; }
+    #target-buttons { height: 3; }
+    #target-buttons Button { width: 1fr; margin-right: 1; }
     #target-editor Switch { height: 3; }
+    #target-controls { height: 11; layout: grid; grid-size: 2 3; grid-rows: 3 3 3; grid-gutter: 1; }
+    #target-controls Button { width: 1fr; min-width: 10; padding: 0; }
+    #screens-apply, #screens-swap-recover { width: 100%; height: 3; }
+    #screens-detail { height: 12; min-height: 4; }
+    #target-operations, #target-details { height: auto; padding: 0; }
     """
 
-    def __init__(self, target=None, outputs=()):
+    def __init__(self, target=None, outputs=(), *, panel=None, output_id=None):
         super().__init__()
         self.target = deepcopy(target) if target else None
         self.outputs = outputs
+        self.panel = panel
+        self.output_id = output_id
+        self.target_id = target['id'] if target else None
+        self.expected_config = deepcopy(panel.owner._config) if panel else None
 
     def compose(self) -> ComposeResult:
-        value = self.target or {'id': '', 'autostart': True}
+        value = self.target or {'id': '', 'autostart': True, 'output': self.output_id}
         frontend = value.get('frontend') or {}
         current = value.get('output')
         options = [(safe_text(output), output) for output in self.outputs]
@@ -152,8 +166,22 @@ class TargetEditor(ModalScreen[dict | None]):
         if current and current not in self.outputs:
             options.append((safe_text(current) + ' · 기존 지정', current))
         with Vertical(id='target-editor'):
-            yield Static('표시 대상 설정 · 저장 후 화면 관리에서 설정 적용을 선택하세요.')
+            yield Static('화면 설정 · '+safe_text(self.target_id or self.output_id or '새 화면'), id='target-title', markup=False)
+            yield Static('', id='target-result', markup=False)
+            yield Static('저장한 뒤 설정 적용을 선택하세요.', id='target-next', markup=False)
+            yield Button('다음 행동', id='target-primary', variant='primary')
             with VerticalScroll(id='target-fields'):
+                if self.panel and self.target_id:
+                    yield Button('설정 적용', id='screens-apply')
+                    with Collapsible(title='운영 · 시작·중지·로그', id='target-operations', collapsed=True):
+                        with Vertical(id='target-controls'):
+                            for key in ('start', 'stop', 'restart', 'reload', 'logs', 'retry'):
+                                button = Button(ACTIONS[key][0], id='screens-'+key)
+                                button.tooltip = ACTIONS[key][1]
+                                yield button
+                        yield Button('두 화면 교환 복구 재시도', id='screens-swap-recover')
+                    with Collapsible(title='상태 상세·작업 로그', id='target-details', collapsed=True):
+                        yield TextArea('', id='screens-detail', read_only=True, show_cursor=False, highlight_cursor_line=False)
                 yield Label('대상 ID')
                 yield Input(value.get('id', ''), id='target-id', disabled=self.target is not None, placeholder='display-1')
                 yield Label('표시 사이트')
@@ -176,12 +204,80 @@ class TargetEditor(ModalScreen[dict | None]):
                 save = Button('저장', id='target-save', variant='primary')
                 save.tooltip = '편집 내용을 저장하고 화면 관리로 돌아갑니다.'
                 yield save
-                cancel = Button('취소', id='target-cancel')
+                cancel = Button('닫기', id='target-cancel')
                 cancel.tooltip = '이번 편집을 취소합니다.'
                 yield cancel
 
     def on_mount(self):
-        self.query_one('#target-url' if self.target else '#target-id', Input).focus()
+        self.refresh_status()
+        if self.panel and self.target_id:
+            primary = self.query_one('#target-primary', Button)
+            if primary.display:
+                primary.focus()
+            else:
+                self.query_one('#target-operations CollapsibleTitle').focus()
+        else:
+            self.query_one('#target-url' if self.target else '#target-id', Input).focus()
+
+    def dirty(self):
+        if not self.is_mounted:
+            return False
+        value = self.target or {'id': '', 'autostart': True, 'output': self.output_id}
+        frontend = value.get('frontend') or {}
+        output = self.query_one('#target-output', Select).value
+        return (self.query_one('#target-id', Input).value != value.get('id', '')
+                or self.query_one('#target-url', Input).value != (value.get('url') or '')
+                or (output if isinstance(output, str) and output else None) != value.get('output')
+                or self.query_one('#target-layout', Select).value != value.get('layout', 'fullscreen')
+                or self.query_one('#target-autostart', Switch).value != value.get('autostart', True)
+                or self.query_one('#target-frontend', Switch).value != frontend.get('enabled', False)
+                or self.query_one('#target-manifest', Input).value != (frontend.get('manifest_url') or ''))
+
+    @on(Input.Changed)
+    @on(Select.Changed)
+    @on(Switch.Changed)
+    def fields_changed(self):
+        self.refresh_status()
+
+    def refresh_status(self):
+        if not self.is_mounted:
+            return
+        primary = self.query_one('#target-primary', Button)
+        primary.display = False
+        if not self.panel or not self.target_id:
+            return
+        value = self.panel.find_target(self.target_id)
+        content = self.panel.details(self.target_id)
+        headline, next_action, action, tone = self.panel.priority(value)
+        message = self.panel.messages.get(self.target_id, '').split('\n', 1)[0]
+        self.query_one('#target-result', Static).update(Text('\n'.join(filter(None, (headline, message))), style=tone))
+        self.query_one('#target-next', Static).update('다음 · '+next_action)
+        dirty = self.dirty()
+        for key in ('start', 'stop', 'restart', 'reload', 'logs', 'retry', 'apply', 'swap-recover'):
+            button = self.query_one('#screens-'+key, Button)
+            enabled, reason = self.panel.action_state(key, value)
+            if dirty and key != 'logs':
+                enabled, reason = False, '편집 내용을 저장하거나 설정을 다시 열고 실행하세요.'
+            if key == 'apply' and self.expected_config != self.panel.owner._config:
+                enabled, reason = False, '구성이 바뀌었습니다. 설정을 다시 열고 확인하세요.'
+            button.disabled = not enabled
+            button.tooltip = reason
+            button.variant = 'primary' if key == action and enabled else 'default'
+            if key in {'apply', 'swap-recover'}:
+                button.display = bool((value or {}).get('settings', {}).get('pending')) if key == 'apply' else bool(((value or {}).get('swap') or {}).get('state') in {'unknown', 'recovery_required'})
+        editable, reason = self.panel.action_state('edit', value)
+        self.query_one('#target-save', Button).disabled = not editable
+        self.query_one('#target-save', Button).tooltip = reason if not editable else '설정 내용을 저장합니다. 화면 전환은 설정 적용으로 진행합니다.'
+        if action in {'start', 'logs', 'retry', 'apply'}:
+            source = self.query_one('#screens-'+action, Button)
+            primary.display = not source.disabled
+            primary.label = ACTIONS[action][0]
+            primary.tooltip = source.tooltip
+        if action == 'edit':
+            self.query_one('#target-next', Static).update('다음 · 아래에서 사이트 주소를 저장한 뒤 설정 적용을 선택하세요.')
+        detail = self.query_one('#screens-detail', TextArea)
+        if detail.text != content:
+            detail.load_text(content)
 
     def on_descendant_focus(self, event: events.DescendantFocus):
         widget = event.widget
@@ -190,6 +286,7 @@ class TargetEditor(ModalScreen[dict | None]):
 
     @on(Button.Pressed)
     def pressed(self, event):
+        event.stop()
         if event.button.id == 'target-cancel':
             self.action_cancel()
         elif event.button.id == 'target-save':
@@ -211,7 +308,53 @@ class TargetEditor(ModalScreen[dict | None]):
                 self.query_one('#target-error', Static).update(safe_text(str(exc)))
                 return
             self.dismiss(value)
+        elif self.panel and self.target_id:
+            action = (event.button.id or '').removeprefix('screens-')
+            if event.button.id == 'target-primary':
+                action = self.panel.priority(self.panel.find_target(self.target_id))[2]
+            if action == 'swap-recover':
+                self.panel.owner.run_worker(self.panel.session_action(action, target_id=self.target_id), exit_on_error=False)
+            elif action in {'start', 'stop', 'restart', 'reload', 'logs', 'retry', 'apply'}:
+                # The editor keeps its DID identity even if the panel selection changes during a poll.
+                if self.dirty() and action != 'logs':
+                    return
+                self.panel.owner.run_worker(self.panel.perform(action, target_id=self.target_id,
+                    expected_config=self.expected_config if action == 'apply' else None), exit_on_error=False)
+                if action == 'logs':
+                    self.query_one('#target-details', Collapsible).collapsed = False
 
+    def action_cancel(self):
+        self.dismiss(None)
+
+
+class TargetChooser(ModalScreen[str | None]):
+    """Split layouts and disconnected DIDs remain explicitly selectable."""
+    BINDINGS = [('escape', 'cancel', '닫기')]
+    CSS = """
+    TargetChooser { align: center middle; background: #000000 65%; }
+    #target-chooser { width: 62; max-width: 96%; height: auto; max-height: 90%; padding: 1 2; background: #211f29; border: round #cbc2ef; }
+    #target-choices { height: auto; max-height: 12; }
+    #target-chooser Button { width: 100%; }
+    """
+
+    def __init__(self, output_id, targets):
+        super().__init__()
+        self.output_id, self.targets = output_id, targets
+
+    def compose(self):
+        with Vertical(id='target-chooser'):
+            yield Static(safe_text(self.output_id)+' · 설정할 화면을 선택하세요.', markup=False)
+            yield OptionList(*(Option(safe_text(t['id'])+' · '+safe_text(t.get('layout'))+' · '+site_label(t.get('url')), id=t['id']) for t in self.targets), id='target-choices')
+            yield Button('닫기', id='chooser-cancel')
+
+    def on_mount(self):
+        self.query_one(OptionList).focus()
+
+    @on(OptionList.OptionSelected)
+    def chosen(self, event):
+        self.dismiss(event.option.id)
+
+    @on(Button.Pressed)
     def action_cancel(self):
         self.dismiss(None)
 
@@ -219,32 +362,19 @@ class TargetEditor(ModalScreen[dict | None]):
 class ScreenPanel(Vertical):
     DEFAULT_CSS = """
     ScreenPanel { height: 1fr; }
-    #screens-summary { height: auto; max-height: 2; color: #b5e9d9; }
-    #screens-hardware, #screens-result, #screens-next { height: 1; text-wrap: nowrap; text-overflow: ellipsis; }
-    #screens-help { height: 2; }
-    #screens-guidance { height: 2; }
-    #screens-help { width: 1fr; }
-    #screens-swap-recover { display: none; width: 18; height: 1; min-width: 16; padding: 0; border: none; }
-    #screens-hardware, #screens-help { color: #aabdd0; }
+    #screens-summary { height: 1; color: #b5e9d9; text-wrap: nowrap; text-overflow: ellipsis; }
+    #screens-result, #screens-next { height: 1; text-wrap: nowrap; text-overflow: ellipsis; }
+    #screens-help { height: 1; color: #aabdd0; text-wrap: nowrap; text-overflow: ellipsis; }
     #screens-result { padding: 0 1; background: #2a2634; color: #b5e9d9; text-style: bold; }
     #screens-next { padding: 0 1; color: #e9f0f7; }
-    #screens-map { height: 8; padding: 0 1; background: #2a2634; border: round #50475f; }
-    #screens-map:focus { border: round #e4dcff; }
-    #screens-map.no-layout { height: auto; max-height: 4; }
-    #screens-table { height: 1fr; min-height: 3; margin-top: 1; }
-    #screens-detail { height: 6; min-height: 3; margin-top: 1; }
+    #screens-map-scroll { height: 1fr; min-height: 3; }
+    #screens-map { padding: 0 1; background: #211f29; border: none; }
+    #screens-map:focus { background: #2a2634; }
     #screens-actions { height: 3; }
-    #screens-actions Button { width: 1fr; min-width: 7; padding: 0; }
-    Screen.compact #screens-summary { margin-bottom: 0; max-height: 1; }
-    Screen.compact #screens-map { height: auto; max-height: 3; padding: 0; border: none; }
-    Screen.compact #screens-table { margin-top: 0; }
-    Screen.compact #screens-detail { height: 4; margin-top: 0; }
-    Screen.compact #screens-actions { margin-top: 0; }
-    ScreenPanel.tight #screens-map { height: auto; max-height: 2; padding: 0; border: none; }
-    ScreenPanel.tight #screens-help { height: 1; text-wrap: nowrap; text-overflow: ellipsis; }
-    ScreenPanel.tight #screens-guidance, Screen.compact #screens-guidance { height: 1; }
-    ScreenPanel.tight #screens-table, ScreenPanel.tight #screens-detail { margin-top: 0; }
-    ScreenPanel.tight #screens-detail { height: 4; }
+    #screens-actions Button { width: 1fr; margin-right: 1; min-width: 12; padding: 0; }
+    #screens-unassigned { height: auto; padding: 0; }
+    #screens-unassigned-list { height: auto; max-height: 5; }
+    #screens-add { height: 3; width: 100%; }
     """
 
     def __init__(self, owner, **kwargs):
@@ -260,28 +390,24 @@ class ScreenPanel(Vertical):
         self.swap_following = {}
         self.launches = {}
         self.loaded = False
+        self.editor = None
+        self._unassigned_rows = None
 
     def compose(self):
         yield Static('표시 대상 확인 중', id='screens-result', markup=False)
         yield Static('', id='screens-next', markup=False)
-        with Horizontal(id='screens-actions'):
-            for key, (label, help_text) in ACTIONS.items():
-                button = Button(label, id='screens-'+key, disabled=key != 'add')
-                button.tooltip = help_text
-                yield button
-        with Horizontal(id='screens-guidance'):
-            yield Static('', id='screens-help', markup=False)
-            yield Button('복구 재시도', id='screens-swap-recover')
         yield Static('화면 관리를 열면 연결된 출력과 창을 조회합니다.', id='screens-summary', markup=False)
-        yield Static('', id='screens-hardware', markup=False)
-        yield ScreenMap(id='screens-map')
-        yield DataTable(id='screens-table', cursor_type='row')
-        yield TextArea('', id='screens-detail', read_only=True, show_cursor=False, highlight_cursor_line=False)
+        with VerticalScroll(id='screens-map-scroll'):
+            yield ScreenMap(id='screens-map')
+        with Collapsible(title='화면 추가·연결되지 않은 화면', id='screens-unassigned', collapsed=True):
+            yield OptionList(id='screens-unassigned-list')
+            yield Button('화면 추가', id='screens-add')
+        yield Static('클릭·Enter 설정  ·  방향키 선택  ·  드래그 이동·교환', id='screens-help', markup=False)
+        with Horizontal(id='screens-actions'):
+            yield Button('모니터 식별', id='screens-identify')
+            yield Button('다시 조회', id='screens-refresh')
 
     def on_mount(self):
-        self.query_one('#screens-map').border_title = '출력 배정 · DID 선택 후 드래그'
-        self.query_one('#screens-table').border_title = '표시 대상 · 실제 관측과 설정을 구분합니다'
-        self.query_one('#screens-detail').border_title = '선택 대상 · 상태와 다음 조치'
         self.set_interval(3, self.poll)
         self.render_report()
 
@@ -323,16 +449,13 @@ class ScreenPanel(Vertical):
             self.render_report()
 
     def target(self):
-        return next((v for v in self.report.get('targets', []) if v.get('id') == self.selected), None)
+        return self.find_target(self.selected)
+
+    def find_target(self, target_id):
+        return next((v for v in self.report.get('targets', []) if v.get('id') == target_id), None)
 
     def render_help(self):
-        widget = self.screen.focused
-        key = (widget.id or '').removeprefix('screens-') if isinstance(widget, Button) else ''
-        help_text = (str(widget.tooltip or '') if key in ACTIONS else
-                     'DID 선택 → 현재 출력에서 다른 출력으로 드래그 → 이동 확인')
-        if key == 'apply' and self.screen.has_class('compact') and help_text == ACTIONS['apply'][1]:
-            help_text = '이 화면에 설정을 반영합니다. Chrome이 잠깐 재시작될 수 있습니다.'
-        self.query_one('#screens-help', Static).update(help_text)
+        self.query_one('#screens-help', Static).update('클릭·Enter 설정  ·  방향키 선택  ·  드래그 이동·교환')
 
     def on_descendant_focus(self, event: events.DescendantFocus):
         self.render_help()
@@ -362,80 +485,66 @@ class ScreenPanel(Vertical):
         self.query_one('#screens-summary', Static).update(Text(
             f'{output_label} · 관리 대상 {len(targets)}개 · 확인된 창 {confirmed_label}'
             if self.loaded else '출력·창 조회 확인 필요 · '+str(self.report.get('reason', '조회 중'))))
-        self.query_one('#screens-hardware', Static).update(Text(hardware_text(self.report)))
         map_view = self.query_one('#screens-map', ScreenMap)
-        short = self.size.height < 32 or self.size.width < 99
-        self.set_class(short and not self.screen.has_class('compact'), 'tight')
-        map_view.set_class(not self.report.get('logical_outputs'), 'no-layout')
         map_view.update_report(self.report, self.selected, self.owner._config,
                                enabled=not self.mutating and not self.owner._active_job)
-        map_view.tooltip = '목록에서 DID를 선택하고, 해당 출력에서 다른 출력으로 드래그해 이동하세요.'
-        table = self.query_one('#screens-table', DataTable)
-        compact = self.size.width < 100
-        table.clear(columns=True)
-        available = max(50, self.size.width - (10 if compact else 16))
-        columns = (('대상 · 출력', min(20, available//3)),
-                   ('적용 사이트', max(12, available-min(20, available//3)-22)),
-                   ('실행 · 사이트', 22)) if compact else (
-                   ('대상', 14), ('출력', 13), ('적용 사이트', max(16, available-66)),
-                   ('실행 · 적용', 17), ('사이트', 12), ('창 배치', 10))
-        for label, width in columns:
-            table.add_column(label, width=width)
-        run_labels = {'active': '실행 중', 'activating': '시작 중', 'inactive': '중지됨', 'failed': '실패'}
-        health_labels = {'healthy': '정상', 'waiting_configuration': '설정 안내', 'recovering': '복구 중', 'waiting_site': '응답 대기', 'unknown': '확인 불가'}
-        for value in targets:
-            service = value.get('service') or {}
-            health = value.get('health') or {}
-            placement = value.get('placement') or {}
-            run = run_labels.get(service.get('ActiveState'), '확인 불가')
-            runtime = value.get('runtime') or {}
-            settings = value.get('settings') or {}
-            code_pending = (runtime.get('committed') or {}).get('version') != (runtime.get('desired') or {}).get('version')
-            update_pending = settings.get('pending') or code_pending
-            if update_pending:
-                run = run.replace(' ', '')+'·적용대기'
-            site = '중지됨' if service.get('ActiveState') == 'inactive' else health_labels.get(health.get('state'), '확인 불가')
-            deployment = value.get('frontend_status') or {}
-            if self.retry_enabled(value) and deployment.get('state') == 'blocked':
-                site += ' · 배포 보류'
-            output = value.get('output') or ('자동' if value['id'] == 'default' else '미선택')
-            color = '#b5e9d9' if site == '정상' else 'dim' if site == '중지됨' else '#f1d5a3'
-            items = (f'{value["id"]} · {output}', site_label(value.get('applied_url', value.get('url'))), Text(run+'·'+site, style='#f1d5a3' if update_pending else color)) if compact else (
-                value['id'], output, site_label(value.get('applied_url', value.get('url'))), Text(run, style='#f1d5a3' if update_pending else ''), Text(site, style=color),
-                {'ok': '확인됨', 'pending': '배치 대기', 'unknown': '확인 불가'}.get(placement.get('state'), '확인 불가'))
-            table.add_row(*items, key=value['id'])
-        if self.selected:
-            table.move_cursor(row=next(i for i, v in enumerate(targets) if v['id'] == self.selected), animate=False)
-        target = self.target()
-        settings = (target or {}).get('settings') or {}
-        applying = settings.get('state') in {'queued', 'running'}
-        locked = self.mutating or bool(self.owner._active_job)
-        for key, (_, help_text) in ACTIONS.items():
-            button = self.query_one('#screens-'+key, Button)
-            disabled = locked or (key not in {'add', 'identify'} and not target)
-            swap = (target or {}).get('swap') or {}
-            if swap.get('state') in {'queued', 'running', 'unknown', 'recovery_required'} and key not in {'stop', 'logs', 'identify'}:
-                disabled = True
-            if key == 'apply':
-                disabled |= not settings.get('pending') or applying
-                if applying:
-                    help_text = '이 화면의 설정을 적용하고 있습니다.'
-                elif not settings.get('pending'):
-                    help_text = settings.get('reason') or '먼저 변경한 설정을 저장하세요.'
-            if key == 'retry' and target and not self.retry_enabled(target):
-                disabled = True
-                help_text = RETRY_DISABLED
-            if applying and key in {'start', 'restart', 'reload', 'edit', 'retry'}:
-                disabled = True
-                help_text = '설정 적용이 끝나면 사용할 수 있습니다.'
-            button.disabled = bool(disabled)
-            button.tooltip = safe_text(help_text)
-        self.query_one('#screens-reload', Button).label = '새로고침' if compact else ACTIONS['reload'][0]
-        recover = self.query_one('#screens-swap-recover', Button)
-        recover.display = bool(((target or {}).get('swap') or {}).get('state') in {'recovery_required', 'unknown'})
-        recover.disabled = locked
-        self.render_help()
+        map_view.tooltip = '모니터를 클릭하거나 Enter로 설정합니다. 드래그하면 이동·교환을 검토합니다.'
+        assigned = {target['id'] for output in self.report.get('logical_outputs') or []
+                    for target in self.targets_on_output(output['id'])}
+        unassigned = [target for target in targets if target['id'] not in assigned]
+        rows = tuple((v['id'], self.priority(v)[0]) for v in unassigned)
+        options = self.query_one('#screens-unassigned-list', OptionList)
+        if rows != self._unassigned_rows:
+            old = options.get_option_at_index(options.highlighted).id if options.highlighted is not None and options.option_count else None
+            options.clear_options()
+            options.add_options(Option(safe_text(key)+' · '+label, id=key) for key, label in rows)
+            if old and old in {key for key, _ in rows}:
+                options.highlighted = next(i for i, (key, _) in enumerate(rows) if key == old)
+            self._unassigned_rows = rows
+        options.display = bool(rows)
+        section = self.query_one('#screens-unassigned', Collapsible)
+        section.title = f'연결되지 않은 화면 {len(rows)}개 · 화면 추가' if rows else '화면 추가'
+        self.query_one('#screens-identify', Button).disabled = not self.action_state('identify', self.target())[0]
+        self.query_one('#screens-add', Button).disabled = not self.action_state('add', None)[0]
         self.render_detail()
+        if self.editor and self.editor.is_mounted:
+            self.editor.refresh_status()
+
+    def targets_on_output(self, output_id):
+        inventory = {'state': self.report.get('output_state'), 'logical_outputs': self.report.get('logical_outputs') or []}
+        result = []
+        for value in self.report.get('targets') or []:
+            resolved = resolve_output(inventory, value.get('output'), auto=value['id'] == 'default')
+            if resolved.get('state') == 'ok' and resolved['output']['id'] == output_id:
+                result.append(value)
+        return result
+
+    def action_state(self, key, value):
+        """The same target-specific guard serves every entry point, including modals."""
+        help_text = ACTIONS.get(key, ('', '작업 결과를 확인하세요.'))[1]
+        locked = (self.mutating or bool(self.owner._active_job) or self.owner._chrome_mutating
+                  or (self.owner._update_status or {}).get('state') in {'queued', 'running'})
+        if locked:
+            return False, '다른 작업이 끝나면 사용할 수 있습니다.'
+        if key in {'add', 'identify'}:
+            return True, help_text
+        if not value:
+            return False, '대상 상태를 다시 조회하세요.'
+        swap = value.get('swap') or {}
+        if key == 'swap-recover':
+            return (bool(swap.get('operation_id')) and swap.get('state') in {'unknown', 'recovery_required'},
+                    '기록된 확정 결정에 따라 두 화면의 일관된 배정 복구를 재시도합니다.')
+        if swap.get('state') in {'queued', 'running', 'unknown', 'recovery_required'} and key not in {'stop', 'logs'}:
+            return False, '두 화면 교환·복구 결과를 먼저 확인하세요.'
+        settings = value.get('settings') or {}
+        applying = settings.get('state') in {'queued', 'running'}
+        if key == 'apply' and (not settings.get('pending') or applying):
+            return False, '이 화면의 설정을 적용하고 있습니다.' if applying else settings.get('reason') or '먼저 변경한 설정을 저장하세요.'
+        if key == 'retry' and not self.retry_enabled(value):
+            return False, RETRY_DISABLED
+        if applying and key in {'start', 'restart', 'reload', 'edit', 'retry'}:
+            return False, '설정 적용이 끝나면 사용할 수 있습니다.'
+        return True, help_text
 
     def priority(self, value):
         if not value:
@@ -450,8 +559,8 @@ class ScreenPanel(Vertical):
         if swap.get('state') in {'queued', 'running', 'unknown', 'recovery_required'}:
             return ('두 화면 교환 · ' + ('복구 확인 필요' if swap['state'] in {'unknown', 'recovery_required'} else '진행 중'),
                     swap.get('next_action') or swap.get('reason') or '작업 결과를 확인하세요.', None, '#f1d5a3')
-        if (self.mutating or self.owner._active_job or self.selected in self.following
-                or self.selected in self.launches or settings.get('state') in {'queued', 'running'}):
+        if (self.mutating or self.owner._active_job or value.get('id') in self.following
+                or value.get('id') in self.launches or settings.get('state') in {'queued', 'running'}):
             return '작업 진행 중', '작업 결과를 확인하세요.', None, '#cbc2ef'
         if state == 'failed':
             return 'Chrome 실행 실패', '선택한 화면의 Chrome 로그를 확인하세요.', 'logs', '#f3b8c5'
@@ -460,7 +569,7 @@ class ScreenPanel(Vertical):
         if settings.get('state') in {'failed', 'interrupted'}:
             return '설정 적용 실패·중단', '선택한 화면의 작업 결과와 원인을 확인하세요.', None, '#f3b8c5'
         if settings.get('pending'):
-            return '저장한 설정 적용 대기', '설정 적용을 선택하면 화면이 잠시 끊길 수 있습니다.', 'apply', '#f1d5a3'
+            return '저장한 설정 적용 대기', '모니터를 열어 설정 적용을 선택하세요. 화면이 잠시 끊길 수 있습니다.', 'apply', '#f1d5a3'
         if state in {'activating', 'deactivating'}:
             return 'Chrome 상태 전환 중', '조회 결과를 기다리세요.', None, '#cbc2ef'
         if state == 'inactive':
@@ -482,26 +591,27 @@ class ScreenPanel(Vertical):
             return 'Chrome 실행 중 · 사이트 확인 필요', '선택한 화면의 Chrome 로그와 적용 주소를 확인하세요.', 'logs', '#f1d5a3'
         return 'Chrome 실행 중 · 사이트 응답 확인', '실제 표시 상태는 DID 화면에서 확인하세요.', None, '#b5e9d9'
 
-    def render_detail(self):
-        value = self.target()
+    def render_detail(self, target_id=None, *, summary=True):
+        target_id = target_id or self.selected
+        value = self.find_target(target_id)
         settings = (value or {}).get('settings') or {}
-        message = self.messages.get(self.selected, '')
-        follow = self.following.get(self.selected)
-        launch = self.launches.get(self.selected)
+        message = self.messages.get(target_id, '')
+        follow = self.following.get(target_id)
+        launch = self.launches.get(target_id)
         swap = (value or {}).get('swap') or {}
-        if swap.get('operation_id') == self.swap_following.get(self.selected) and swap.get('operation_id'):
+        if swap.get('operation_id') == self.swap_following.get(target_id) and swap.get('operation_id'):
             message = self.result_message('두 화면 교환', swap)
-            self.messages[self.selected] = message
+            self.messages[target_id] = message
             if swap.get('state') in {'completed', 'rolled_back'}:
-                self.swap_following.pop(self.selected, None)
+                self.swap_following.pop(target_id, None)
         if follow and value:
             action, source, key, identifier = follow
             latest = value.get(source) or {}
             if latest.get(key) == identifier:
                 message = self.result_message(ACTIONS[action][0], latest)
-                self.messages[self.selected] = message
+                self.messages[target_id] = message
                 if latest.get('state') not in {'queued', 'running'}:
-                    self.following.pop(self.selected, None)
+                    self.following.pop(target_id, None)
         elif launch and value:
             action, previous_pid = launch
             label = ACTIONS[action][0]
@@ -517,17 +627,15 @@ class ScreenPanel(Vertical):
                 outcome, reason = '진행', '관리 Chrome 실행 확인을 기다립니다.'
             message = f'{label} · {outcome} · {reason}'
             if outcome != '진행':
-                self.messages[self.selected] = message
-                self.launches.pop(self.selected, None)
+                self.messages[target_id] = message
+                self.launches.pop(target_id, None)
         elif not message and settings.get('state') in RESULT_LABELS:
             message = self.result_message('설정 적용', settings)
         headline, next_action, primary, tone = self.priority(value)
-        parts = (self.selected, headline, message.split('\n', 1)[0])
-        self.query_one('#screens-result', Static).update(Text(' · '.join(filter(None, parts)), style=tone))
-        self.query_one('#screens-next', Static).update('다음 · '+next_action)
-        for key in ACTIONS:
-            button = self.query_one('#screens-'+key, Button)
-            button.variant = 'primary' if key == primary and not button.disabled else 'default'
+        parts = (target_id, headline, message.split('\n', 1)[0])
+        if summary:
+            self.query_one('#screens-result', Static).update(Text(' · '.join(filter(None, parts)), style=tone))
+            self.query_one('#screens-next', Static).update('다음 · '+next_action)
         lines = []
         if value:
             runtime = value.get('runtime') or {}
@@ -581,10 +689,10 @@ class ScreenPanel(Vertical):
             lines.append(safe_text(self.report['hardware_output_reason']))
         if self.report.get('output_state') not in {None, 'ok'}:
             lines.append(topology_text(self.report))
-        detail = self.query_one('#screens-detail', TextArea)
-        content = '\n'.join(lines)
-        if detail.text != content:
-            detail.load_text(content)
+        return '\n'.join(lines)
+
+    def details(self, target_id):
+        return self.render_detail(target_id, summary=False)
 
     def move_allowed(self, target, output):
         if (not target or self.mutating or self.owner._active_job or self.owner._chrome_mutating
@@ -703,39 +811,57 @@ class ScreenPanel(Vertical):
             await self.perform('apply', target_id=original['id'],
                                expected_config=saved)
 
-    @on(DataTable.RowHighlighted, '#screens-table')
-    def highlighted(self, event):
-        self.selected = event.row_key.value
-        self.query_one('#screens-map', ScreenMap).update_report(
-            self.report, self.selected, self.owner._config,
-            enabled=not self.mutating and not self.owner._active_job)
-        self.render_detail()
+    @on(ScreenMap.OutputFocused)
+    def output_focused(self, event):
+        event.stop()
+        targets = self.targets_on_output(event.output_id)
+        if len(targets) == 1:
+            self.selected = targets[0]['id']
+            self.render_report()
 
-    @on(DataTable.RowSelected, '#screens-table')
-    def selected_row(self, event):
-        self.edit_target()
+    @on(ScreenMap.OutputActivated)
+    def output_activated(self, event):
+        event.stop()
+        targets = self.targets_on_output(event.output_id)
+        if not targets:
+            if self.report.get('output_state') == 'ok' and any(
+                    v.get('id') == event.output_id and v.get('confirmed') for v in self.report.get('logical_outputs') or []):
+                self.edit_target(new=True, output_id=event.output_id)
+            else:
+                self.owner.notify('출력 상태를 확인한 뒤 화면을 추가하세요.', severity='warning')
+        elif len(targets) == 1:
+            self.open_target(targets[0]['id'])
+        else:
+            self.owner.push_screen(TargetChooser(event.output_id, targets),
+                                   lambda target_id: self.open_target(target_id) if target_id else None)
+
+    @on(OptionList.OptionSelected, '#screens-unassigned-list')
+    def unassigned_selected(self, event):
+        event.stop()
+        self.open_target(event.option.id)
 
     @on(Button.Pressed)
     def pressed(self, event):
         key = (event.button.id or '').removeprefix('screens-')
-        if key in {'edit', 'add'}:
-            self.edit_target(new=key == 'add')
-        elif key in {'identify', 'swap-recover'} and not event.button.disabled:
+        if key == 'add':
+            self.edit_target(new=True)
+        elif key == 'refresh':
+            self.activate()
+        elif key == 'identify' and not event.button.disabled:
             self.owner.run_worker(self.session_action(key), group='screen-session-control', exclusive=True, exit_on_error=False)
-        elif key in ACTIONS and not event.button.disabled:
-            self.owner.run_worker(self.perform(key), group='screen-control', exclusive=False, exit_on_error=False)
 
-    async def session_action(self, action):
-        if self.mutating or self.owner._active_job:
+    async def session_action(self, action, *, target_id=None):
+        target = target_id or self.selected
+        if not self.action_state(action, self.find_target(target))[0]:
             return
         self.mutating = True
-        target = self.selected
+        self.render_report()
         try:
             if action == 'identify':
                 result = await self.owner.service.call('screens-identify')
                 label = '모니터 식별'
             else:
-                operation = (self.target() or {}).get('swap') or {}
+                operation = (self.find_target(target) or {}).get('swap') or {}
                 if not operation.get('operation_id'):
                     return
                 result = await self.owner.service.call('screens-swap-retry', {'operation_id': operation['operation_id']})
@@ -752,19 +878,28 @@ class ScreenPanel(Vertical):
             self.mutating = False
         await self.refresh_state(wait=True)
 
-    def edit_target(self, new=False):
-        if self.mutating or self.query_one('#screens-add' if new else '#screens-edit', Button).disabled:
+    def open_target(self, target_id):
+        if self.find_target(target_id):
+            self.selected = target_id
+            self.render_report()
+            self.edit_target()
+
+    def edit_target(self, new=False, output_id=None):
+        if new and not self.action_state('add', None)[0]:
             return
         current = self.target()
-        value = None if new else {k: current.get(k) for k in ('id', 'url', 'output', 'layout', 'autostart', 'frontend')} if current else None
+        value = None if new else deepcopy(current)
         if not new and value is None:
             return
         expected = deepcopy(self.owner._config)
         outputs = [v['id'] for v in self.report.get('logical_outputs', []) if v.get('confirmed')]
         def saved(target):
+            self.editor = None
             if target is not None:
                 self.owner.run_worker(self.save_target(target, expected), exit_on_error=False)
-        self.owner.push_screen(TargetEditor(value, outputs), saved)
+            self.query_one('#screens-map', ScreenMap).focus()
+        self.editor = TargetEditor(value, outputs, panel=self, output_id=output_id)
+        self.owner.push_screen(self.editor, saved)
 
     async def save_target(self, value, expected):
         if self.mutating:
@@ -813,15 +948,8 @@ class ScreenPanel(Vertical):
     async def perform(self, action, *, target_id=None, expected_config=None):
         target = target_id or self.selected
         current = next((t for t in self.report.get('targets', []) if t['id'] == target), None)
-        if self.mutating or not current:
+        if action not in {'start', 'stop', 'restart', 'reload', 'logs', 'retry', 'apply'} or not self.action_state(action, current)[0]:
             return
-        if target_id is None and self.query_one('#screens-'+action, Button).disabled:
-            return
-        if target_id is not None:
-            settings = current.get('settings') or {}
-            if (action != 'apply' or not settings.get('pending')
-                    or settings.get('state') in {'queued', 'running'} or self.owner._active_job):
-                return
         self.mutating = self.owner._chrome_mutating = True
         previous_pid = (current.get('service') or {}).get('MainPID')
         label = ACTIONS[action][0]
