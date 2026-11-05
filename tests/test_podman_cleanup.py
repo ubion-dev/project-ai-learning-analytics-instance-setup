@@ -79,9 +79,9 @@ def test_usage_appearing_after_approval_blocks_removal(base, monkeypatch):
 
 
 @pytest.mark.parametrize('resource', ['ps', 'volume', 'images', 'pod', 'network'])
-def test_any_account_resources_block_cleanup(monkeypatch, resource):
-    accounts = [SimpleNamespace(pw_name='root', pw_uid=0, pw_dir='/root'),
-                SimpleNamespace(pw_name='user', pw_uid=1000, pw_dir='/home/user')]
+def test_any_account_resources_block_cleanup(monkeypatch, tmp_path, resource):
+    accounts = [SimpleNamespace(pw_name='root', pw_uid=0, pw_dir=str(tmp_path / 'root')),
+                SimpleNamespace(pw_name='user', pw_uid=1000, pw_dir=str(tmp_path / 'user'))]
     monkeypatch.setattr(cleanup, 'local_accounts', lambda: accounts)
     commands = []
     def query(command):
