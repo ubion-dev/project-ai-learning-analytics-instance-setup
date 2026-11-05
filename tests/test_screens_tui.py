@@ -2,13 +2,26 @@
 import asyncio
 from copy import deepcopy
 from rich.cells import cell_len
+import pytest
 
-from textual.widgets import Button, Input, Select, Static, Tabs, TextArea
+from textual.widgets import Button, Collapsible, DataTable, Input, Select, Static, Tabs, TextArea
 
 from ala.config import Config
 from ala.model import CheckResult, Report
 from ala.screens_tui import ScreenPanel, TargetEditor, site_label, topology_text
 from ala.simple_tui import SimpleApp
+
+
+async def open_target(pilot, app, target_id='default', *, operations=False, details=False):
+    app.query_one('#screens', ScreenPanel).open_target(target_id)
+    await pilot.pause()
+    assert isinstance(app.screen, TargetEditor)
+    if operations:
+        app.screen.query_one('#target-operations', Collapsible).collapsed = False
+    if details:
+        app.screen.query_one('#target-details', Collapsible).collapsed = False
+    await pilot.pause()
+    return app.screen
 
 
 class Service:
@@ -98,7 +111,15 @@ def test_four_tabs_and_opening_screen_management_is_read_only():
             assert app.query_one('#pages').current == 'screens'
             summary = str(app.query_one('#screens-summary', Static).render())
             assert '관리 대상 2개' in summary and '확인된 창 2개' in summary
-            assert 'https://example.com/default' in app.query_one('#screens-detail', TextArea).text
+            assert not app.screen.query('#screens-table')
+            assert not app.screen.query('#screens-detail')
+            for action in ('start', 'stop', 'restart', 'reload', 'apply', 'logs', 'retry'):
+                assert not app.screen.query('#screens-'+action)
+            editor = await open_target(pilot, app)
+            assert editor.target_id == 'default'
+            assert editor.query_one('#target-operations', Collapsible).collapsed
+            assert 'https://example.com/default' in editor.query_one('#target-url', Input).value
+            await pilot.press('escape')
             assert not any(a in {'screens-action', 'screens-save', 'submit'} for a, _ in service.calls)
     asyncio.run(scenario())
 
@@ -109,55 +130,49 @@ def test_stop_only_selected_target_and_exit_leaves_other_screen_running():
         app = SimpleApp(service=service, initial_section='screens')
         async with app.run_test(size=(100, 32)) as pilot:
             await pilot.pause()
-            await pilot.press('down')
-            await pilot.pause()
-            app.query_one('#screens-stop', Button).focus()
+            editor = await open_target(pilot, app, 'display-2', operations=True)
+            editor.query_one('#screens-stop', Button).focus()
             await pilot.press('enter')
             await pilot.pause()
             requests = [p for a, p in service.calls if a == 'screens-action']
             assert requests == [{'action': 'stop', 'target': 'display-2'}]
             assert service.screens['targets'][0]['service']['ActiveState'] == 'active'
+            await pilot.press('escape')
             await pilot.press('q')
         assert len([a for a, _ in service.calls if a == 'screens-action']) == 1
     asyncio.run(scenario())
 
 
-def test_small_terminal_controls_and_detail_remain_inside_viewport():
+@pytest.mark.parametrize('size', [(80, 24), (120, 36)])
+def test_map_and_modal_primary_actions_remain_inside_viewport(size):
     async def scenario():
         service = Service()
         app = SimpleApp(service=service, initial_section='screens')
-        async with app.run_test(size=(80, 24)) as pilot:
+        async with app.run_test(size=size) as pilot:
             await pilot.pause()
-            for selector in ('#screens-summary', '#screens-table', '#screens-detail', '#screens-actions'):
+            assert not app.query_one('#screens', ScreenPanel).query(DataTable)
+            for selector in ('#screens-map', '#screens-identify'):
                 region = app.query_one(selector).region
                 assert region.x >= 0 and region.y >= 0
-                assert region.right <= 80 and region.bottom <= 23
-            start = app.query_one('#screens-start', Button)
-            stop = app.query_one('#screens-stop', Button)
-            edit = app.query_one('#screens-edit', Button)
-            reload = app.query_one('#screens-reload', Button)
-            assert stop.region.x - start.region.right == 1
-            assert edit.region.y - start.region.bottom == 1
-            assert reload.content_size.width >= cell_len(str(reload.label)) + 2
-            assert app.query_one('#screens-apply', Button).disabled
+                assert region.right <= size[0] and region.bottom <= size[1] - 1
+            editor = await open_target(pilot, app, operations=True, details=True)
+            start = editor.query_one('#screens-start', Button)
+            stop = editor.query_one('#screens-stop', Button)
+            reload = editor.query_one('#screens-reload', Button)
             start.focus()
             await pilot.press('tab')
             assert stop.has_focus
-            assert stop.styles.background != start.styles.background
+            assert reload.content_size.width >= cell_len(str(reload.label)) + 2
+            for identifier in ('target-save', 'target-cancel'):
+                button = editor.query_one('#'+identifier, Button)
+                button.focus()
+                await pilot.pause()
+                assert button.region.right <= size[0] and button.region.bottom <= size[1]
+            await pilot.press('escape')
             await pilot.resize_terminal(120, 36)
             await pilot.pause()
-            summary = app.query_one('#screens-result').region
-            next_action = app.query_one('#screens-next').region
-            actions = app.query_one('#screens-actions').region
-            detail = app.query_one('#screens-detail').region
-            assert summary.bottom <= next_action.y < actions.y
-            assert edit.region.y - start.region.bottom == 1
-            assert reload.content_size.width >= cell_len(str(reload.label)) + 2
-            assert actions.bottom <= detail.y and detail.bottom <= 35
-            await pilot.resize_terminal(125, 42)
-            await pilot.pause()
             await app.query_one('#screens', ScreenPanel).refresh_state()
-            assert '┌' in str(app.query_one('#screens-map', Static).render())
+            assert app.query_one('#screens-map').region.bottom <= 35
     asyncio.run(scenario())
 
 
@@ -185,10 +200,7 @@ def test_editor_escape_preserves_config_and_performs_no_save():
         app = SimpleApp(service=service, initial_section='screens')
         async with app.run_test(size=(80, 24)) as pilot:
             await pilot.pause()
-            app.query_one('#screens-edit', Button).focus()
-            await pilot.press('enter')
-            await pilot.pause()
-            assert isinstance(app.screen, TargetEditor)
+            await open_target(pilot, app)
             app.screen.query_one('#target-url', Input).value = 'https://example.com/new'
             await pilot.press('escape')
             await pilot.pause()
@@ -204,30 +216,32 @@ def test_saved_url_change_requires_selected_target_apply_even_with_identical_lab
         app = SimpleApp(service=service, initial_section='screens')
         async with app.run_test(size=(100, 32)) as pilot:
             await pilot.pause()
-            app.query_one('#screens-edit', Button).focus()
-            await pilot.press('enter')
-            await pilot.pause()
+            await open_target(pilot, app)
             new_url = 'https://example.com/default?revision=2#section'
             app.screen.query_one('#target-url', Input).value = new_url
             app.screen.query_one('#target-save', Button).focus()
             await pilot.press('enter')
             await pilot.pause()
-            detail = app.query_one('#screens-detail', TextArea)
+            editor = await open_target(pilot, app, details=True)
+            detail = editor.query_one('#screens-detail', TextArea)
             assert target['applied_url'] == 'https://example.com/default'
             assert '설정 · 적용 대기' in detail.text and 'revision=2' not in detail.text
             assert not any(a == 'screens-apply' for a, _ in service.calls)
-            app.query_one('#screens-apply', Button).focus()
+            editor.query_one('#screens-apply', Button).focus()
             await pilot.press('enter')
             await pilot.pause()
-            assert [p for a, p in service.calls if a == 'screens-apply'] == [{'target': 'default'}]
-            status = app.query_one('#screens-result', Static)
+            assert [p for a, p in service.calls if a == 'screens-apply'] == [
+                {'target': 'default', 'expected_config': service.config}]
+            status = editor.query_one('#target-result', Static)
             assert '설정 적용 · 접수' in str(status.render())
             target['settings'].update(state='running')
             await app.query_one('#screens', ScreenPanel).refresh_state()
+            editor.refresh_status()
             assert '설정 적용 · 진행' in str(status.render())
             target.update(applied_url=new_url)
             target['settings'].update(pending=False, state='completed')
             await app.query_one('#screens', ScreenPanel).refresh_state()
+            editor.refresh_status()
             assert '설정 적용 · 완료' in str(status.render())
             assert '설정 · 반영됨' in detail.text
             assert service.screens['targets'][1]['applied_url'] == 'https://example.com/display-2'
@@ -242,20 +256,18 @@ def test_screen_action_help_distinguishes_restart_reload_and_disabled_frontend_r
         app = SimpleApp(service=service, initial_section='screens')
         async with app.run_test(size=(80, 24), tooltips=True) as pilot:
             await pilot.pause()
-            help_line = app.query_one('#screens-help', Static)
+            editor = await open_target(pilot, app, operations=True, details=True)
+            help_line = editor.query_one('#target-help', Static)
             for key, wording in (('restart', 'Chrome을 다시 시작'), ('reload', 'Chrome을 유지')):
-                button = app.query_one('#screens-'+key, Button)
+                button = editor.query_one('#screens-'+key, Button)
                 assert wording in str(button.tooltip)
                 button.focus()
                 await pilot.pause()
                 assert wording in str(help_line.render())
-            await pilot.hover('#screens-restart')
-            await pilot.pause(app.TOOLTIP_DELAY + 0.1)
-            assert 'Chrome을 다시 시작' in str(app.query_one('Tooltip').render())
-            retry = app.query_one('#screens-retry', Button)
+            retry = editor.query_one('#screens-retry', Button)
             assert retry.disabled
             assert '프론트 배포 연동이 없습니다' in str(retry.tooltip)
-            assert '프론트 배포 연동이 없습니다' in app.query_one('#screens-detail', TextArea).text
+            assert '프론트 배포 연동이 없습니다' in editor.query_one('#screens-detail', TextArea).text
     asyncio.run(scenario())
 
 
@@ -271,15 +283,14 @@ def test_hdmi_status_and_gnome_error_are_separate_and_editor_keeps_disconnected_
         app = SimpleApp(service=service, initial_section='screens')
         async with app.run_test(size=(80, 24)) as pilot:
             await pilot.pause()
-            assert 'card0-HDMI-A-1 연결됨' in str(app.query_one('#screens-hardware', Static).render())
+            assert app.query_one('#screens', ScreenPanel).report['hardware_outputs'][0]['status'] == 'connected'
             assert 'GNOME 확장 연결 대기' in str(app.query_one('#screens-map', Static).render())
-            assert 'GNOME 재로그인 후 확인하세요' in app.query_one('#screens-detail', TextArea).text
-            app.query_one('#screens-edit', Button).focus()
-            await pilot.press('enter')
-            await pilot.pause()
-            output = app.screen.query_one('#target-output', Select)
+            editor = await open_target(pilot, app, details=True)
+            assert 'GNOME 재로그인 후 확인하세요' in editor.query_one('#screens-detail', TextArea).text
+            output = editor.query_one('#target-output', Select)
             assert output.value == 'HDMI-1'
-            assert {value for _, value in output._options} == {'', 'HDMI-1'}
+            assert 'HDMI-1' in {value for _, value in output._options}
+            assert 'DP-1' not in {value for _, value in output._options}
     asyncio.run(scenario())
 
 
@@ -294,12 +305,12 @@ def test_save_conflict_refreshes_config_and_explains_retry():
             old = deepcopy(service.config)
             service.config['timezone'] = 'UTC'
             await panel.save_target(edited.to_dict(), old)
-            detail = app.query_one('#screens-detail', TextArea).text
+            detail = panel.messages['default']
             assert '다른 작업에서 구성이 변경됐습니다' in detail
             assert '설정을 다시 열고' in detail
             assert app._config == service.config
             await panel.save_target(edited.to_dict(), app._config)
-            assert '설정 저장 · 완료' in str(app.query_one('#screens-result', Static).render())
+            assert '설정 저장 · 완료' in panel.messages['default']
     asyncio.run(scenario())
 
 

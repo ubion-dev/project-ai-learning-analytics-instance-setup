@@ -249,8 +249,16 @@ class QuickPanel(Vertical):
     @on(Button.Pressed, '#quick-manage')
     def manage_pressed(self):
         if self.target():
-            self.owner.query_one(ScreenPanel).selected = self.selected
+            panel = self.owner.query_one(ScreenPanel)
+            target_id = self.selected
+            panel.selected = target_id
             self.owner.action_chrome()
+            async def open_settings():
+                await panel.refresh_state(wait=True)
+                if self.owner.query_one('#pages').current == 'screens' and len(self.owner.screen_stack) == 1:
+                    panel.open_target(target_id)
+            self.owner.call_after_refresh(
+                lambda: self.owner.run_worker(open_settings(), exit_on_error=False))
 
     @on(Button.Pressed, '#quick-logs')
     def logs_pressed(self):

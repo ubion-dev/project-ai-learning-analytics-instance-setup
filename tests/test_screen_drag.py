@@ -10,11 +10,27 @@ from ala.screens_tui import MoveConfirmation, ScreenPanel
 from ala.simple_tui import SimpleApp
 from test_screens_tui import Service
 
+MUTATIONS = {'screens-save', 'screens-apply', 'screens-action', 'screens-swap-submit'}
+
 
 def point(map_view, output):
     region = map_view.output_regions[output]
-    return (map_view.content_region.x + region.x + min(2, region.width - 1),
-            map_view.content_region.y + region.y + min(1, region.height - 1))
+    assert region.width > 0 and region.height > 0
+    position = (map_view.content_region.x + region.x + min(2, region.width - 1),
+                map_view.content_region.y + region.y + min(1, region.height - 1))
+    assert map_view.content_region.contains(*position), f'{output} card is clipped in the monitor map'
+    assert 0 <= position[0] < map_view.screen.size.width
+    assert 0 <= position[1] < map_view.screen.size.height
+    return position
+
+
+async def select_target(app, pilot, target_id):
+    panel = app.query_one('#screens', ScreenPanel)
+    panel.selected = target_id
+    panel.render_report()
+    await pilot.pause()
+    assert panel.selected == target_id
+    return panel
 
 
 async def drag(pilot, map_view, source='HDMI-1', destination='DP-1'):
@@ -37,19 +53,21 @@ def test_drag_reviews_then_saves_and_applies_only_selected_did(size, approved, t
         app = SimpleApp(service=service, initial_section='screens')
         async with app.run_test(size=size) as pilot:
             await pilot.pause()
+            panel = await select_target(app, pilot, target_id)
             before = deepcopy(service.screens['targets'][0])
             await drag(pilot, app.query_one('#screens-map', ScreenMap), source, destination)
             assert isinstance(app.screen, MoveConfirmation)
             assert app.focused.id == 'move-cancel'
             assert app.screen.query_one('#move-confirm', Button).region.bottom <= size[1]
-            assert not any(action in {'screens-save', 'screens-apply'} for action, _ in service.calls)
+            assert not any(action in MUTATIONS for action, _ in service.calls)
             if approved:
                 await pilot.press('tab', 'enter')
             else:
                 await pilot.press('escape')
             await pilot.pause()
-            mutations = [(action, payload) for action, payload in service.calls
-                         if action in {'screens-save', 'screens-apply', 'screens-action'}]
+            assert len(app.screen_stack) == 1
+            assert panel.selected == target_id
+            mutations = [(action, payload) for action, payload in service.calls if action in MUTATIONS]
             if approved:
                 assert [action for action, _ in mutations] == ['screens-save', 'screens-apply']
                 saved = mutations[0][1]['target']
@@ -96,8 +114,8 @@ def test_invalid_drop_or_cancel_does_not_save_or_apply(condition):
                 await drag(pilot, map_view)
             await pilot.pause()
             assert not isinstance(app.screen, MoveConfirmation)
-            assert not any(action in {'screens-save', 'screens-apply', 'screens-action'}
-                           for action, _ in service.calls)
+            assert len(app.screen_stack) == 1
+            assert not any(action in MUTATIONS for action, _ in service.calls)
     asyncio.run(scenario())
 
 
@@ -129,7 +147,7 @@ def test_monitor_disconnect_during_confirmation_blocks_the_move():
             service.screens['logical_outputs'][1]['confirmed'] = False
             await pilot.press('tab', 'enter')
             await pilot.pause()
-            assert not any(action in {'screens-save', 'screens-apply'} for action, _ in service.calls)
+            assert not any(action in MUTATIONS for action, _ in service.calls)
     asyncio.run(scenario())
 
 
@@ -150,7 +168,7 @@ def test_unsuccessful_save_never_applies_or_starts_a_did():
             await drag(pilot, app.query_one('#screens-map', ScreenMap))
             await pilot.press('tab', 'enter')
             await pilot.pause()
-            assert not any(action in {'screens-apply', 'screens-action'} for action, _ in service.calls)
+            assert not any(action in {'screens-apply', 'screens-action', 'screens-swap-submit'} for action, _ in service.calls)
             assert service.screens['targets'][0]['output'] == 'HDMI-1'
             assert '설정 저장 · 실패' in app.query_one('#screens', ScreenPanel).messages['default']
     asyncio.run(scenario())
@@ -172,14 +190,12 @@ def test_confirmation_waits_for_inflight_query_and_rechecks_disconnected_output(
                 assert panel.reading
                 await pilot.press('tab', 'enter')
                 await pilot.pause()
-                assert not any(action in {'screens-save', 'screens-apply'}
-                               for action, _ in service.calls)
+                assert not any(action in MUTATIONS for action, _ in service.calls)
                 service.screens['logical_outputs'][1]['confirmed'] = False
                 service.gate.set()
                 await asyncio.wait_for(query, 1)
                 await pilot.pause()
-                assert not any(action in {'screens-save', 'screens-apply'}
-                               for action, _ in service.calls)
+                assert not any(action in MUTATIONS for action, _ in service.calls)
             finally:
                 service.gate.set()
                 await asyncio.wait_for(query, 1)

@@ -27,13 +27,13 @@ ssh user@서버IP
 
 ## 4. ala 설치
 
-SSH로 접속한 **Rocky에서** 실행합니다. 아래는 공개 시험판 RC27의 설치 명령입니다. [Mac에서 받아 SCP로 전달](docs/INSTALL.md#mac에서-받아-scp로-전달)
+SSH로 접속한 **Rocky에서** 실행합니다. 아래는 공개 시험판 RC28의 설치 명령입니다. [Mac에서 받아 SCP로 전달](docs/INSTALL.md#mac에서-받아-scp로-전달)
 
 ```bash
 (
   set -e
-  version='0.1.0rc27'
-  tag='v0.1.0-rc.27'
+  version='0.1.0rc28'
+  tag='v0.1.0-rc.28'
   archive="ala-${version}.tar.gz"
   url="https://github.com/ubion-dev/project-ai-learning-analytics-instance-setup/releases/download/${tag}"
   mkdir -p "$HOME/ala-downloads/$version"
@@ -53,7 +53,8 @@ SSH로 접속한 **Rocky에서** 실행합니다. 아래는 공개 시험판 RC2
 DID 전용 계정을 쓸 경우 `ala config edit`에서 화면 사용자를 먼저 지정합니다. `ala`를 열어 **간편 설정 실행**을 누르고, **화면 관리**에서 사이트 주소를 저장한 뒤 **설정 적용**을 선택합니다. [설치 항목](docs/OPERATIONS.md#설치설정-항목-관리) · [화면 관리](docs/DISPLAY.md)
 
 새 장비는 모니터별 안내 화면 준비를 확인하면 연결된 모든 논리 화면에 설정 안내를 띄웁니다.
-화면 관리의 **모니터 식별**로 번호를 확인한 뒤 각 DID에 주소를 지정합니다. 전체화면 DID 두 개는
+화면 관리의 **모니터 식별**로 번호를 확인하고 모니터 그림을 클릭해 주소를 설정합니다.
+방향키와 Enter로도 열 수 있으며 운영·로그 기능은 각 모니터의 설정 창에서 사용합니다. 전체화면 DID 두 개는
 드래그 후 확인하여 출력 위치를 교환할 수 있습니다. 기존 장비의 사이트와 자동 시작 선택은 보존합니다.
 
 ## 6. 동작 확인
