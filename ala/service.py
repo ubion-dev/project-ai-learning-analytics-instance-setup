@@ -312,6 +312,12 @@ class Operations:
             inspection['duration_ms'] = round(max(0.0, (perf_counter() - started) * 1000), 3)
             report['inspection'] = inspection
             return report
+        if action == 'podman-plan':
+            from .podman import inspect_cleanup
+            with change_lock(self.paths):
+                if any(r['state'] in {'queued', 'running'} for r in JobStore(self.paths, self.host).list()):
+                    raise RuntimeError('설치 작업이 끝난 뒤 Podman 사용 여부를 확인하세요.')
+                return inspect_cleanup(self.host, self.release)
         if action == 'submit':
             def current_config():
                 config = self.config()
@@ -323,7 +329,8 @@ class Operations:
                 return config
             return JobStore(self.paths, self.host).submit(current_config, self.release, self.release / '.venv/bin/python',
                                                          expected_config=payload.get('expected_config'), persist_config=True,
-                                                         bash_assist=payload.get('bash_assist', False))
+                                                         bash_assist=payload.get('bash_assist', False),
+                                                         podman_cleanup=payload.get('podman_cleanup'))
         if action == 'runs-list':
             return {'runs': JobStore(self.paths, self.host).list()}
         if action == 'runs-show':

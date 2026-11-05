@@ -13,6 +13,7 @@ from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
 from textual.message import Message
+from textual.screen import ModalScreen
 from textual.widgets import Button, Checkbox, ContentSwitcher, DataTable, Footer, Static, Tab, Tabs, TextArea
 
 from . import __version__
@@ -25,6 +26,51 @@ from .quick_tui import QuickPanel
 ACTIVE = {'queued', 'running'}
 JOB_LABELS = {'queued': '시작 대기', 'running': '실행 중', 'completed': '완료',
               'pending': '적용 대기', 'failed': '조치 필요', 'interrupted': '중단됨'}
+
+
+class PodmanConfirmation(ModalScreen[bool]):
+    BINDINGS = [('escape', 'cancel', '취소')]
+    CSS = """
+    PodmanConfirmation { align: center middle; background: #000000 65%; }
+    #podman-dialog { width: 90%; max-width: 90; height: 85%; padding: 1 2; background: #211f29; border: round #cbc2ef; }
+    #podman-title { height: auto; }
+    #podman-details { height: 1fr; margin: 1 0; }
+    #podman-buttons { height: 3; }
+    #podman-buttons Button { width: 1fr; margin-right: 1; padding: 0; }
+    """
+
+    def __init__(self, plan):
+        super().__init__()
+        self.plan = plan
+
+    def compose(self):
+        ready = self.plan.get('state') == 'ready'
+        with Vertical(id='podman-dialog'):
+            yield Static('미사용 Podman 제거 확인' if ready else 'Podman 확인 필요', id='podman-title')
+            if ready:
+                users = ', '.join(str(a['user']) for a in self.plan.get('accounts', []))
+                text = ('조회 계정 · ' + users +
+                        '\n컨테이너·볼륨·이미지·pod와 사용자 정의 네트워크 없음' +
+                        '\n\n제거 예정 패키지\n' + '\n'.join(self.plan['packages']) +
+                        '\n\n승인하면 이 목록의 패키지를 제거하고 간편 설정과 Docker 설치를 진행합니다.' +
+                        '\n점검 중에는 다른 터미널에서 Podman 작업을 시작하지 마세요.')
+            else:
+                text = self.plan.get('reason', '사용 여부를 확인하지 못했습니다.')
+            yield TextArea(text, read_only=True, id='podman-details')
+            with Horizontal(id='podman-buttons'):
+                yield Button('취소', id='podman-cancel')
+                yield Button('제거 후 설정 계속', id='podman-confirm', variant='primary', disabled=not ready)
+
+    def on_mount(self):
+        self.query_one('#podman-cancel', Button).focus()
+
+    @on(Button.Pressed, '#podman-cancel')
+    def action_cancel(self):
+        self.dismiss(False)
+
+    @on(Button.Pressed, '#podman-confirm')
+    def confirm(self):
+        self.dismiss(True)
 
 
 class SetupTable(DataTable):
@@ -532,6 +578,19 @@ class SimpleApp(App[None]):
                 self.notice('구성이 변경됐습니다. 상태를 다시 확인한 뒤 실행하세요.')
                 self._status_known = False
                 return
+            conflicts = (self._setup_report or {}).get('results', [])
+            if any(row.get('id') in {'docker.conflict.podman', 'docker.conflict.podman-docker'}
+                   for row in conflicts):
+                self.notice('Podman 사용 여부와 제거 목록을 확인하고 있습니다.')
+                plan = await self.api('podman-plan')
+                if not self.is_running or plan is None:
+                    return
+                if plan.get('state') != 'not_required':
+                    approved = await self.push_screen_wait(PodmanConfirmation(plan))
+                    if not approved or plan.get('state') != 'ready':
+                        self.notice('Podman 정리와 간편 설정을 취소했습니다.')
+                        return
+                    payload['podman_cleanup'] = plan['token']
             job = await self.api('submit', payload)
             if not self.is_running:
                 return

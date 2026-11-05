@@ -251,6 +251,25 @@ class EngineTests(unittest.TestCase):
         self.assertEqual(self.by_id(report, "docker.conflict.podman").state, "blocked")
         self.assertEqual(self.host.executed, [])
 
+    def test_approved_podman_cleanup_rechecks_and_continues_docker(self):
+        self.host.packages.add("podman")
+        self.engine.podman_cleanup = 'a' * 64
+        def removed(command):
+            if "podman_cleanup.py" in str(command):
+                self.host.packages.remove("podman")
+        self.host.on_execute = removed
+        report = self.engine.apply()
+        self.assertEqual(report.exit_code, 0)
+        self.assertTrue(any("podman_cleanup.py" in str(c) for c in self.host.executed))
+
+    def test_failed_podman_cleanup_stops_docker_install(self):
+        self.host.packages.add("podman")
+        self.engine.podman_cleanup = 'a' * 64
+        self.host.execution_code = 1
+        report = self.engine.apply()
+        self.assertEqual(self.by_id(report, "docker.cleanup").state, "error")
+        self.assertFalse(any("setup-docker.sh" in str(c) for c in self.host.executed))
+
     def test_display_registration_precedes_docker_and_gpu_once_per_apply(self):
         applied = self.track_display_apply()
         for attempt in range(2):
