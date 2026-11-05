@@ -202,6 +202,8 @@ class RuntimeStore:
         return state
 
     def stage(self, target, release, config, *, expected_generation=None, expected_revision=None):
+        from .screen_swap import guard
+        guard(paths=self.paths, host=self.host, target=target)
         state = self.load(target)
         if state is None:
             raise ValueError('화면 런타임의 최초 등록이 필요합니다.')
@@ -215,6 +217,8 @@ class RuntimeStore:
 
     def settings_saved(self, target):
         """Invalidate old results without staging an unapplied edit for nightly rollout."""
+        from .screen_swap import guard
+        guard(paths=self.paths, host=self.host, target=target)
         state = self.load(target)
         if state is None or self.active(state):
             raise RuntimeError('저장한 화면 설정의 변경을 기록할 수 없습니다.')
@@ -240,7 +244,7 @@ class RuntimeStore:
         unit = operation.get('unit')
         if not unit:
             return True  # in-process reservation; production workers name a unit
-        if not isinstance(unit, str) or not re.fullmatch(r'ala-runtime-(?:nightly|apply-[a-z][a-z0-9_-]{0,31})\.service', unit):
+        if not isinstance(unit, str) or not re.fullmatch(r'ala-runtime-(?:nightly|apply-[a-z][a-z0-9_-]{0,31}|swap-[a-f0-9]{32})\.service', unit):
             return False
         response = self.host.run(['systemctl', 'show', unit, '--property=ActiveState'], timeout=5)
         properties = dict(line.split('=', 1) for line in response.stdout.splitlines() if '=' in line)
@@ -269,7 +273,9 @@ class RuntimeStore:
         return not (previous is not None and current is not None and previous != current)
 
     def reserve(self, target, kind, *, expected_generation=None, expected_revision=None, ttl=240, unit=None,
-                settings=None):
+                settings=None, swap_operation_id=None):
+        from .screen_swap import guard
+        guard(paths=self.paths, host=self.host, target=target, operation_id=swap_operation_id)
         if kind not in KINDS or type(ttl) not in (int, float) or not 0 < ttl <= 900:
             raise ValueError('허용된 화면 작업과 제한 시간이 필요합니다.')
         if settings is not None and kind != 'runtime':
@@ -297,6 +303,8 @@ class RuntimeStore:
                 if settings[key]['release'] != state[key]['release']:
                     raise ValueError('설정 적용은 기존 화면 코드 선택을 유지해야 합니다.')
             operation.update(settings_only=True, candidate=settings['committed'], settings_desired=settings['desired'])
+        if swap_operation_id is not None:
+            operation['swap_operation_id'] = swap_operation_id
         state['operation'] = operation
         self._write(self.state_path(target), state)
         return {'target_id': target, **operation}
@@ -345,6 +353,9 @@ class RuntimeStore:
         return state
 
     def cancel(self, target, *, stopped=True):
+        if stopped:
+            from .screen_swap import note_stop
+            note_stop(target, paths=self.paths, host=self.host)
         state = self.load(target)
         if state is None:
             return None
@@ -369,7 +380,54 @@ class RuntimeStore:
 def snapshot(target='default', *, paths=None, host=None):
     store = RuntimeStore(paths, host)
     state = store.load(target)
-    return state | {'stopped': store.is_stopped(state)} if state is not None else None
+    if state is None:
+        return None
+    return state | {'committed': committed_selection(target, paths=paths, host=host),
+                    'stopped': store.is_stopped(state)}
+
+
+def committed_selection(target='default', *, paths=None, host=None):
+    """Return one side of a pair decision, never a partially materialized state."""
+    from .screen_swap import effective_selection
+    selected = effective_selection(target, paths=paths, host=host, committed=True)
+    if selected is not None:
+        return selected
+    state = RuntimeStore(paths, host).load(target)
+    return dict(state['committed']) if state is not None else None
+
+
+def _selection_config(store, selection):
+    from .config import Config
+    return Config.from_dict(store._read(store.paths.config)) if store.paths.config.exists() else Config.from_dict(store._validate_selection(selection))
+
+
+def _sync_autostart(config, paths, host):
+    # Source-checkout/temp-root tests must not contact a real display account.
+    # Tests of orchestration can replace this hook independently.
+    if paths.root != Path('/'):
+        return
+    from .display import sync_autostart_registration
+    result = sync_autostart_registration(config, host=host, paths=paths)
+    if not isinstance(result, dict) or result.get('exit_code') != 0:
+        raise RuntimeError((result.get('reason') if isinstance(result, dict) else None)
+                           or '자동 시작 등록 결과를 확인하지 못했습니다.')
+
+
+def _sync_committed_autostart(store, selection, target):
+    """A registration failure after commit must not roll the runtime back."""
+    try:
+        _sync_autostart(_selection_config(store, selection), store.paths, store.host)
+    except (OSError, RuntimeError, ValueError) as exc:
+        failure = {'state': 'pending', 'applied': True, 'exit_code': 2,
+                   'reason': '화면 선택은 적용했지만 자동 시작 등록을 확인하지 못했습니다.',
+                   'next_action': str(exc)}
+        state = store.load(target)
+        if state is not None:
+            key = 'last_settings_result' if (state.get('last_settings_result') or {}).get('generation') == state['generation'] else 'last_result'
+            state[key] = (state.get(key) or {}) | {field: failure[field] for field in ('state', 'reason', 'next_action')}
+            store._write(store.state_path(target), state)
+        return failure
+    return None
 
 
 def _target_config(config, target):
@@ -446,7 +504,7 @@ def bootstrap(target, release, config, *, paths=None, host=None):
         return store.bootstrap(target, release, config)
 
 
-def load_user_selection(target='default', *, paths=None, host=None):
+def load_user_selection(target='default', *, paths=None, host=None, observation=False):
     """A user may read, never create, a root-owned committed/trial snapshot."""
     store = RuntimeStore(paths, host)
     state = store.load(target)
@@ -454,10 +512,12 @@ def load_user_selection(target='default', *, paths=None, host=None):
         if os.environ.get('ALA_RUNTIME_CONFIG'):
             raise PermissionError('런타임 pin에 대응하는 root 선택이 없습니다.')
         return None
-    selection = state['committed']
+    from .screen_swap import user_selection
+    swap_selected = user_selection(target, paths=paths, host=host, observation=observation)
+    selection = swap_selected or state['committed']
     # Trials never survive a boot, lease expiry, or manual stop. The selected
     # trial is only used while its root-owned operation remains current.
-    if (store.active(state) and state['operation']['kind'] == 'runtime'
+    if (swap_selected is None and store.active(state) and state['operation']['kind'] == 'runtime'
             and state['operation'].get('phase') in {'trial', 'observing'} and not store.is_stopped(state)
             and store.trial_owner_active(state)):
         selection = state['operation']['candidate']
@@ -594,6 +654,8 @@ def _observed_release_matches(store, report, version, target, config):
 
 def guard_config_change(current, new, *, paths=None, host=None):
     """Read only; legacy code cannot consume pinned snapshots or schema 2."""
+    from .screen_swap import guard
+    guard(paths=paths, host=host)
     data = new.to_dict() if hasattr(new, 'to_dict') else new
     store = RuntimeStore(paths, host)
     for state in store.selections():
@@ -603,13 +665,17 @@ def guard_config_change(current, new, *, paths=None, host=None):
                 raise ValueError('기존 화면 설정을 유지한 채 업데이트 관리의 선택 화면 코드 적용으로 최초 이전을 완료하세요.')
 
 
-def code_ready(report, version, revision=None):
+def code_ready(report, version, revision=None, *, setup=False):
     """A site's HTTP outage is not evidence that a runtime release is broken."""
     service = report.get('service') or {}
     if service.get('ActiveState') != 'active' or service.get('QueryError'):
         return False
     health = report.get('health') or {}
     if health.get('supervisor_version') != version or health.get('state') in {'failed', 'unknown'}:
+        return False
+    if setup and health.get('state') != 'waiting_configuration':
+        return False
+    if (setup or health.get('state') == 'waiting_configuration') and health.get('local_page_ready') is not True:
         return False
     if revision is not None and health.get('config_revision') != revision:
         return False
@@ -724,6 +790,10 @@ def apply_target(target, *, paths=None, host=None, control=None, monotonic=None,
                 if not store.valid(token):
                     return {'state': 'cancelled', 'target_id': target}
                 store.finish(token, success=commit, reason=reason, outcome=outcome, next_action=next_action)
+                if commit:
+                    sync_error = _sync_committed_autostart(store, candidate, target)
+                    if sync_error:
+                        return sync_error | {'target_id': target, 'selection': candidate}
         return result | ({'selection': candidate} if commit else {})
 
     start_deadline = clock() + 90
@@ -752,6 +822,9 @@ def apply_target(target, *, paths=None, host=None, control=None, monotonic=None,
                 latest['last_result'] = {'kind': 'runtime', 'state': 'selected_unverified', 'ended_at': _stamp(),
                                          'reason': '미실행 화면의 코드 선택만 완료했습니다. 실제 화면 수용은 대기 중입니다.'}
                 store._write(store.state_path(target), latest)
+                sync_error = _sync_committed_autostart(store, candidate, target)
+                if sync_error:
+                    return sync_error | {'target_id': target, 'selection': candidate}
             return conclude('selected_unverified', '코드 선택 완료·실행 미검증. 중지된 화면을 켜지 않았습니다.', commit=True)
         if store.is_stopped(state):
             return conclude('pending', '수동 중지 이후 화면이 실행 중인 상태입니다.', '현재 화면의 중지 상태를 확인하세요.')
@@ -781,7 +854,10 @@ def apply_target(target, *, paths=None, host=None, control=None, monotonic=None,
             if not valid():
                 return False
             revision = selection['revision'] if (Path(selection['release']) / 'COMPATIBILITY.json').is_file() else None
-            ready = code_ready(invoke('check', selection, deadline), selection['version'], revision)
+            from .config import Config
+            model = Config.from_dict(store._validate_selection(selection)).for_screen(target)
+            ready = code_ready(invoke('check', selection, deadline), selection['version'], revision,
+                               setup=model.url is None)
             if ready:
                 if not stable:
                     return True
@@ -819,6 +895,9 @@ def apply_target(target, *, paths=None, host=None, control=None, monotonic=None,
             raise RuntimeError('후보 화면 코드의 안정 관측에 실패했습니다.')
         with change_lock(store.paths):
             result = store.finish(token, success=True, reason='저장한 설정을 적용했습니다.' if settings_operation_id else '')
+            sync_error = _sync_committed_autostart(store, result['committed'], target)
+            if sync_error:
+                return sync_error | {'target_id': target, 'selection': result['committed']}
         return {'state': 'completed', 'target_id': target, 'selection': result['committed']}
     except (OSError, RuntimeError, ValueError):
         if not valid():
@@ -852,6 +931,8 @@ def submit_apply(target='default', *, release=None, paths=None, host=None, setti
     target_id(target)
     store = RuntimeStore(paths, host)
     with change_lock(paths):
+        from .screen_swap import guard
+        guard(paths=paths, host=host, target=target)
         state = store.load(target)
         if state is None:
             if settings_config is not None:
@@ -874,6 +955,13 @@ def submit_apply(target='default', *, release=None, paths=None, host=None, setti
             if screen is None:
                 raise ValueError('해당 화면 ID가 구성에 없습니다.')
             committed = state['committed']
+            if screen.url is None:
+                metadata = Path(committed['release']) / 'COMPATIBILITY.json'
+                if not metadata.is_file() or store._read(metadata).get('setup_page_protocol') != 1:
+                    return {'state': 'pending', 'exit_code': 2,
+                            'reason': '선택한 화면 코드가 URL 없는 설정 안내를 지원하지 않습니다.',
+                            'next_action': '업데이트 관리에서 이 DID의 선택 화면 코드를 먼저 적용하세요.'}
+            _sync_autostart(saved, paths, host)
             config = Config.from_dict(store._validate_selection(committed))
             if screen == _target_config(config, target):
                 return {'state': 'kept', 'exit_code': 0, 'reason': '저장한 설정이 이미 적용돼 있습니다.'}

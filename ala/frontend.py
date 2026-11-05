@@ -434,7 +434,7 @@ def run_worker(*, config=None, host=None, paths=None, retry=False, target_id=Non
                 continue
             applied = Config.load(Path(selection['config_path']))
             context = applied.for_screen(target, revision=selection['revision'])
-            if context.frontend.enabled and (manifest_url is None or context.frontend.manifest_url == manifest_url):
+            if context.url is not None and context.frontend.enabled and (manifest_url is None or context.frontend.manifest_url == manifest_url):
                 contexts[target] = context
     except (OSError, ValueError, KeyError, TypeError):
         return 1

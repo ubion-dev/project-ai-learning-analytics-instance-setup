@@ -239,13 +239,13 @@ def test_first_setup_persists_defaults_once_under_job_lock(store, monkeypatch, t
     operations = Operations(paths=store.paths, host=store.host, release=Path('/release'))
     expected = operations.config().to_dict()
     assert not store.paths.config.exists()
-    job = operations.dispatch('submit', {'expected_config': expected})
+    job = operations.dispatch('submit', {'expected_config': expected, 'initialize_displays': False})
     assert Config.load(store.paths.config).user == 'user'
-    assert Config.load(store.paths.config).autostart is False
+    assert Config.load(store.paths.config).autostart is True
     before = store.paths.config.stat().st_mtime_ns
     job.update(state='completed', exit_code=0)
     store.save(job)
-    operations.dispatch('submit', {'expected_config': expected})
+    operations.dispatch('submit', {'expected_config': expected, 'initialize_displays': False})
     assert store.paths.config.stat().st_mtime_ns == before
 
 
@@ -262,7 +262,7 @@ def test_bash_assist_is_bound_to_the_requested_setup_job(store, monkeypatch, tmp
         operations.dispatch('submit', {'expected_config': expected, 'bash_assist': 'true'})
     assert not store.paths.runs.exists()
 
-    job = operations.dispatch('submit', {'expected_config': expected, 'bash_assist': True})
+    job = operations.dispatch('submit', {'expected_config': expected, 'bash_assist': True, 'initialize_displays': False})
     assert store.load(job['run_id'])['bash_assist'] is True
     assert json.loads(store.paths.config.read_text()) == expected
     assert json.loads((store.directory(job['run_id']) / 'config.json').read_text()) == expected

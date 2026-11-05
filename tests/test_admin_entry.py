@@ -51,7 +51,7 @@ def test_original_sudo_user_supplies_first_defaults_but_root_never_does(monkeypa
     operations = backend.Operations(paths=Paths(tmp_path))
     config = operations.config()
     assert config.user == 'user' and config.display and config.autologin
-    assert not config.autostart and not operations.paths.config.exists()
+    assert config.autostart and not operations.paths.config.exists()
     monkeypatch.setenv('SUDO_USER', 'root')
     assert operations.config().user == ''
 

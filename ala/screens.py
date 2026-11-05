@@ -18,12 +18,36 @@ def _context(config,target):
     return config if getattr(config,'target_id',None)==target and hasattr(config,'_target_id') else config.for_screen(target,revision=config.config_revision)
 
 
+def _setup_runtime_guard(config, host, paths):
+    if config.url is not None or not config.runtime_pin:
+        return None
+    from pathlib import Path
+    from .runtime import RuntimeStore
+    release = config.runtime_pin.get('release')
+    try:
+        if isinstance(release, str):
+            metadata = RuntimeStore(paths, host)._read(Path(release) / 'COMPATIBILITY.json')
+            if metadata.get('setup_page_protocol') == 1:
+                return None
+    except (OSError, ValueError, RuntimeError):
+        pass
+    return {'state': 'pending', 'exit_code': 2,
+            'reason': '선택한 화면 코드가 URL 없는 설정 안내를 지원하지 않습니다.',
+            'next_action': '업데이트 관리에서 이 DID의 선택 화면 코드를 먼저 적용하세요.'}
+
+
 def _applied_context(config, target, host, paths):
     """Control the selected snapshot while keeping the desired URL in the UI."""
     if config.runtime_pin:
         return _context(config, target)
     from .runtime import RuntimeStore, load_user_selection
-    selected = load_user_selection(target, paths=paths, host=host)
+    from .screen_swap import effective_selection
+    assignment = effective_selection(target, paths=paths, host=host)
+    if assignment is not None:
+        store = RuntimeStore(paths, host)
+        selected = assignment | {'config': store._validate_selection(assignment)}
+    else:
+        selected = load_user_selection(target, paths=paths, host=host)
     if selected is None:
         return _context(config, target)
     store = RuntimeStore(paths, host)
@@ -52,7 +76,13 @@ def _conflict(config,target,inventory,*,host=None,paths=None,selected=None):
     logical=found['output']['id']
     for other in config.screen_targets():
         if other.id==target:continue
-        actual_other=_applied_context(replace(config,runtime_pin=None),other.id,host,paths)
+        from .screen_swap import conflict_selection
+        peer = conflict_selection(other.id, target, selected.runtime_pin, host=host, paths=paths)
+        if peer is not None:
+            from .runtime import RuntimeStore
+            actual_other=Config.from_dict(RuntimeStore(paths,host)._validate_selection(peer)).for_screen(other.id)
+        else:
+            actual_other=_applied_context(replace(config,runtime_pin=None),other.id,host,paths)
         resolved=resolve_output(inventory,actual_other.output,auto=other.id=='default')
         if resolved.get('state')!='ok' or resolved['output']['id']!=logical:continue
         if selected.layout=='fullscreen' or actual_other.layout=='fullscreen' or selected.layout==actual_other.layout:
@@ -124,8 +154,11 @@ def inspect_screens(config:Config,host=None,paths=None):
 def preflight(config,host=None,paths=None):
     """Read common startup prerequisites before stopping a working display."""
     host,paths=host or Host(),paths or Paths()
-    if not config.display or not config.url:
-        return {'state':'pending','exit_code':2,'reason':'화면 설정과 DID 주소가 필요합니다.'}
+    if not config.display:
+        return {'state':'pending','exit_code':2,'reason':'화면 관리가 꺼져 있습니다.'}
+    unsupported = _setup_runtime_guard(config, host, paths)
+    if unsupported:
+        return unsupported
     try:
         uid,_,_=display._account(config,host)
         sessions,_=display._graphical_sessions(host,uid)
@@ -164,6 +197,10 @@ def screen_action(action,config:Config,target='default',host=None,paths=None,*,t
     host,paths=host or Host(),paths or Paths()
     if timeout is not None:host=display.BudgetHost(host,timeout)
     context=_applied_context(config,target,host,paths)
+    if action in {'start', 'restart'}:
+        unsupported = _setup_runtime_guard(context, host, paths)
+        if unsupported:
+            return unsupported
     if action=='preflight':return preflight(context,host=host,paths=paths)
     if action=='outputs':return _inventory(config,host,paths)
     if action in {'start','restart'} and context.schema_version==2:

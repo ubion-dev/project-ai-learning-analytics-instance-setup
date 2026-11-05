@@ -17,9 +17,10 @@ from .model import redact
 PREPARATION_IDS = {'display.configuration', 'display.autologin', 'display.gdm_enabled',
                    'display.default_target', 'display.initial_setup', 'chrome.unit', 'chrome.autostart'}
 HEALTH_LABELS = {'healthy': '주 문서·HTTP 연결 확인', 'waiting_site': '사이트 응답 대기',
+                 'waiting_configuration': '설정 안내 표시 중',
                  'recovering': '연결 복구 중', 'failed': '감시 실패', 'unknown': '감시 확인 불가'}
 NAVIGATION_LABELS = {
-    'last_command': ('마지막 ala 명령', {'display': '표시 주소 요청', 'recovery': '복구 안내 요청'}),
+    'last_command': ('마지막 ala 명령', {'display': '표시 주소 요청', 'recovery': '복구 안내 요청', 'setup': '설정 안내 요청'}),
     'last_browser_navigation': ('마지막 브라우저 이동', {
         'script': '스크립트 관련 관측', 'parser': '문서 파서 관련 관측',
         'other': '기타 관측', 'unknown': '구분 불가'}),
@@ -176,7 +177,7 @@ class ChromeScreen(ModalScreen):
     def has_valid_target(self):
         try:
             config = Config.from_dict(self.owner._config or {})
-            return bool(config.user and config.display and config.url)
+            return bool(config.user and config.display)
         except (ValueError, TypeError):
             return False
 

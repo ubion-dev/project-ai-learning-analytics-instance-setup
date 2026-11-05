@@ -4,6 +4,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import hashlib
+import html
 import json
 import os
 from pathlib import Path
@@ -35,7 +36,25 @@ body{height:90vh;display:grid;place-content:center;text-align:center}h1{font-siz
 p{font-size:1.3rem;color:#b7c9dc}</style><h1>연결 복구 중</h1>
 <p>화면 서비스를 확인하고 있습니다.<br>연결이 복구되면 자동으로 돌아갑니다.</p></html>'''
 RECOVERY_URL = 'data:text/html;charset=utf-8,' + urllib.parse.quote(RECOVERY_HTML)
-STATES = {'waiting_site', 'healthy', 'recovering', 'failed', 'unknown'}
+STATES = {'waiting_site', 'waiting_configuration', 'healthy', 'recovering', 'failed', 'unknown'}
+
+
+def setup_page(*, output=None, display_number=None, target_id='default'):
+    """An internal document, never a user-configurable URL or network endpoint."""
+    number = str(display_number) if type(display_number) is int and 1 <= display_number <= 16 else '확인 필요'
+    label = html.escape(str(output or '출력 확인 대기'))
+    target = html.escape(str(target_id))
+    document = f'''<!doctype html><html lang="ko"><meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'">
+<title>ALA 화면 설정 안내</title><style>
+html{{background:#17161d;color:#e9f0f7;font-family:sans-serif}}
+body{{margin:0;min-height:100vh;display:grid;place-content:center;text-align:center;padding:0 5vw;box-sizing:border-box}}
+.number{{font-size:clamp(4rem,15vw,12rem);color:#b5e9d9;font-weight:bold}}
+h1{{font-size:clamp(1.5rem,3vw,3rem)}}p{{font-size:clamp(1rem,2vw,2rem);color:#cbc2ef}}
+</style><div class="number">화면 {number}</div><p>{label} · DID {target}</p>
+<h1>화면 관리에서 사이트를 설정해 주세요</h1>
+<p>SSH에서 ala 실행 → 화면 관리 → 설정 → 사이트 주소 저장 → 설정 적용</p></html>'''
+    return 'data:text/html;charset=utf-8,' + urllib.parse.quote(document)
 
 
 @dataclass(frozen=True)
@@ -173,6 +192,10 @@ def read_health(home, paths, supervisor_pid, url, *, now=None, target_id='defaul
         for key in ('target_matches_config',):
             if type(value.get(key)) is not bool:
                 raise ValueError('감시 상태 판정 값이 올바르지 않습니다.')
+        if url is None and (value['state'] == 'healthy' or value['target_matches_config']):
+            raise ValueError('사이트 주소가 없는 안내 화면은 사이트 정상으로 판정하지 않습니다.')
+        if value['state'] == 'waiting_configuration' and (url is not None or type(value.get('local_page_ready')) is not bool):
+            raise ValueError('설정 안내 상태와 적용 구성이 다릅니다.')
         return value
     except FileNotFoundError:
         if loaded:
@@ -188,7 +211,8 @@ def read_health(home, paths, supervisor_pid, url, *, now=None, target_id='defaul
 class Supervisor:
     def __init__(self, config, home, argv, *, paths=None, opener=None,
                  transport_factory=None, clock=None, monotonic=None, stop_requested=None,
-                 target_id='default', config_revision='', frontend=None, placement_callback=None):
+                 target_id='default', config_revision='', frontend=None, placement_callback=None,
+                 setup_context_callback=None):
         from .frontend import FrontendConfig, _target
         self.config, self.home, self.argv = config, Path(home), list(argv)
         self.target_id = _target(target_id)
@@ -200,6 +224,8 @@ class Supervisor:
         self._control = None
         self._last_control = None
         self.placement_callback = placement_callback
+        self.setup_context_callback = setup_context_callback
+        self._setup_url = None
         self._next_placement = 0
         self._next_frontend_observation = 0
         self.paths = paths or Paths()
@@ -230,6 +256,9 @@ class Supervisor:
                       'target_matches_config': False, 'consecutive_failures': 0,
                       'reason': '사이트 응답 확인 대기', 'next_action': 'HTTP 연결을 자동으로 재확인합니다.',
                       'config_fingerprint': fingerprint(config.url)}
+        if self.config.url is None:
+            self.value.update(state='waiting_configuration', local_page_ready=False,
+                              reason='설정 안내 문서 준비 중', next_action='화면 관리에서 사이트 주소를 저장하고 적용하세요.')
 
     def _save(self):
         path = state_path(self.home, self.target_id)
@@ -321,11 +350,16 @@ class Supervisor:
             raise CDPError('표시용 탭의 주 문서를 확인하지 못했습니다.')
         self._save()
 
+        if self.config.url is None:
+            self.setup_tick()
+
     def _navigate(self, url, *, ensure_document=False):
-        kind = 'recovery' if url == RECOVERY_URL else 'display'
+        kind = 'setup' if self.config.url is None and url == self._setup_url else 'recovery' if url == RECOVERY_URL else 'display'
         navigation = self.value['navigation']
-        navigation[kind + '_requests'] += 1
+        navigation[kind + '_requests'] = navigation.get(kind + '_requests', 0) + 1
         navigation['last_command'] = {'kind': kind, 'at': stamp(self.clock())}
+        if kind == 'setup':
+            self.value['local_page_ready'] = False
         if kind == 'display':
             # A request may start changing the document before CDP replies.
             # Record that fact before error handling so an initial aborted
@@ -341,6 +375,8 @@ class Supervisor:
             error_kind = ('download' if result.get('isDownload') else
                           'aborted' if isinstance(error_text, str) and error_text in {'net::ERR_ABORTED', 'ERR_ABORTED'} else 'navigation_error')
             navigation['last_error'] = {'kind': error_kind, 'at': stamp(self.clock())}
+            if kind == 'setup':
+                raise CDPError('로컬 설정 안내를 표시하지 못했습니다.')
             if url == RECOVERY_URL:
                 raise CDPError('로컬 복구 안내를 표시하지 못했습니다.')
             self._fallback('표시 주소로 이동하는 중 네트워크 오류가 발생했습니다.')
@@ -359,6 +395,7 @@ class Supervisor:
             self.navigating = self.managed_navigation = True
             self.observed_document_url = self.config.url
             self.deadline = self.monotonic() + NAVIGATION_TIMEOUT
+
             self._call('Page.reload', {'ignoreCache': True})
             return
         if result.get('frameId') != self.frame or not result.get('loaderId'):
@@ -372,6 +409,28 @@ class Supervisor:
             self.managed_navigation = True
             self.observed_document_url = self.config.url
             self.deadline = self.monotonic() + NAVIGATION_TIMEOUT
+
+    def setup_tick(self):
+        """Keep only our local document; no HTTP or frontend readiness checks."""
+        context = {}
+        if self.setup_context_callback is not None:
+            try:
+                context = self.setup_context_callback()
+                if not isinstance(context, dict):
+                    context = {}
+            except (OSError, ValueError, RuntimeError, KeyError, TypeError):
+                context = {}
+        url = setup_page(output=context.get('output', self.config.output),
+                         display_number=context.get('display_number'), target_id=self.target_id)
+        self.value.update(last_checked=stamp(self.clock()), state='waiting_configuration',
+                          http_status=None, target_matches_config=False,
+                          reason='설정 안내 표시 중' if self.value.get('local_page_ready') else '설정 안내 문서 확인 중',
+                          next_action='화면 관리에서 사이트 주소를 저장하고 적용하세요.')
+        if self._setup_url != url:
+            self._setup_url = url
+            self.value['local_page_ready'] = False
+            self._navigate(url)
+        self._save()
 
     def _fallback(self, reason):
         if self._control is not None:
@@ -391,6 +450,9 @@ class Supervisor:
         self._save()
 
     def probe(self):
+        if self.config.url is None:
+            self.setup_tick()
+            return
         result = probe_url(self.config.url, opener=self.opener)
         self.value.update(last_checked=stamp(self.clock()), http_status=result.status)
         if result.ok:
@@ -414,6 +476,15 @@ class Supervisor:
 
     def _healthy_if_complete(self):
         if self.document_ok and self.loaded:
+            if self.config.url is None:
+                self.navigating = False
+                self.deadline = None
+                self.value.update(state='waiting_configuration', local_page_ready=True,
+                                  target_matches_config=False, reason='설정 안내 표시 중',
+                                  next_action='화면 관리에서 사이트 주소를 저장하고 적용하세요.')
+                self._finish_control(True)
+                self._save()
+                return
             if self.managed_navigation and self.observed_document_url:
                 self.allowed_reload_urls = {self.config.url, self.observed_document_url}
             self.managed_navigation = False
@@ -501,14 +572,14 @@ class Supervisor:
             self.value['control'] = {'nonce': request['nonce'], 'state': 'rejected'}
             self._save()
             return
-        if request['source'] == 'frontend' and not self.frontend.enabled:
+        if request['source'] == 'frontend' and (not self.frontend.enabled or self.config.url is None):
             self.value['control'] = {'nonce': request['nonce'], 'state': 'rejected'}
             self._save()
             return
         self._control = request
         self.value['control'] = {'nonce': request['nonce'], 'state': 'pending'}
         self._save()
-        self._navigate(self.config.url, ensure_document=True)
+        self._navigate(self._setup_url if self.config.url is None else self.config.url, ensure_document=True)
 
     def _valid_operation(self, token):
         from . import runtime
@@ -540,6 +611,22 @@ class Supervisor:
             return
         if method in {'Inspector.detached', 'Inspector.targetCrashed'}:
             raise CDPError('표시용 탭 제어가 종료되었습니다.')
+        if self.config.url is None:
+            if method == 'Page.frameNavigated':
+                frame = params.get('frame', {})
+                if frame.get('id') == self.frame and not frame.get('parentId'):
+                    if (self.navigating and self.loader is None and frame.get('url') == self._setup_url
+                            and isinstance(frame.get('loaderId'), str) and frame['loaderId']):
+                        self.loader = frame['loaderId']
+                    if frame.get('url') != self._setup_url or frame.get('loaderId') != self.loader:
+                        raise CDPError('설정 안내 문서의 실제 표시를 확인하지 못했습니다.')
+                    self.document_ok = True
+                    self._healthy_if_complete()
+            elif (method == 'Page.lifecycleEvent' and params.get('frameId') == self.frame
+                  and params.get('loaderId') == self.loader and params.get('name') == 'load'):
+                self.loaded = True
+                self._healthy_if_complete()
+            return
         if method == 'Network.requestWillBeSent' and params.get('type') == 'Document' and params.get('frameId') == self.frame:
             if not self.loader and self.navigating and self.managed_navigation:
                 requested = params.get('request', {}).get('url')
@@ -618,6 +705,8 @@ class Supervisor:
                 if event is not None:
                     self.event(event)
                 if self.deadline is not None and self.monotonic() > self.deadline:
+                    if self.config.url is None:
+                        raise CDPError('설정 안내 문서의 로드 확인 시간이 초과되었습니다.')
                     self._fallback('표시용 주 문서 로드 확인 시간이 초과되었습니다.')
                 self.control_tick()
                 self.frontend_tick()

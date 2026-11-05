@@ -251,11 +251,15 @@ def test_duplicate_sessions_block_actions_and_no_runtime_is_pending(setup):
     assert display.chrome_action('start',config,host,paths)['exit_code']==2
 
 
-def test_missing_url_is_input_pending_not_placeholder(setup):
+def test_missing_url_allows_explicit_start_and_selects_internal_setup_mode(setup):
     config,paths,host=setup
     empty=replace(config,url=None)
-    assert display.chrome_action('start',empty,host,paths)['exit_code']==2
-    assert any(r.id=='chrome.url' and r.state=='pending' for r in display.inspect_display(empty,host,paths))
+    host.config=empty
+    host.script_result={'exit_code':0,'state':'starting'}
+    assert display.chrome_action('start',empty,host,paths)['state']=='starting'
+    assert any(argv[0]=='runuser' and argv[-1]=='start' for argv,_ in host.calls)
+    check=next(r for r in display.inspect_display(empty,host,paths) if r.id=='chrome.url')
+    assert check.state=='ok' and check.actual=='설정 안내 모드'
 
 
 def test_unit_uses_graphical_session_and_bounded_crash_recovery():
@@ -426,7 +430,7 @@ def test_login_skips_overview_for_unproven_desktop(setup, session_count, locked)
 @pytest.mark.parametrize(('committed_changes', 'saved_changes', 'starts'), [
     ({}, {'autostart': False, 'url': None}, True),
     ({'autostart': False}, {'autostart': True}, False),
-    ({'url': None}, {'url': 'https://example.com/saved'}, False),
+    ({'url': None}, {'url': 'https://example.com/saved'}, True),
 ])
 def test_login_uses_committed_autostart_and_url(setup, monkeypatch, committed_changes, saved_changes, starts):
     config, paths, host, home = user_fixture(setup)
@@ -889,13 +893,13 @@ def test_autostart_off_checks_desktop_without_requiring_chrome(setup):
     assert not any(argv[0]=='runuser' and argv[-1]=='settings' for argv,_ in host.calls)
 
 
-def test_missing_url_prepares_desktop_but_keeps_only_browser_input_pending(setup):
+def test_missing_url_prepares_desktop_and_internal_setup_mode_without_starting_now(setup):
     config,paths,host=setup
     config=replace(config,url=None);host.config=config
     states={r.id:r.state for r in display.apply_display(config,host,paths)}
     assert states['display.configuration']=='ok'
     assert 'display.session' not in states
-    assert states['chrome.url']=='pending'
+    assert states['chrome.url']=='ok'
     assert 'chrome.runtime' not in states
     assert not any(argv[0]=='runuser' and argv[-1]=='check' for argv,_ in host.calls)
 
@@ -1155,7 +1159,7 @@ def test_apply_prepares_registration_without_unsafe_current_start(setup,conditio
     assert result['chrome.autostart'].state=='ok'
     assert not _started_commands(host)
     assert not any('reset-failed' in argv or argv[:3]==['systemctl','--user','stop'] for argv,_ in host.calls)
-    if condition=='no_url':assert result['chrome.url'].state=='pending'
+    if condition=='no_url':assert result['chrome.url'].state=='ok'
     assert not any(id in result for id in ('chrome.runtime','chrome.health','display.session','display.session_lock'))
     assert not any(argv[0]=='runuser' and argv[-1] in {'ensure-start','check','settings'} for argv,_ in host.calls)
 
@@ -1290,11 +1294,11 @@ def test_display_parts_inspect_one_pass_and_keep_url_input_in_static_part_only(s
     assert sum(argv[:2]==['loginctl','list-sessions'] for argv,_ in host.calls)==1
 
 
-def test_configuration_only_still_requires_url_only_when_autostart_selected(setup):
+def test_configuration_only_accepts_setup_mode_when_autostart_selected(setup):
     config,paths,host=setup
     config=replace(config,url=None);host.config=config
     display.apply_display(config,host,paths)
-    assert any(r.id=='chrome.url' and r.state=='pending' for r in display.inspect_display(config,host,paths,configuration_only=True))
+    assert any(r.id=='chrome.url' and r.state=='ok' for r in display.inspect_display(config,host,paths,configuration_only=True))
     config=replace(config,autostart=False);host.config=config
     result=display.apply_display(config,host,paths)
     assert Report(result).exit_code==0
