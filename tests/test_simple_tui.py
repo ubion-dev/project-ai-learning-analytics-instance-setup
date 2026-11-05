@@ -296,3 +296,51 @@ def test_enter_expands_subtasks_and_live_column_uses_explicit_event():
             assert table.row_count == before
             assert not any(a == 'submit' for a,_ in service.calls)
     asyncio.run(scenario())
+
+
+def test_podman_review_requires_explicit_approval_and_cancel_submits_nothing():
+    from ala.simple_tui import PodmanConfirmation
+
+    class PodmanService(FakeService):
+        def __init__(self, ready):
+            super().__init__()
+            self.ready = ready
+            self.report = Report([CheckResult('docker.conflict.podman', 'blocked')]).to_dict()
+        async def call(self, action, payload=None):
+            if action == 'podman-plan':
+                self.calls.append((action, payload))
+                if not self.ready:
+                    return {'state': 'blocked', 'reason': '사용 중이거나 조회 실패'}
+                return {'state': 'ready', 'token': 'a' * 64,
+                        'packages': ['podman-1', 'podman-docker-1'],
+                        'accounts': [{'user': 'user'}]}
+            if action == 'submit':
+                self.calls.append((action, payload))
+                assert payload['podman_cleanup'] == 'a' * 64
+                self.jobs['test-run'] = {'run_id': 'test-run', 'state': 'queued', 'stages': []}
+                return deepcopy(self.jobs['test-run'])
+            return await super().call(action, payload)
+
+    async def scenario(size, ready, approve):
+        service = PodmanService(ready)
+        app = SimpleApp(service=service)
+        async with app.run_test(size=size) as pilot:
+            await pilot.pause()
+            await pilot.press('enter')
+            await pilot.pause()
+            assert isinstance(app.screen, PodmanConfirmation)
+            assert app.focused.id == 'podman-cancel'
+            confirm = app.screen.query_one('#podman-confirm', Button)
+            assert confirm.disabled == (not ready)
+            assert confirm.region.bottom <= size[1]
+            assert not any(action == 'submit' for action, _ in service.calls)
+            if approve:
+                await pilot.press('tab', 'enter')
+            else:
+                await pilot.press('escape')
+            await pilot.pause()
+            assert any(action == 'submit' for action, _ in service.calls) == approve
+
+    for size in ((80, 24), (120, 36)):
+        for ready, approve in ((True, False), (False, False), (True, True)):
+            asyncio.run(scenario(size, ready, approve))

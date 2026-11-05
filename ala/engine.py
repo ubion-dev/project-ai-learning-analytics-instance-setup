@@ -54,9 +54,10 @@ def _template(script, label):
 
 class Engine:
     supports_substeps = True
-    def __init__(self, config: Config, host=None, paths=None, *, bash_assist=False):
+    def __init__(self, config: Config, host=None, paths=None, *, bash_assist=False, podman_cleanup=None):
         self.config = config
         self.bash_assist = bash_assist
+        self.podman_cleanup = podman_cleanup
         self.host = host if host is not None else Host()
         self.paths = paths if paths is not None else Paths()
         self.owner = 0 if self.paths.root == Path("/") else os.geteuid()
@@ -351,7 +352,8 @@ class Engine:
             if conflict.returncode == 0:
                 action = "기존 컨테이너/볼륨 사용 여부 확인 후 충돌을 직접 해결하세요."
                 if name.startswith("podman"):
-                    action = ("일반 사용자와 sudo로 podman ps -a / podman volume ls를 확인하세요. "
+                    action = ("간편 설정 실행을 선택하면 Podman 사용 여부와 제거 목록을 확인합니다. "
+                              "수동 확인은 일반 사용자와 sudo로 podman ps -a / podman volume ls를 실행하세요. "
                               f"미사용 장비이면 sudo dnf remove {name} 의 제거 목록을 검토한 뒤 정리하고 "
                               "간편 설정을 다시 실행하세요. 자동 삭제하지 않습니다.")
                 results.append(self._result("docker.conflict." + name, "blocked", "충돌 패키지 없음", name, action))
@@ -617,6 +619,23 @@ class Engine:
         ]
         for stage, inspect, script, args in specs:
             optional_shell = stage == "shell" and self.bash_assist
+            if stage == "docker" and self.podman_cleanup is not None:
+                from .podman import validate_token
+                event(stage, "started")
+                if on_substep:
+                    on_substep(stage, "conflicts", "started")
+                code = self.host.execute([
+                    "/usr/bin/python3", "-I", str(SCRIPTS / "lib/podman_cleanup.py"),
+                    "--expected-token", validate_token(self.podman_cleanup)])
+                if code:
+                    event(stage, "failed")
+                    if on_substep:
+                        on_substep(stage, "conflicts", "failed")
+                    return finish([self._result(
+                        "docker.cleanup", "error", "승인한 미사용 Podman 정리", "정리 실패",
+                        "설치 로그를 확인하고 간편 설정에서 사용 여부와 제거 목록을 다시 확인하세요.")])
+                if on_substep:
+                    on_substep(stage, "conflicts", "completed")
             current = inspect()
             blocking = [r for r in current if r.state in {"blocked", "error", "unknown"} and not
                         (stage == "gpu" and r.id == "gpu.secure_boot" and "mokutil" in r.next_action)]

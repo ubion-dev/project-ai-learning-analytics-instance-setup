@@ -96,11 +96,16 @@ class JobStore:
         atomic_json(self.directory(value['run_id']) / 'result.json', value)
 
     def submit(self, config, release: Path, python: Path, *, expected_config=None, operation="setup",
-               persist_config=False, bash_assist=False):
+               persist_config=False, bash_assist=False, podman_cleanup=None):
         if operation not in {"setup", "prepare"}:
             raise ValueError("허용되지 않은 설치 작업입니다.")
         if type(bash_assist) is not bool or (bash_assist and operation != "setup"):
             raise ValueError("Bash 편의 기능은 간편 설정의 true/false 옵션입니다.")
+        if podman_cleanup is not None:
+            from .podman import validate_token
+            validate_token(podman_cleanup)
+            if operation != 'setup':
+                raise ValueError('Podman 정리는 간편 설정에서만 실행합니다.')
         with change_lock(self.paths):
             from .runtime import RuntimeStore
             runtimes = RuntimeStore(self.paths, self.host)
@@ -124,6 +129,8 @@ class JobStore:
             unit = f'ala-{operation}-{run_id}.service'
             value = dict(run_id=run_id, operation=operation, state='queued', version=__version__, release=str(release),
                          boot_id=boot_id(self.paths), unit=unit, started_at=now(), finished_at=None, stages=[])
+            if podman_cleanup is not None:
+                value['podman_cleanup'] = podman_cleanup
             if bash_assist:
                 value['bash_assist'] = True
             atomic_json(directory / 'config.json', config.to_dict())
@@ -170,6 +177,9 @@ def run_worker(run_id, paths=None, host=None, engine_factory=None):
                     engine_factory = Engine
             config = Config.load(store.directory(run_id) / 'config.json')
             options = {'bash_assist': True} if operation == 'setup' and raw.get('bash_assist') is True else {}
+            if operation == 'setup' and raw.get('podman_cleanup') is not None:
+                from .podman import validate_token
+                options['podman_cleanup'] = validate_token(raw['podman_cleanup'])
             engine = engine_factory(config, host=host, paths=paths, **options)
             callbacks = {'on_stage': stage}
             if getattr(engine, 'supports_substeps', False):

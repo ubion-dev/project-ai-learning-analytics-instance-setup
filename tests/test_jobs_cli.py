@@ -313,3 +313,24 @@ def test_worker_keeps_additive_substep_records_and_old_stage_contract(store):
     assert [(s['stage'],s['id'],s['state']) for s in result['substeps']] == [
         ('base','timezone','started'), ('base','timezone','completed')]
     assert all(s['time'] for s in result['substeps'])
+
+
+def test_podman_approval_is_scoped_to_one_setup_job(store):
+    token = 'a' * 64
+    job = store.submit(Config(user='user'), Path('/release'), Path('/python'), podman_cleanup=token)
+    assert store.load(job['run_id'])['podman_cleanup'] == token
+    class ApprovedEngine:
+        def __init__(self, config, *, host, paths, podman_cleanup):
+            assert podman_cleanup == token
+        def apply(self, on_stage):
+            return Report([CheckResult('docker', 'ok')])
+    assert run_worker(job['run_id'], store.paths, store.host, ApprovedEngine) == 0
+    next_job = store.submit(Config(user='user'), Path('/release'), Path('/python'))
+    assert 'podman_cleanup' not in next_job
+
+
+@pytest.mark.parametrize('token', [True, {}, '', 'not-approved'])
+def test_invalid_podman_approval_cannot_start_job(store, token):
+    with pytest.raises(ValueError):
+        store.submit(Config(user='user'), Path('/release'), Path('/python'), podman_cleanup=token)
+    assert not store.paths.runs.exists()
