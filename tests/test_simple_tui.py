@@ -244,10 +244,10 @@ def test_setup_progress_is_one_colored_row_per_stage_and_preserves_manual_select
             row_ids = [row['id'] for row in app._progress_rows]
             assert len(row_ids) == len(set(row_ids)) == table.row_count
             assert table.get_cell('base', 'state').plain == '✓ 정상 유지'
-            assert table.get_cell('base', 'state').style == 'green'
+            assert table.get_cell('base', 'state').style == '#b5e9d9'
             assert table.get_cell('docker', 'state').plain == '✓ 완료'
             assert table.get_cell('gpu', 'state').plain == '● 진행 중'
-            assert 'cyan' in table.get_cell('gpu', 'state').style
+            assert '#cbc2ef' in table.get_cell('gpu', 'state').style
             assert table.get_cell('chrome', 'state').plain == '… 실행 대기'
             table.focus()
             table.move_cursor(row=row_ids.index('docker'))
@@ -265,7 +265,7 @@ def test_setup_progress_is_one_colored_row_per_stage_and_preserves_manual_select
             ]).to_dict())
             await app.poll_job()
             assert table.get_cell('gpu', 'state').plain == '◷ 적용 대기'
-            assert table.get_cell('gpu', 'state').style == 'yellow'
+            assert table.get_cell('gpu', 'state').style == '#f1d5a3'
     asyncio.run(scenario())
 
 

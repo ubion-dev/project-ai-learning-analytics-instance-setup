@@ -129,5 +129,17 @@ if ! $managed; then
   cp -p -- "$stage/original" "$backup"
   mv -fT -- "$candidate" "$bashrc"
 fi
+# ~/.blerc takes precedence over the default XDG init file.
+style_dir="$HOME/.config/blesh"
+style_file="$style_dir/init.sh"
+if [[ ! -e $HOME/.blerc && ! -L $HOME/.blerc &&
+      ! -L $style_dir && ! -e $style_file && ! -L $style_file ]]; then
+  mkdir -p -- "$style_dir"
+  printf "%s\n" "ble-face -s auto_complete 'fg=240'" > "$stage/init.sh"
+  if ! ln -T -- "$stage/init.sh" "$style_file" &&
+     [[ ! -e $style_file && ! -L $style_file ]]; then
+    exit 1
+  fi
+fi
 printf '%s\n' 'Bash 자동 제안·구문 강조 준비 완료. 새 SSH 로그인에서 확인하세요.'
 USER_SETUP

@@ -22,10 +22,10 @@ STATE_LABELS = {
     'interrupted': '! 중단됨', 'not_applicable': '— 해당 없음',
 }
 STATE_STYLES = {
-    'ok': 'green', 'kept': 'green', 'completed': 'green', 'running': 'bold cyan',
-    'waiting': 'dim', 'not_run': 'dim', 'change_required': 'yellow', 'pending': 'yellow',
-    'blocked': 'bold red', 'error': 'bold red', 'unknown': 'red',
-    'interrupted': 'bold red', 'not_applicable': 'dim',
+    'ok': '#b5e9d9', 'kept': '#b5e9d9', 'completed': '#b5e9d9', 'running': 'bold #cbc2ef',
+    'waiting': 'dim', 'not_run': 'dim', 'change_required': '#f1d5a3', 'pending': '#f1d5a3',
+    'blocked': 'bold #f3b8c5', 'error': 'bold #f3b8c5', 'unknown': '#f3b8c5',
+    'interrupted': 'bold #f3b8c5', 'not_applicable': 'dim',
 }
 _PRIORITY = {'error': 7, 'blocked': 6, 'unknown': 5, 'change_required': 4,
              'pending': 3, 'ok': 2, 'not_applicable': 1}
