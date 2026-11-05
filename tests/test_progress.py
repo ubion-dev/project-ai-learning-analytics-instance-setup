@@ -30,7 +30,7 @@ def test_last_event_per_stage_replaces_history_and_translates_kept():
     assert len(rows) == 11
     assert rows['base']['state'] == 'kept'
     assert STATE_LABELS[rows['base']['state']] == '✓ 정상 유지'
-    assert STATE_STYLES[rows['base']['state']] == 'green'
+    assert STATE_STYLES[rows['base']['state']] == '#b5e9d9'
     assert rows['docker']['state'] == 'completed'
     assert rows['gpu']['state'] == 'running'
     assert rows['display']['state'] == 'waiting'
@@ -46,7 +46,7 @@ def test_terminal_report_overrides_completed_and_does_not_green_unvisited_steps(
     assert rows['docker']['state'] == 'error'
     assert '서비스 확인' in rows['docker']['detail']
     assert rows['display']['state'] == rows['chrome']['state'] == 'not_run'
-    assert STATE_STYLES[rows['display']['state']] != 'green'
+    assert STATE_STYLES[rows['display']['state']] != '#b5e9d9'
 
 
 def test_terminal_pending_report_is_not_completed_and_disabled_tools_are_not_applicable():
@@ -56,7 +56,7 @@ def test_terminal_pending_report_is_not_completed_and_disabled_tools_are_not_app
                                               result('dev_tools', 'not_applicable')]}})
     assert rows['gpu']['state'] == 'pending'
     assert rows['dev_tools']['state'] == 'not_applicable'
-    assert STATE_STYLES[rows['gpu']['state']] == 'yellow'
+    assert STATE_STYLES[rows['gpu']['state']] == '#f1d5a3'
 
 
 def test_missing_final_report_does_not_reuse_old_green_snapshot():

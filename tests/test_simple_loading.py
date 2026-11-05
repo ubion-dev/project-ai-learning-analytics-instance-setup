@@ -30,7 +30,7 @@ def test_slow_first_inspection_shows_context_and_neutral_loading_until_ready():
             for row in app._progress_rows:
                 cell = table.get_cell(row['id'], 'state')
                 assert row['state'] == 'unknown'
-                assert '검사 중' in cell.plain and 'red' not in str(cell.style)
+                assert '검사 중' in cell.plain and '#f3b8c5' not in str(cell.style)
             service.gate.set()
             await pilot.pause()
             assert not app._loading and not query.display
@@ -77,14 +77,14 @@ def test_refresh_marks_previous_results_then_failure_removes_old_green_state():
         async with app.run_test(size=(80, 24)) as pilot:
             await pilot.pause()
             table = app.query_one('#setup-table', DataTable)
-            assert table.get_cell('base', 'state').style == 'green'
+            assert table.get_cell('base', 'state').style == '#b5e9d9'
             service.gate = asyncio.Event()
             app.action_refresh()
             await pilot.pause()
             query = app.query_one('#query-status', Static)
             assert query.display
             assert '갱신 중' in str(query.render()) and '이전 조회 결과' in str(query.render())
-            assert table.get_cell('base', 'state').style == 'green'
+            assert table.get_cell('base', 'state').style == '#b5e9d9'
             assert app.query_one('#setup-start', Button).disabled
             service.fail_status = True
             service.gate.set()
@@ -94,7 +94,7 @@ def test_refresh_marks_previous_results_then_failure_removes_old_green_state():
             assert app.query_one('#status-table', DataTable).row_count == 0
             assert '조회가 실패' in app.query_one('#status-detail', TextArea).text
             assert all(row['state'] == 'unknown' for row in app._progress_rows)
-            assert all('green' not in str(table.get_cell(row['id'], 'state').style)
+            assert all('#b5e9d9' not in str(table.get_cell(row['id'], 'state').style)
                        for row in app._progress_rows)
             assert app.query_one('#setup-start', Button).disabled
     asyncio.run(scenario())
@@ -119,7 +119,7 @@ def test_missing_substep_record_is_neutral_but_actual_unknown_check_needs_attent
             assert rows['base.chrome']['evidence'] == 'missing'
             assert rows['base.timezone']['evidence'] == 'check'
             assert missing.plain == '— 세부 기록 없음' and missing.style == 'dim'
-            assert failed_query.plain == '? 조회 확인 필요' and failed_query.style == 'yellow'
+            assert failed_query.plain == '? 조회 확인 필요' and failed_query.style == '#f1d5a3'
             assert service.report['results'][0]['state'] == 'unknown'
             assert not any(action == 'submit' for action, _ in service.calls)
     asyncio.run(scenario())
