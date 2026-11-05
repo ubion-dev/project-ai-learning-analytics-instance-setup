@@ -40,10 +40,7 @@ def diagnosis(report, target):
             next_button = None
     else:
         confirmed = 1
-        if not target.get('applied_url', target.get('url')):
-            reason, action = '적용된 DID 주소가 없습니다', '화면 관리에서 주소를 저장하고 적용하세요.'
-            next_button = 'manage'
-        elif (target.get('runtime') or {}).get('stopped') and running != 'active':
+        if (target.get('runtime') or {}).get('stopped') and running != 'active':
             reason, action = '운영자가 이 DID를 중지했습니다', '표시를 다시 시작하려면 시작을 선택하세요.'
             next_button = 'control'
         elif running == 'failed':
@@ -66,7 +63,19 @@ def diagnosis(report, target):
                 confirmed = 3
                 if placement == 'not_applicable':
                     stages[2] = '창 배치 (기존 기본 화면 · 별도 확인)'
-                if (health.get('state') != 'healthy' or not health.get('target_matches_config')
+                if not target.get('applied_url', target.get('url')):
+                    stages[3] = '사이트 주소 설정'
+                    if (health.get('state') == 'waiting_configuration' and health.get('local_page_ready') is True
+                            and (not revision or health.get('config_revision') == revision)):
+                        reason, action = '설정 안내 표시 중', '화면 관리에서 사이트 주소를 저장하고 적용하세요.'
+                        if settings.get('state') in {'queued', 'running'}:
+                            reason, action = '설정 안내 표시 중 · 설정 적용 진행', '작업이 끝난 뒤 다시 점검하세요.'
+                        elif settings.get('pending'):
+                            action = '화면 관리에서 저장한 설정을 적용하세요.'
+                        next_button = 'manage'
+                    else:
+                        reason, action = '설정 안내 표시 확인 필요', '이번 부팅의 Chrome 로그와 안내 문서 상태를 확인하세요.'
+                elif (health.get('state') != 'healthy' or not health.get('target_matches_config')
                         or settings.get('state') in {'queued', 'running'}
                         or (revision and health.get('config_revision') != revision)):
                     reason, action = 'DID 사이트 로드 확인 필요', '이번 부팅의 Chrome 로그와 적용 주소를 확인하세요.'
@@ -134,7 +143,7 @@ class QuickPanel(Vertical):
 
     def control(self, target):
         state = (target.get('service') or {}).get('ActiveState')
-        if (self.report.get('session') != 'ok' or not target.get('applied_url', target.get('url'))
+        if (self.report.get('session') != 'ok'
                 or (target.get('settings') or {}).get('state') in {'queued', 'running'}):
             return None
         return {'inactive': 'start', 'failed': 'start', 'active': 'restart'}.get(state)

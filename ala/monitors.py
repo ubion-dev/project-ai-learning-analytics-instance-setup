@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import ast
+from copy import deepcopy
 import json
 import re
 
@@ -40,7 +41,7 @@ def hardware_topology(paths=None):
 
 
 def bridge(method, request=None, *, host=None):
-    if method not in {'GetState', 'Inspect', 'Place', 'Closed', 'DismissStartupOverview'}:
+    if method not in {'GetState', 'Inspect', 'Place', 'Closed', 'DismissStartupOverview', 'IdentifyOutputs'}:
         raise ValueError('허용되지 않은 화면 bridge 작업입니다.')
     host = host or Host()
     argv = ['gdbus','call','--session','--dest',BUS,'--object-path',OBJECT,
@@ -83,6 +84,18 @@ def dismiss_startup_overview(host):
 
 def _number(value):
     return type(value) in (int,float) and -1000000 <= value <= 1000000
+
+
+def numbered_outputs(inventory):
+    """Copy logical outputs in ID order with temporary, one-based display labels."""
+    outputs = inventory.get('logical_outputs', [])
+    if (not isinstance(outputs, list) or len(outputs) > 64
+            or any(not isinstance(item, dict) or not isinstance(item.get('id'), str)
+                   or not item['id'] for item in outputs)
+            or len({item['id'] for item in outputs}) != len(outputs)):
+        raise ValueError('논리 출력의 식별자를 확인하지 못했습니다.')
+    return [deepcopy(item) | {'display_number': number}
+            for number, item in enumerate(sorted(outputs, key=lambda item: item['id']), 1)]
 
 
 def topology(*,host=None):
@@ -133,13 +146,58 @@ def topology(*,host=None):
                                'confirmed':confirmed})
             for output in outputs:
                 if output['id'] in connectors:output['active']=True
+        numbers = {item['id']: item['display_number']
+                   for item in numbered_outputs({'logical_outputs': normalized})}
+        capabilities = value.get('capabilities', [])
+        if (not isinstance(capabilities, list) or len(capabilities) > 32
+                or any(not isinstance(item, str) or len(item) > 64 for item in capabilities)):
+            raise ValueError()
         return {'state':'ok','protocol':PROTOCOL,'gnome_version':value['gnome_version'],
-                'serial':serial,'outputs':outputs,'logical_outputs':normalized,
+                'serial':serial,'outputs':outputs,
+                'logical_outputs':[item | {'display_number': numbers[item['id']]} for item in normalized],
+                'capabilities': capabilities,
                 'reason':'OS가 인식한 출력입니다. 외부 제어 장비의 패널 수는 확인하지 않습니다.'}
     except (ValueError,KeyError,TypeError,IndexError,StopIteration,AttributeError):
         return {'state':'unknown','outputs':[],'logical_outputs':[],
                 'reason':'Mutter 출력과 compositor 좌표를 연결하지 못했습니다.',
                 'next_action':'GNOME 디스플레이 설정에서 활성 출력과 배치를 확인하세요.'}
+
+
+def identify_outputs(*, host=None):
+    """Explicitly show bounded labels; a successful RPC is not panel evidence."""
+    action = '간편 설정에서 화면 확장을 반영한 뒤 GNOME 세션에 재로그인하고 다시 식별하세요.'
+    try:
+        inventory = topology(host=host)
+        if inventory.get('state') != 'ok':
+            return inventory
+        if 'identify-outputs' not in inventory.get('capabilities', []):
+            return {'state': 'unknown', 'reason': '현재 GNOME 세션의 화면 확장은 모니터 식별 기능을 제공하지 않습니다.',
+                    'next_action': action}
+        if not inventory['logical_outputs'] or any(not item.get('confirmed') for item in inventory['logical_outputs']):
+            return {'state': 'pending', 'reason': '식별할 활성 논리 출력을 모두 확인하지 못했습니다.',
+                    'next_action': '화면 연결과 GNOME 배치를 확인한 뒤 다시 조회하세요.'}
+        value = bridge('IdentifyOutputs', host=host)
+        if value.get('state') != 'ok':
+            return value | {'next_action': value.get('next_action') or action}
+        outputs = numbered_outputs(value)
+        if (type(value.get('duration_seconds')) is not int or value['duration_seconds'] != 10
+                or type(value.get('serial')) is not int or not outputs
+                or any(type(original.get('display_number')) is not int
+                       or item['display_number'] != original['display_number']
+                       for item, original in zip(outputs, sorted(value['logical_outputs'], key=lambda item: item['id'])))
+                or any(item.get('confirmed') is not True or not isinstance(item.get('connectors'), list)
+                       or not item['connectors'] or len(item['connectors']) > 64
+                       or any(not isinstance(connector, str) or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}', connector)
+                              for connector in item['connectors'])
+                       or len(set(item['connectors'])) != len(item['connectors'])
+                       or item['id'] != '+'.join(sorted(item['connectors']))
+                       or any(not _number(item.get(key)) for key in ('x', 'y', 'width', 'height'))
+                       or item['width'] <= 0 or item['height'] <= 0 for item in outputs)):
+            raise ValueError()
+        return value | {'logical_outputs': outputs,
+                        'reason': '모니터 식별 표시를 요청했습니다. 실제 패널에서 번호를 확인하세요.'}
+    except (OSError, RuntimeError, ValueError, TypeError, KeyError, AttributeError):
+        return {'state': 'unknown', 'reason': '모니터 식별 표시 응답을 확인하지 못했습니다.', 'next_action': action}
 
 
 def resolve_output(inventory, selector, *, auto=False):

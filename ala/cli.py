@@ -113,8 +113,29 @@ def update_phase(phase):
 def main(argv=None, *, service=None):
     argv = list(sys.argv[1:] if argv is None else argv)
     # Not part of the public command grammar. Root-owned installed entry only.
-    if argv and argv[0] in {'_privileged','_worker','_session','_chrome-run','_chrome-user','_update-worker', '_runtime-dispatch', '_auto-update', '_frontend-worker', '_frontend-control', '_auto-bootstrap', '_runtime-worker', '_screen-worker'}:
+    if argv and argv[0] in {'_privileged','_worker','_session','_chrome-run','_chrome-user','_update-worker', '_runtime-dispatch', '_auto-update', '_frontend-worker', '_frontend-control', '_auto-bootstrap', '_runtime-worker', '_screen-worker', '_display-onboarding-worker', '_swap-worker', '_swap-recover'}:
         try:
+            if argv[0] in {'_display-onboarding-worker', '_swap-worker', '_swap-recover'}:
+                from .jobs import trusted_release
+                from .system import platform_error
+                if os.geteuid() != 0 or platform_error():
+                    raise PermissionError('Rocky Linux root 작업입니다.')
+                trusted_release(Path(__file__).resolve().parents[1])
+                if argv[0] == '_display-onboarding-worker' and len(argv) == 1:
+                    from .display_onboarding import run_pending
+                    result = run_pending()
+                elif argv[0] == '_swap-worker' and len(argv) == 2:
+                    from .screen_swap import run_worker
+                    result = run_worker(argv[1])
+                elif argv[0] == '_swap-recover' and len(argv) == 1:
+                    from .screen_swap import recover_all
+                    result = recover_all()
+                else:
+                    return 64
+                if isinstance(result, dict):
+                    print(json.dumps(result, ensure_ascii=False))
+                    return result.get('exit_code', 0)
+                return result if isinstance(result, int) else 0
             if argv[0] == '_screen-worker' and len(argv) == 2:
                 from .screen_control import run_worker
                 from .jobs import trusted_release

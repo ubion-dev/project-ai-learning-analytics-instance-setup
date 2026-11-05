@@ -132,7 +132,75 @@ def busy_jobs():
         if age <= 15:
             fail('설치 작업 시작 중입니다. 잠시 후 상태를 확인하세요.')
 
+def busy_screen_swaps():
+    # The durable pair fence outlives per-target leases and the previous boot.
+    # Check it under the same writer lock as the final current switch, including
+    # direct installation and a swap accepted while an updater was downloading.
+    swaps = ROOT / 'var/lib/ala-runtime/swaps'
+    for parent in swaps.parents:
+        if parent == ROOT:
+            break
+        if parent.is_symlink():
+            fail('화면 교환 기록의 상위 경로가 심볼릭 링크입니다.')
+        if parent.exists():
+            info = parent.stat()
+            if not stat.S_ISDIR(info.st_mode) or info.st_uid != OWNER or info.st_mode & 0o022:
+                fail('화면 교환 기록 디렉터리의 소유자·권한을 확인하세요.')
+    if not swaps.exists() and not swaps.is_symlink():
+        return
+    secure_directory(swaps)
+    for path in sorted(swaps.iterdir()):
+        if not re.fullmatch(r'[a-f0-9]{32}\.json', path.name) or path.is_symlink():
+            fail('화면 교환 기록의 경로를 확인하세요. 기존 설치를 유지합니다.')
+        info = path.lstat()
+        if (not stat.S_ISREG(info.st_mode) or info.st_uid != OWNER or info.st_mode & 0o022 or not info.st_mode & 0o400
+                or info.st_nlink != 1 or info.st_size > 1024 * 1024):
+            fail('화면 교환 기록의 소유자·권한·형식을 확인하세요. 기존 설치를 유지합니다.')
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+        with os.fdopen(fd) as stream:
+            current = os.fstat(stream.fileno())
+            if (current.st_ino, current.st_dev) != (info.st_ino, info.st_dev):
+                fail('화면 교환 기록이 조회 중 변경됐습니다. 기존 설치를 유지합니다.')
+            text = stream.read(1024 * 1024 + 1)
+        if len(text) > 1024 * 1024:
+            fail('화면 교환 기록의 크기 제한을 초과했습니다.')
+        try:
+            value = json.loads(text)
+            identifier = path.stem
+            targets = value.get('targets') if isinstance(value, dict) else None
+            if (not isinstance(value, dict) or type(value.get('schema_version')) is not int
+                    or value['schema_version'] != 1 or value.get('operation_id') != identifier
+                    or not isinstance(targets, list) or len(targets) != 2
+                    or any(not isinstance(target, str) or not re.fullmatch(r'[a-z][a-z0-9_-]{0,31}', target)
+                           for target in targets) or len(set(targets)) != 2
+                    or value.get('unit') != 'ala-runtime-swap-' + identifier + '.service'
+                    or value.get('decision') not in {None, 'commit', 'rollback'}
+                    or value.get('state') not in {'queued', 'running', 'unknown', 'recovery_required', 'completed', 'rolled_back'}
+                    or not isinstance(value.get('participants'), dict) or set(value['participants']) != set(targets)):
+                raise ValueError()
+            for target in targets:
+                part = value['participants'][target]
+                if not isinstance(part, dict):
+                    raise ValueError()
+                for key in ('before', 'after', 'desired_before', 'desired_after'):
+                    selected = part.get(key)
+                    if (not isinstance(selected, dict)
+                            or any(not isinstance(selected.get(field), str) for field in ('config_path', 'release', 'version', 'revision'))
+                            or not Path(selected['config_path']).is_absolute() or not Path(selected['release']).is_absolute()
+                            or not re.fullmatch(r'[0-9a-f]{64}', selected['revision'])
+                            or not re.fullmatch(r'\d+\.\d+\.\d+(?:rc\d+)?', selected['version'])):
+                        raise ValueError()
+            terminal = {'completed': 'commit', 'rolled_back': 'rollback'}
+            if value['state'] in terminal:
+                if value.get('phase') != value['state'] or value['decision'] != terminal[value['state']]:
+                    raise ValueError()
+            else:
+                fail('두 화면 교환 또는 복구 완료 후 CLI를 갱신하세요. 현재 화면과 설치를 유지합니다.')
+        except (ValueError, TypeError, KeyError):
+            fail('화면 교환 기록이 손상됐습니다. 복구 상태를 확인한 뒤 CLI를 갱신하세요.')
+
 def busy_display_operations():
+    busy_screen_swaps()
     targets = ROOT / 'var/lib/ala-runtime/targets'
     if not targets.exists():
         return

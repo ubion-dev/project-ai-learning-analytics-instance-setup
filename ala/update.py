@@ -403,6 +403,8 @@ def submit(release, prerelease=False, paths=None, host=None, *, require_signatur
                     reason='선택한 채널에 더 새로운 설치 가능한 릴리스가 없습니다.',
                     next_action='현재 설치 버전을 계속 사용합니다.')
     with change_lock(store.paths):
+        from .screen_swap import guard
+        guard(paths=store.paths, host=store.host)
         if any(r['state'] in ACTIVE for r in JobStore(store.paths, store.host).list()):
             raise RuntimeError('설치 작업 완료 후 갱신하세요.')
         from .runtime import RuntimeStore
@@ -465,6 +467,8 @@ def run_worker(run_id, paths=None, host=None, release=None):
     store = UpdateStore(paths, host, release)
     # Claim once, then release the lock before calling the installer which owns it.
     with change_lock(store.paths, blocking=True):
+        from .screen_swap import guard
+        guard(paths=store.paths, host=store.host)
         value = store.load(run_id)
         if value['state'] != 'queued' or value['boot_id'] != boot_id(store.paths):
             raise RuntimeError('재실행할 수 없는 갱신 기록입니다.')

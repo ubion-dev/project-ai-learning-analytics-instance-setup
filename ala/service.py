@@ -24,7 +24,7 @@ class Operations:
             raise PermissionError('구성 파일에 심볼릭 링크를 사용하지 않습니다.')
         if not self.paths.config.exists():
             user = os.environ.get('SUDO_USER', '')
-            return Config(user=user if user != 'root' else '', autostart=False)
+            return Config(user=user if user != 'root' else '')
         info = self.paths.config.lstat()
         if self.paths.config.is_symlink() or info.st_uid != os.geteuid() or info.st_mode & 0o022:
             raise PermissionError('구성 파일 소유자/쓰기 권한을 확인하세요.')
@@ -85,6 +85,30 @@ class Operations:
                 store.stage(screen.id, release, config.to_dict())
 
     def dispatch(self, action, payload):
+        if action in {'screens-swap-submit', 'screens-swap-status', 'screens-swap-retry'}:
+            from . import screen_swap
+            if action == 'screens-swap-status':
+                return screen_swap.status(paths=self.paths, host=self.host,
+                                          target=payload.get('target'), operation_id=payload.get('operation_id'))
+            if action == 'screens-swap-retry':
+                return screen_swap.retry(payload.get('operation_id'), release=self.release, paths=self.paths, host=self.host)
+            return screen_swap.submit(payload.get('source'), payload.get('destination'),
+                                      payload.get('expected_config'), payload.get('expected_topology'),
+                                      release=self.release, paths=self.paths, host=self.host)
+        if action in {'display-initialization-preview', 'display-initialization-status'}:
+            from . import display_onboarding
+            if action.endswith('preview'):
+                return display_onboarding.preview(self.config(), paths=self.paths, host=self.host)
+            return display_onboarding.status(paths=self.paths, host=self.host)
+        if action == 'screens-identify':
+            from .screens import inspect_session
+            from .display import _user_call
+            config = self.config()
+            session = inspect_session(config, self.host)
+            if session != 'ok':
+                return {'state': 'pending', 'exit_code': 2, 'reason': '단일 활성·잠금 해제 GNOME 세션이 필요합니다.',
+                        'next_action': '화면 계정의 GNOME 로그인과 잠금 상태를 확인하세요.'}
+            return _user_call(config, self.host, self.paths, 'identify-outputs')
         if action in {'auto-update-status', 'auto-update-bootstrap', 'auto-update-enable', 'auto-update-disable'}:
             from . import auto_update
             if action == 'auto-update-status':
@@ -136,7 +160,10 @@ class Operations:
             if payload.get('quick') is True:
                 value['session'] = inspect_session(config, self.host)
             frontend = read_status(paths=self.paths)
+            from . import display_onboarding, screen_swap
+            value['initialization'] = display_onboarding.status(paths=self.paths, host=self.host)
             for target in value.get('targets', []):
+                target['swap'] = screen_swap.status(paths=self.paths, host=self.host, target=target['id'])
                 target['reload'] = reload_status(target['id'], paths=self.paths, host=self.host)
                 target['frontend_status'] = frontend.get('targets', {}).get(target['id'], {
                     'state': 'unknown' if frontend.get('state') == 'unknown' else 'pending',
@@ -157,8 +184,16 @@ class Operations:
             return value
         if action == 'screens-apply':
             from .runtime import submit_apply
+            expected = payload.get('expected_config')
+            if 'expected_config' in payload and not isinstance(expected, dict):
+                raise ValueError('검토한 화면 구성은 object여야 합니다.')
+            def current_settings():
+                config = self.config()
+                if expected is not None and config.to_dict() != expected:
+                    raise RuntimeError('검토 후 구성이 변경되었습니다. 화면을 다시 확인한 뒤 적용하세요.')
+                return config
             return submit_apply(payload.get('target', 'default'), release=self.release, paths=self.paths,
-                                host=self.host, settings_config=self.config)
+                                host=self.host, settings_config=current_settings)
         if action == 'frontend-retry':
             from .config import ScreenConfig
             target = payload.get('target')
@@ -184,6 +219,8 @@ class Operations:
                 raise RuntimeError('다른 작업에서 구성이 변경됐습니다. 다시 읽은 뒤 저장하세요.')
             self._enroll_before_change(before)
             with change_lock(self.paths):
+                from .screen_swap import guard
+                guard(paths=self.paths, host=self.host)
                 current = self.config()
                 if payload.get('expected_config') != current.to_dict():
                     raise RuntimeError('다른 작업에서 구성이 변경됐습니다. 다시 읽은 뒤 저장하세요.')
@@ -227,10 +264,17 @@ class Operations:
                 raise ValueError('허용되지 않은 화면 작업입니다.')
             target = payload.get('target', 'default')
             if name == 'reload':
+                from .screen_swap import guard
+                guard(paths=self.paths, host=self.host, target=target)
                 from .screen_control import submit_reload
                 return submit_reload(self.config(), target=target, release=self.release, paths=self.paths, host=self.host)
             if name in {'start', 'stop', 'restart'}:
                 with change_lock(self.paths, blocking=name == 'stop'):
+                    from .screen_swap import guard, note_stop
+                    if name == 'stop':
+                        note_stop(target, paths=self.paths, host=self.host)
+                    else:
+                        guard(paths=self.paths, host=self.host, target=target)
                     if any(r['state'] in {'queued', 'running'} for r in JobStore(self.paths, self.host).list()):
                         raise RuntimeError('설치 중에는 화면 변경 작업을 하지 않습니다.')
                     if name in {'start', 'stop', 'restart'}:
@@ -251,7 +295,9 @@ class Operations:
             from .update import status
             return status(paths=self.paths, host=self.host, run_id=payload.get('run_id'))
         if action == 'config-show':
-            return {'config': self.config().to_dict(), 'exists': self.paths.config.exists()}
+            from .display_onboarding import status
+            return {'config': self.config().to_dict(), 'exists': self.paths.config.exists(),
+                    'display_initialization': status(paths=self.paths, host=self.host)}
         if action == 'config-save':
             config = Config.from_dict(payload)
             if config.user:
@@ -261,6 +307,8 @@ class Operations:
             before = self.config()
             self._enroll_before_change(before)
             with change_lock(self.paths):
+                from .screen_swap import guard
+                guard(paths=self.paths, host=self.host)
                 if self.config() != before:
                     raise RuntimeError('다른 작업에서 구성이 변경됐습니다. 다시 읽은 뒤 저장하세요.')
                 if any(r['state'] in {'queued', 'running'} for r in JobStore(self.paths, self.host).list()):
@@ -329,6 +377,7 @@ class Operations:
                 return config
             return JobStore(self.paths, self.host).submit(current_config, self.release, self.release / '.venv/bin/python',
                                                          expected_config=payload.get('expected_config'), persist_config=True,
+                                                         initialize_displays=payload.get('initialize_displays', not self.paths.config.exists() and self.config().display),
                                                          bash_assist=payload.get('bash_assist', False),
                                                          podman_cleanup=payload.get('podman_cleanup'))
         if action == 'runs-list':

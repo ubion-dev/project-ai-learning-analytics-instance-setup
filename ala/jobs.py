@@ -22,6 +22,16 @@ def now():
 def boot_id(paths: Paths):
     return paths.at('/proc/sys/kernel/random/boot_id').read_text().strip()
 
+
+def _onboarding_setup_failed(run_id, paths, host):
+    try:
+        from .display_onboarding import setup_failed
+        return setup_failed(run_id, paths=paths, host=host, locked=True)
+    except (OSError, ValueError, RuntimeError):
+        # Preserve the original installation failure even if its auxiliary
+        # preparation record cannot be read or updated.
+        return {'state': 'unknown', 'reason': '초기 화면 준비 기록도 확인이 필요합니다.'}
+
 def trusted_release(release: Path, base=Path('/opt/ala/releases')):
     release = release.resolve(strict=True)
     if not release.is_relative_to(base.resolve(strict=True)) or release == base:
@@ -96,11 +106,13 @@ class JobStore:
         atomic_json(self.directory(value['run_id']) / 'result.json', value)
 
     def submit(self, config, release: Path, python: Path, *, expected_config=None, operation="setup",
-               persist_config=False, bash_assist=False, podman_cleanup=None):
+               persist_config=False, bash_assist=False, podman_cleanup=None, initialize_displays=False):
         if operation not in {"setup", "prepare"}:
             raise ValueError("허용되지 않은 설치 작업입니다.")
         if type(bash_assist) is not bool or (bash_assist and operation != "setup"):
             raise ValueError("Bash 편의 기능은 간편 설정의 true/false 옵션입니다.")
+        if type(initialize_displays) is not bool or (initialize_displays and operation != 'setup'):
+            raise ValueError('초기 안내 화면 준비는 간편 설정의 true/false 옵션입니다.')
         if podman_cleanup is not None:
             from .podman import validate_token
             validate_token(podman_cleanup)
@@ -108,6 +120,8 @@ class JobStore:
                 raise ValueError('Podman 정리는 간편 설정에서만 실행합니다.')
         with change_lock(self.paths):
             from .runtime import RuntimeStore
+            from .screen_swap import guard
+            guard(paths=self.paths, host=self.host)
             runtimes = RuntimeStore(self.paths, self.host)
             if any(runtimes.active(state) for state in runtimes.selections()):
                 raise RuntimeError('화면 적용·갱신 작업 중에는 설치를 시작하지 않습니다. 완료 후 다시 실행하세요.')
@@ -118,7 +132,8 @@ class JobStore:
                 raise RuntimeError('설치 작업이 이미 진행 중입니다. ala status로 확인하세요.')
             if persist_config and self.paths.config.is_symlink():
                 raise PermissionError('구성 파일에 심볼릭 링크를 사용하지 않습니다.')
-            if persist_config and not self.paths.config.exists():
+            first_config = persist_config and not self.paths.config.exists()
+            if first_config:
                 protected_directory(self.paths.config.parent, 0o755)
                 atomic_json(self.paths.config, config.to_dict(), 0o644)
             protected_directory(self.paths.at('/var/lib/ala'))
@@ -128,7 +143,8 @@ class JobStore:
             protected_directory(directory)
             unit = f'ala-{operation}-{run_id}.service'
             value = dict(run_id=run_id, operation=operation, state='queued', version=__version__, release=str(release),
-                         boot_id=boot_id(self.paths), unit=unit, started_at=now(), finished_at=None, stages=[])
+                         boot_id=boot_id(self.paths), unit=unit, started_at=now(), finished_at=None, stages=[],
+                         first_config=first_config, initialize_displays=initialize_displays)
             if podman_cleanup is not None:
                 value['podman_cleanup'] = podman_cleanup
             if bash_assist:
@@ -136,6 +152,16 @@ class JobStore:
             atomic_json(directory / 'config.json', config.to_dict())
             (directory / 'output.log').touch(mode=0o600, exist_ok=False)
             self.save(value)
+            if initialize_displays:
+                from .display_onboarding import reserve
+                try:
+                    reserve(config, release, paths=self.paths, host=self.host,
+                            locked=True, run_id=run_id)
+                except Exception:
+                    value.update(state='failed', exit_code=1, finished_at=now(),
+                                 reason='초기 안내 화면의 로그인 보호를 준비하지 못했습니다.')
+                    self.save(value)
+                    raise
             command = ['systemd-run', f'--unit={unit}', '--service-type=exec', '--collect',
                        '--expand-environment=no', '--property=TimeoutStartSec=infinity',
                        f'--property=StandardOutput=append:{directory / "output.log"}',
@@ -145,6 +171,8 @@ class JobStore:
             if started.returncode:
                 value.update(state='failed', exit_code=1, finished_at=now(), reason=started.stderr.strip())
                 self.save(value)
+                if initialize_displays:
+                    _onboarding_setup_failed(run_id, self.paths, self.host)
                 raise RuntimeError(f'설치 unit 시작 실패: {started.stderr.strip()}')
             return value
 
@@ -187,9 +215,27 @@ def run_worker(run_id, paths=None, host=None, engine_factory=None):
             report = engine.apply(**callbacks)
             raw.update(state={0:'completed', 1:'failed', 2:'pending'}[report.exit_code],
                        exit_code=report.exit_code, report=report.to_dict())
+            chrome = next((item['state'] for item in reversed(raw['stages']) if item['id'] == 'chrome'), None)
+            if operation == 'setup' and raw.get('initialize_displays') is True and chrome in {'completed', 'pending'}:
+                from .display_onboarding import request
+                stage('display_onboarding', 'started')
+                result = request(config, Path(raw['release']), paths=paths, host=host,
+                                 locked=True, run_id=run_id)
+                raw['display_onboarding'] = result
+                outcome = result.get('state')
+                stage('display_onboarding', 'completed' if outcome == 'completed' else
+                      'pending' if outcome == 'pending' else 'failed')
+                if outcome in {'blocked', 'cancelled'}:
+                    raw.update(state='failed', exit_code=1)
+                elif outcome == 'pending' and raw['exit_code'] == 0:
+                    raw.update(state='pending', exit_code=2)
+            elif operation == 'setup' and raw.get('initialize_displays') is True:
+                raw['display_onboarding'] = _onboarding_setup_failed(run_id, paths, host)
         except Exception as exc:
             raw.update(state='failed', exit_code=1, reason=str(exc))
             print(f'실패: {exc}', flush=True)
+            if raw.get('initialize_displays') is True:
+                raw['display_onboarding'] = _onboarding_setup_failed(run_id, paths, host)
         raw['finished_at'] = now()
         store.save(raw)
         return raw.get('exit_code', 1)

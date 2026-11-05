@@ -147,14 +147,12 @@ def test_start_is_request_only_and_restart_stop_require_explicit_actions():
     asyncio.run(scenario())
 
 
-@pytest.mark.parametrize('blocker', ('setup', 'update', 'registration', 'url', 'unknown'))
+@pytest.mark.parametrize('blocker', ('setup', 'update', 'registration', 'unknown'))
 def test_missing_prerequisites_or_active_work_prevent_mutation_but_keep_readonly_controls(blocker):
     async def scenario():
         service = ChromeService()
         if blocker == 'registration':
             service.report['configuration_report']['results'] = []
-        if blocker == 'url':
-            service.config['url'] = None
         if blocker == 'unknown':
             service.status_failure = True
         app = SimpleApp(service=service)
@@ -175,6 +173,28 @@ def test_missing_prerequisites_or_active_work_prevent_mutation_but_keep_readonly
                 assert '확인 불가' in str(screen.query_one('#chrome-runtime', Static).render())
                 assert '조회 실패' in screen.query_one('#chrome-detail', TextArea).text
             assert not mutations(service)
+    asyncio.run(scenario())
+
+
+def test_none_url_allows_explicit_setup_page_start_without_starting_on_open_or_resize():
+    async def scenario():
+        service = ChromeService()
+        service.config['url'] = None
+        app = SimpleApp(service=service)
+        async with app.run_test(size=(80, 24)) as pilot:
+            await pilot.pause()
+            await pilot.press('c')
+            await pilot.pause()
+            screen = app.screen
+            assert not screen.query_one('#chrome-start', Button).disabled
+            assert not screen.query_one('#chrome-restart', Button).disabled
+            await pilot.resize_terminal(120, 36)
+            assert mutations(service) == []
+            screen.query_one('#chrome-start', Button).focus()
+            await pilot.press('enter')
+            await pilot.pause()
+            assert mutations(service) == ['start']
+            assert service.config['url'] is None
     asyncio.run(scenario())
 
 

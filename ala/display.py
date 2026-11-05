@@ -82,7 +82,8 @@ def _committed_screen(config, target, store):
     state = store.load(target)
     if state is None:
         return config.for_screen(target), None
-    selected = state.get('committed')
+    from .runtime import committed_selection
+    selected = committed_selection(target, paths=store.paths, host=store.host)
     snapshot = Config.from_dict(store._validate_selection(selected))
     if snapshot.user != config.user:
         raise PermissionError('확정된 화면 설정의 사용자 계정이 다릅니다.')
@@ -236,7 +237,7 @@ def _user_call(config, host, paths, action):
     runtime = host.run(['loginctl', 'show-user', str(uid), '--property=RuntimePath', '--value'])
     path = runtime.stdout.strip()
     has_runtime = runtime.returncode == 0 and path.startswith('/') and paths.at(path).is_dir()
-    if not has_runtime and action != 'prepare':
+    if not has_runtime and action not in {'prepare', 'autostart-sync'}:
         return {'exit_code': 2, 'state': 'pending', 'reason': '사용자 runtime이 없습니다.',
                 'next_action':'다음 GNOME 로그인 또는 유지보수 재부팅 후 화면 환경을 다시 확인하세요.'}
     environment = [f'HOME={home}', 'PATH=/usr/sbin:/usr/bin:/sbin:/bin', 'LANG=C.UTF-8']
@@ -246,7 +247,7 @@ def _user_call(config, host, paths, action):
         pin=config.runtime_pin.get('config_path')
         if not isinstance(pin,str) or not pin.startswith('/'):
             return {'exit_code':1,'state':'unknown','reason':'root 실행 스냅샷 경로를 확인하지 못했습니다.'}
-        environment += ['ALA_RUNTIME_CONFIG='+pin,'ALA_RUNTIME_TARGET='+config.target_id]
+        environment += ['ALA_RUNTIME_CONFIG='+pin,'ALA_RUNTIME_TARGET='+config.target_id,'ALA_RUNTIME_ACTION='+action]
     target_args=[] if config.target_id=='default' else ['--target',config.target_id]
     result = host.run(['runuser', '-u', config.user, '--', 'env', '-i', *environment, str(RELEASE / '.venv/bin/python'),
                        '-I', str(RELEASE / 'entry.py'), '_chrome-user', action,*target_args], timeout=30)
@@ -410,7 +411,7 @@ def inspect_display_parts(config: Config, host=None, paths=None, *, include_runt
             results.append(_result('chrome.autostart', 'ok', False, False))
         for target in config.screen_targets():
             if config.display and target.autostart and not target.url:
-                results.append(_result('chrome.url' if target.id=='default' else 'chrome.url.'+target.id, 'pending', '로그인 없는 DID URL', '입력 대기', 'ala config edit'))
+                results.append(_result('chrome.url' if target.id=='default' else 'chrome.url.'+target.id, 'ok', '사이트 미설정 시 내부 안내', '설정 안내 모드', '화면 관리에서 사이트 주소를 저장하고 적용하세요.'))
     except (OSError, ValueError) as exc:
         results.append(_result('display.inspect', 'blocked' if isinstance(exc, ValueError) else 'unknown', '표시 구성 조회', str(exc)))
         return results, []
@@ -448,7 +449,7 @@ def inspect_display_parts(config: Config, host=None, paths=None, *, include_runt
                                    '잠금 정책 적용 후 재부팅하여 자동 로그인 확인' if locked == 'yes' else '',
                                    '잠금 힌트는 실제 화면 표시를 검증하지 않습니다.'))
             for target in config.screen_targets():
-                if target.autostart and target.url:
+                if target.autostart:
                     runtime = _user_call(config.for_screen(target.id), host, paths, 'check')
                     if config.schema_version==2 and (runtime.get('service') or {}).get('ActiveState') in {'active','activating'}:
                         window=_user_call(config.for_screen(target.id),host,paths,'windows')
@@ -514,8 +515,8 @@ def _write_managed(path, content, backups=None, mode=0o644):
     return True
 
 
-def _prepare_user_files(config, home: Path, paths):
-    """Called with the target UID, so user-controlled home paths never grant root writes."""
+def _prepare_autostart_file(config, home: Path, paths):
+    """Only the shared login entry; called with the target UID."""
     desktop = home / '.config/autostart/ala-display.desktop'
     changed = False
     if _autostart_enabled(config, paths):
@@ -529,6 +530,12 @@ def _prepare_user_files(config, home: Path, paths):
             raise ValueError('관리되지 않은 자동 실행 파일을 제거하지 않습니다.')
         desktop.unlink()
         changed = True
+    return changed
+
+
+def _prepare_user_files(config, home: Path, paths):
+    """Called with the target UID, so user-controlled home paths never grant root writes."""
+    changed = _prepare_autostart_file(config, home, paths)
     if config.display:
         marker = home / '.config/gnome-initial-setup-done'
         _safe_parents(marker)
@@ -540,6 +547,25 @@ def _prepare_user_files(config, home: Path, paths):
         elif marker.stat().st_uid != os.geteuid():
             changed |= _write_managed(marker,marker.read_text())
     return changed
+
+
+def sync_autostart_registration(config, host=None, paths=None):
+    """Sync the login entry without provisioning GNOME, units, or restarting Chrome."""
+    host, paths = host or Host(), paths or Paths()
+    try:
+        _, _, home = _account(config, host)
+        desktop = paths.at(str(home / '.config/autostart/ala-display.desktop'))
+        _safe_parents(desktop)
+        if desktop.exists() or desktop.is_symlink():
+            if not desktop.is_file() or desktop.is_symlink() or DESKTOP_MARKER not in desktop.read_text():
+                raise ValueError('관리되지 않은 자동 실행 파일을 변경하지 않습니다.')
+            desired = desktop_text() if _autostart_enabled(config, paths) else None
+            if desktop.read_text() != desired:
+                _backup_file(desktop, paths.backups)
+        return _user_call(config, host, paths, 'autostart-sync')
+    except (OSError, ValueError, RuntimeError) as exc:
+        return {'state': 'blocked', 'exit_code': 1, 'reason': str(exc),
+                'next_action': '화면 계정의 자동 시작 등록을 확인한 뒤 다시 적용하세요.'}
 
 
 
@@ -640,8 +666,8 @@ def chrome_action(action, config: Config, host=None, paths=None):
     config=_context(config)
     if action not in {'start','stop','restart','status','logs','check','outputs','windows','place','reload'}:
         raise ValueError('허용되지 않은 Chrome 명령입니다.')
-    if action in {'start','restart'} and (not config.display or not config.url):
-        return {'exit_code': 2, 'state':'pending', 'reason':'화면 설정과 DID URL을 먼저 지정하세요.'}
+    if action in {'start','restart'} and not config.display:
+        return {'exit_code': 2, 'state':'pending', 'reason':'화면 사용 설정을 먼저 켜세요.'}
     uid, _, _ = _account(config, host)
     if action in {'start','restart','check'}:
         sessions, reason = _graphical_sessions(host, uid)
@@ -674,7 +700,7 @@ def _load_user_config(paths=Paths(),target='default',*,runtime=False):
     revision=''
     if runtime or os.environ.get('ALA_RUNTIME_CONFIG'):
         from .runtime import load_user_selection
-        selected=load_user_selection(target or os.environ.get('ALA_RUNTIME_TARGET','default'),paths=paths)
+        selected=load_user_selection(target or os.environ.get('ALA_RUNTIME_TARGET','default'),paths=paths,observation=not runtime)
         if selected is not None:
             # Desired config may already use a future schema. A protected,
             # selected snapshot is the only config this runtime must parse.
@@ -836,7 +862,7 @@ def _check_user(config, home, host, paths):
                 health_state = 'unknown'
                 health = health | {'state':'unknown','reason':'관리 탭과 현재 구성의 연결 근거를 확인하지 못했습니다.',
                                    'next_action':'Chrome 로그와 화면 구성을 확인하세요.'}
-            check_state = {'healthy':'ok','waiting_site':'pending','recovering':'pending',
+            check_state = {'healthy':'ok','waiting_site':'pending','waiting_configuration':'pending','recovering':'pending',
                            'failed':'error','unknown':'unknown'}[health_state]
             health_result = _result('chrome.health',check_state,'관리 탭 주 문서·HTTP 지속 감시',health,
                                     health.get('next_action',''),
@@ -1001,13 +1027,15 @@ def _stop_postcondition(config,home,host,paths,evidence):
 def user_action(action, *, target='default', config=None, home=None, host=None, paths=None):
     host, paths = host or Host(), paths or Paths()
     if config is None:
-        config, home = _load_user_config(paths,None if action in {'prepare','settings','outputs','extension-status','environment'} else target)
+        config, home = _load_user_config(paths,None if action in {'prepare','autostart-sync','settings','outputs','identify-outputs','extension-status','environment'} else target)
     elif os.getuid() == 0:
         raise PermissionError('Chrome은 일반 사용자로 실행하세요.')
-    if action not in {'prepare','settings','outputs','extension-status','environment'}:
+    if action not in {'prepare','autostart-sync','settings','outputs','identify-outputs','extension-status','environment'}:
         config=_context(config,target if not hasattr(config,'_target_id') else config.target_id)
     unit=unit_name(target if action=='environment' else config.target_id)
     home = Path(home)
+    if action == 'autostart-sync':
+        return {'exit_code': 0, 'state': 'ok', 'changed': _prepare_autostart_file(config, home, paths)}
     if action == 'prepare':
         changed = _prepare_user_files(config, home, paths)
         extension=_extension_activation(host,apply=True) if config.display else None
@@ -1045,6 +1073,17 @@ def user_action(action, *, target='default', config=None, home=None, host=None, 
         from .monitors import topology
         value=topology(host=host)
         return value | {'exit_code':0 if value.get('state')=='ok' else 2}
+    if action == 'identify-outputs':
+        from .monitors import identify_outputs
+        value = identify_outputs(host=host)
+        return value | {'exit_code': 0 if value.get('state') == 'ok' else 2}
+    if action == 'startup-status':
+        current = _unit_state(host, unit)
+        legacy = _unit_state(host, LEGACY) if config.target_id == 'default' else {'ActiveState': 'inactive'}
+        confirmed = _confirmed_unit_state(current) and _confirmed_unit_state(legacy)
+        return {'exit_code': 0 if confirmed else 1, 'state': 'ok' if confirmed else 'unknown',
+                'service': current, 'legacy_service': legacy,
+                'reason': '' if confirmed else '기존 표시 서비스의 상태를 확실히 조회하지 못했습니다.'}
     if action in {'windows','place'}:
         from .monitors import placement
         value=_check_user(config,home,host,paths)
@@ -1094,13 +1133,13 @@ def user_action(action, *, target='default', config=None, home=None, host=None, 
         postcondition=_stop_postcondition(config,home,host,paths,evidence)
         if postcondition:return postcondition
         reason = '현재 실행을 중지했습니다.'
-        if config.display and config.autostart and config.url:
+        if config.display and config.autostart:
             reason += ' 다음 그래픽 로그인에는 자동 실행됩니다.'
         return {'exit_code':0,'state':'stopped','reason':reason}
     if action == 'ensure-start' and (not config.display or not config.autostart):
         return {'exit_code':0,'state':'not_applicable','reason':'Chrome 자동 시작이 꺼져 있습니다.'}
-    if not config.display or not config.url:
-        return {'exit_code':2,'state':'pending','reason':'화면 설정과 DID URL이 필요합니다.'}
+    if not config.display:
+        return {'exit_code':2,'state':'pending','reason':'화면 사용 설정이 꺼져 있습니다.'}
     try:
         _manager(host)
     except RuntimeError as exc:
@@ -1232,14 +1271,18 @@ def session_start(*, config=None, home=None, host=None, paths=None, environment=
         log('configuration','rejected',1)
         raise
     from .runtime import RuntimeStore
+    from .display_onboarding import pending_for_user
+    initializing = pending_for_user(config, paths)
     store = RuntimeStore(paths, host)
     targets = []
     codes = []
     if config.display:
         for target in config.screen_targets():
             try:
+                from .screen_swap import guard
+                guard(paths=paths, host=host, target=target.id)
                 context, state = _committed_screen(config, target.id, store)
-                if not (context.display and context.autostart and context.url):
+                if not (context.display and context.autostart):
                     continue
                 if state is not None and store.is_stopped(state):
                     log('configuration', 'manual_stop')
@@ -1248,7 +1291,7 @@ def session_start(*, config=None, home=None, host=None, paths=None, environment=
             except (OSError, ValueError, RuntimeError, KeyError):
                 log('configuration', 'selection_rejected', 1)
                 codes.append(1)
-    if not targets:
+    if not targets and not initializing:
         if not codes:
             log('configuration','disabled')
         return 1 if codes else 0
@@ -1278,6 +1321,9 @@ def session_start(*, config=None, home=None, host=None, paths=None, environment=
         log('environment','imported')
     else:
         log('environment','manager_retained')
+    if initializing:
+        log('configuration', 'monitor_initialization_pending')
+        return 78
     for context in targets:
         codes.append(_session_target_start(context,home,host,paths,log))
     if 0 in codes:
@@ -1411,8 +1457,11 @@ def run_chrome(*, target='default', config=None, home=None, host=None, paths=Non
     elif os.getuid()==0:
         raise PermissionError('Chrome은 일반 사용자로 실행하세요.')
     config=_context(config,target if not hasattr(config,'_target_id') else config.target_id)
-    if not config.display or not config.url:
+    if not config.display:
         return 2
+    from .display_onboarding import pending_for_user
+    if pending_for_user(config, paths):
+        return 78
     home=Path(home)
     try:
         manager = _wait_for_graphical_ready(host,paths,clock=clock or time.monotonic,
@@ -1447,4 +1496,11 @@ def run_chrome(*, target='default', config=None, home=None, host=None, paths=Non
     if config.schema_version==2 or config.output is not None:
         from .monitors import placement
         options['placement_callback']=lambda value:placement(config,value,host=host,apply=True)
+    if config.url is None:
+        def setup_context():
+            from .monitors import topology, resolve_output
+            selected = resolve_output(topology(host=host), config.output, auto=config.target_id == 'default')
+            output = selected.get('output') or {}
+            return {'output': output.get('id', config.output), 'display_number': output.get('display_number')}
+        options['setup_context_callback'] = setup_context
     return (supervisor_factory or Supervisor)(config,home,args,paths=paths,opener=opener,**options).run()

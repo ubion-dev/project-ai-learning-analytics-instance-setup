@@ -73,6 +73,50 @@ class PodmanConfirmation(ModalScreen[bool]):
         self.dismiss(True)
 
 
+class DisplayInitializationConfirmation(ModalScreen[bool]):
+    BINDINGS = [('escape', 'cancel', '취소')]
+    CSS = """
+    DisplayInitializationConfirmation { align: center middle; background: #000000 65%; }
+    #initialization-dialog { width: 90%; max-width: 90; height: 80%; padding: 1 2; background: #211f29; border: round #cbc2ef; }
+    #initialization-details { height: 1fr; margin: 1 0; }
+    #initialization-buttons { height: 3; }
+    #initialization-buttons Button { width: 1fr; margin-right: 1; padding: 0; }
+    """
+
+    def __init__(self, plan):
+        super().__init__()
+        self.plan = plan
+
+    def compose(self):
+        allowed = self.plan.get('state') in {'ready', 'pending'}
+        lines = [self.plan.get('reason') or '연결된 모든 논리 화면에 미설정 DID를 준비합니다.']
+        for target in self.plan.get('targets', []):
+            lines.append(f"{target.get('id', 'DID')} · {target.get('output', '출력 확인 대기')} · 로그인 후 자동 시작 켜짐")
+        for change in self.plan.get('changes', []):
+            lines.append(value_text(change))
+        if self.plan.get('state') == 'pending':
+            lines.append('현재 출력 목록을 확정할 수 없습니다. 다음 정상 GNOME 세션에서 확인한 모든 논리 화면을 준비합니다.')
+        lines += ['기존 사이트가 있는 장비에는 적용하지 않습니다.',
+                  '준비되면 일반 사용자 Chrome으로 설정 안내를 표시합니다. 재부팅은 자동 수행하지 않습니다.']
+        with Vertical(id='initialization-dialog'):
+            yield Static('모니터별 안내 화면 준비 확인')
+            yield TextArea('\n'.join(value_text(line) for line in lines), id='initialization-details', read_only=True)
+            with Horizontal(id='initialization-buttons'):
+                yield Button('취소', id='initialization-cancel')
+                yield Button('안내 준비 후 설정', id='initialization-confirm', variant='primary', disabled=not allowed)
+
+    def on_mount(self):
+        self.query_one('#initialization-cancel', Button).focus()
+
+    @on(Button.Pressed, '#initialization-cancel')
+    def action_cancel(self):
+        self.dismiss(False)
+
+    @on(Button.Pressed, '#initialization-confirm')
+    def confirm(self):
+        self.dismiss(True)
+
+
 class SetupTable(DataTable):
     class Resized(Message):
         """The table's measured viewport has changed after screen layout."""
@@ -151,7 +195,7 @@ class SimpleApp(App[None]):
     #setup-toolbar { height: auto; margin-bottom: 1; padding: 0 2; }
     #setup-context { width: 1fr; height: auto; }
     #config-summary { height: auto; max-height: 3; text-style: bold; text-wrap: nowrap; text-overflow: ellipsis; }
-    #setup-bash-assist { height: 1; border: none; padding: 0; width: 100%; }
+    #setup-bash-assist, #setup-initialize-displays { height: 1; border: none; padding: 0; width: 100%; }
     .actions { height: 3; margin-bottom: 1; }
     #setup-actions { width: 24; margin: 0 0 0 3; }
     Button { height: 3; padding: 0 3; background: #383346; color: #e9f0f7; border: round #605673; }
@@ -205,8 +249,11 @@ class SimpleApp(App[None]):
     Screen.compact #screens-summary { height: 1; margin-bottom: 0; }
     Screen.compact #screens-map, Screen.compact #screens-map.no-layout { height: auto; max-height: 2; padding: 0; border: none; }
     Screen.compact #screens-table { margin-top: 0; }
+    Screen.compact #screens-table { min-height: 4; }
+    Screen.compact #screens-hardware { display: none; }
     Screen.compact #screens-detail { height: 3; min-height: 3; margin-top: 0; }
     Screen.compact #screens-help { height: 1; text-wrap: nowrap; text-overflow: ellipsis; }
+    Screen.compact #screens-guidance, ScreenPanel.tight #screens-guidance { height: 1; }
     Screen.compact #screens-actions { height: 5; grid-rows: 2 2; margin-top: 0; }
     Screen.compact #screens-actions Button { height: 2; border: none; padding: 0; }
     Screen.compact #screens-actions Button:focus, Screen.compact #quick-actions Button:focus { background: #514661; color: #f3e8ff; text-style: bold; }
@@ -241,6 +288,10 @@ class SimpleApp(App[None]):
         self._update_polling = False
         self._update_lock = asyncio.Lock()
         self._chrome_mutating = False
+        self._initialization_option_loaded = False
+        self._config_exists = True
+        self._initialization_status = {}
+        self._initialization_polling = False
 
     def compose(self) -> ComposeResult:
         yield Static(f'ala {__version__} · 서버 환경 관리' + (' · 관리자' if os.geteuid() == 0 else ''), id='heading', markup=False)
@@ -261,6 +312,9 @@ class SimpleApp(App[None]):
                             option = Checkbox('Bash 자동 제안·구문 강조 설치', id='setup-bash-assist', disabled=True)
                             option.tooltip = '이번 설정에서 일반 운영 계정에 설치합니다. 다음 대화형 SSH 로그인부터 적용됩니다.'
                             yield option
+                            initial = Checkbox('모니터별 안내 화면 준비', id='setup-initialize-displays', disabled=True)
+                            initial.tooltip = '미설정 장비에서만 연결된 모든 논리 화면에 안내 DID를 준비합니다. 실행 전 변경 내용을 확인합니다.'
+                            yield initial
                         with Horizontal(classes='actions', id='setup-actions'):
                             yield Button('간편 설정 실행', id='setup-start', variant='primary', disabled=True)
                         yield Button('화면 관리', id='chrome-open')
@@ -291,6 +345,7 @@ class SimpleApp(App[None]):
         self.render_setup_table()
         self._resize_warning()
         self.set_interval(1.5, self.poll_job)
+        self.set_interval(3, self.poll_initialization)
         self.set_interval(0.2, self.refresh_query_label)
         self.set_interval(1.5, self.poll_update)
         self.run_worker(self.poll_update(), group='update-status', exit_on_error=False)
@@ -384,14 +439,30 @@ class SimpleApp(App[None]):
         button = self.query_one('#setup-start', Button)
         button.disabled = disabled
         self.query_one('#setup-bash-assist', Checkbox).disabled = disabled
+        initialization = self.query_one('#setup-initialize-displays', Checkbox)
+        eligible = self.can_initialize_displays()
+        if not eligible:
+            initialization.value = False
+        initialization.disabled = disabled or not eligible
         self.render_setup_header()
+
+    def can_initialize_displays(self):
+        config = self._config or {}
+        screens = config.get('screens') or [config]
+        return bool(config.get('display', True) and not any(
+            screen.get('url') or (screen.get('frontend') or {}).get('enabled') for screen in screens))
 
     def render_setup_header(self):
         job = self._display_job or {}
         state = job.get('state')
         style = ''
         recommend_setup = False
-        if self._active_job or (state in JOB_LABELS and state not in ACTIVE):
+        initialization = self._initialization_status or {}
+        if not self._active_job and initialization.get('state') in {'pending', 'blocked'}:
+            heading = '초기 화면 준비 · ' + ('대기' if initialization['state'] == 'pending' else '확인 필요')
+            action = initialization.get('next_action') or initialization.get('reason') or '초기 화면 준비 상태를 확인하세요.'
+            style = '#f1d5a3'
+        elif self._active_job or (state in JOB_LABELS and state not in ACTIVE):
             heading = '설정 작업 · ' + JOB_LABELS.get(state, '진행 중')
             style = STATE_STYLES.get(state, '#cbc2ef' if state in ACTIVE else '#f1d5a3')
             if state in ACTIVE:
@@ -456,8 +527,16 @@ class SimpleApp(App[None]):
                 self.query_one('#config-summary', Static).update('구성을 확인하지 못했습니다. 상태 다시 확인으로 재시도하세요.')
             if config is not None:
                 self._config = deepcopy(config['config'])
+                self._config_exists = config.get('exists', True)
+                self._initialization_status = config.get('display_initialization') or {}
+                if not self._initialization_option_loaded:
+                    self.query_one('#setup-initialize-displays', Checkbox).value = not self._config_exists and self._config.get('display', True)
+                    self._initialization_option_loaded = True
                 user = self._config.get('user') or '일반 계정 지정 필요'
-                mode = self._config.get('url') if self._config.get('autostart') and self._config.get('url') else '바탕화면만 표시'
+                targets = self._config.get('screens') or [self._config]
+                mode = ('DID ' + str(len(targets)) + '개 · 사이트 설정 ' + str(sum(bool(target.get('url')) for target in targets)) + '개'
+                        if self._config.get('schema_version') == 2 else
+                        self._config.get('url') or ('사이트 미설정 · 안내 화면' if self._config.get('autostart') else '자동 시작 꺼짐'))
                 self.query_one('#config-summary', Static).update(Text(f'설정 대상 · {user}\n화면 · {mode}'))
             runs = await runs_task
             if not self.is_running:
@@ -563,9 +642,13 @@ class SimpleApp(App[None]):
         if not self.is_running or self._submitting or self._active_job or self._loading or not self._status_known or not self._config or not self._config.get('user'):
             return
         option = self.query_one('#setup-bash-assist', Checkbox)
+        initialization = self.query_one('#setup-initialize-displays', Checkbox)
+        initialize_requested = initialization.value and self.can_initialize_displays()
         payload = {'expected_config': deepcopy(self._config)}
         if option.value:
             payload['bash_assist'] = True
+        if initialize_requested or not self._config_exists:
+            payload['initialize_displays'] = initialize_requested
         self._submitting = True
         self.update_button()
         try:
@@ -578,6 +661,14 @@ class SimpleApp(App[None]):
                 self.notice('구성이 변경됐습니다. 상태를 다시 확인한 뒤 실행하세요.')
                 self._status_known = False
                 return
+            if initialize_requested:
+                plan = await self.api('display-initialization-preview')
+                if plan is None or not self.is_running:
+                    return
+                approved = await self.push_screen_wait(DisplayInitializationConfirmation(plan))
+                if not approved or plan.get('state') not in {'ready', 'pending'}:
+                    self.notice('안내 화면 준비와 간편 설정을 취소했습니다.')
+                    return
             conflicts = (self._setup_report or {}).get('results', [])
             if any(row.get('id') in {'docker.conflict.podman', 'docker.conflict.podman-docker'}
                    for row in conflicts):
@@ -596,6 +687,9 @@ class SimpleApp(App[None]):
                 return
             if job is not None:
                 option.value = False
+                initialization.value = False
+                if payload.get('initialize_displays'):
+                    self._initialization_status = {'state': 'pending', 'reason': '설치 후 모니터별 안내를 준비합니다.'}
                 self._active_job = job['run_id'] if job.get('state') in ACTIVE else None
                 self.render_job(job)
                 self.notice('설정을 시작했습니다. 이 화면을 종료해도 작업은 계속됩니다.')
@@ -614,6 +708,8 @@ class SimpleApp(App[None]):
             if job is None:
                 return
             self.render_job(job)
+            if isinstance(job.get('display_onboarding'), dict):
+                self._initialization_status = deepcopy(job['display_onboarding'])
             if job.get('query_warning'):
                 self.notice(value_text(job['query_warning']) + ' · 진행 중단으로 단정하지 않습니다.')
                 return
@@ -632,6 +728,24 @@ class SimpleApp(App[None]):
         finally:
             self._polling = False
             self.update_button()
+
+    async def poll_initialization(self):
+        if (not self.is_running or self._initialization_polling or self._loading or self._submitting
+                or self._initialization_status.get('state') != 'pending'):
+            return
+        self._initialization_polling = True
+        try:
+            response = await self.api('config-show')
+            if not response or not self.is_running:
+                return
+            self._initialization_status = response.get('display_initialization') or {}
+            if response.get('config') != self._config and not self._active_job:
+                await self.load_state()
+                if self.query_one('#pages').current == 'screens':
+                    self.query_one('#screens', ScreenPanel).activate()
+            self.render_setup_header()
+        finally:
+            self._initialization_polling = False
 
     async def refresh_runtime_status(self):
         """A configuration-only installation result is not a live runtime check."""

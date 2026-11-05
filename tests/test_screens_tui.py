@@ -16,7 +16,7 @@ class Service:
         self.calls = []
         self.config = Config(user='user', url='https://example.com/display').to_dict()
         self.report = Report([CheckResult('base.package.chrome', 'ok')]).to_dict()
-        self.screens = {'outputs': [{'connector': 'HDMI-1'}, {'connector': 'DP-1'}],
+        self.screens = {'output_state': 'ok', 'outputs': [{'connector': 'HDMI-1'}, {'connector': 'DP-1'}],
                         'logical_outputs': [{'id': 'HDMI-1', 'connectors': ['HDMI-1'], 'x': 0, 'y': 0, 'width': 1920, 'height': 1080, 'confirmed': True},
                                             {'id': 'DP-1', 'connectors': ['DP-1'], 'x': 1920, 'y': 0, 'width': 1920, 'height': 1080, 'confirmed': True}],
                         'confirmed_windows': 2,
@@ -60,7 +60,7 @@ class Service:
                 raise RuntimeError('다른 작업에서 구성이 변경됐습니다.')
             saved = payload['target']
             selected = next(v for v in self.screens['targets'] if v['id'] == saved['id'])
-            selected.update(saved, settings={'pending': saved['url'] != selected['applied_url'], 'state': 'pending'})
+            selected.update(saved, settings={'pending': saved['url'] != selected['applied_url'] or saved['output'] != selected['output'], 'state': 'pending'})
             return {'saved': True, 'config': self.config, 'state': 'pending', 'reason': '설정 적용 대기'}
         if action == 'screens-apply':
             selected = next(v for v in self.screens['targets'] if v['id'] == payload['target'])
