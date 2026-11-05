@@ -90,13 +90,14 @@ class SimpleApp(App[None]):
                 Binding('g', 'setup', '간편 설정'), Binding('r', 'refresh', '새로고침'),
                 Binding('u', 'update', '업데이트'), Binding('c', 'chrome', '화면 관리')]
     CSS = """
-    Screen { background: #10151c; color: #e9f0f7; align-horizontal: center; }
+    Screen { background: #17161d; color: #e9f0f7; align-horizontal: center; }
     #heading, #tabs, #notice, #update-notice, #query-status, #small-terminal, #body { width: 100%; max-width: 132; }
-    #heading { height: 3; background: #17212d; padding: 1 3; color: #b5e9d9; }
+    #heading { height: 3; background: #211f29; padding: 1 3; color: #b5e9d9; }
     #small-terminal { display: none; height: auto; max-height: 2; background: #493622; color: #ffe0af; padding: 0 3; }
     #tabs { height: 3; padding: 0 3; }
+    #tabs Underline > .underline--bar { color: #cbc2ef; background: #50475f; }
     #notice, #update-notice { height: auto; max-height: 2; padding: 0 3; color: #c1d2e2; }
-    #update-notice { color: #83e3c4; }
+    #update-notice { color: #b5e9d9; }
     #query-status { display: none; height: 1; padding: 0 3; color: #8ed4ed; }
     #body { height: 1fr; margin-top: 1; }
     #pages { width: 100%; height: 1fr; padding: 0 3 1 3; }
@@ -107,34 +108,35 @@ class SimpleApp(App[None]):
     #setup-bash-assist { height: 1; border: none; padding: 0; width: 100%; }
     .actions { height: 3; margin-bottom: 1; }
     #setup-actions { width: 24; margin: 0 0 0 3; }
-    Button { height: 3; padding: 0 3; background: #233344; color: #e9f0f7; border: tall #233344; }
-    Button.-primary { background: #83e3c4; color: #10251d; border: tall #83e3c4; text-style: bold; }
-    Button:focus { border: tall #ccf7e8; }
-    Button:disabled { background: #1c2835; border: tall #1c2835; color: #a4b5c6; }
+    Button { height: 3; padding: 0 3; background: #383346; color: #e9f0f7; border: round #605673; }
+    Button.-primary { background: #b5e9d9; color: #10251d; border: tall #b5e9d9; text-style: bold; }
+    Button:focus { border: round #f3e8ff; }
+    Button:disabled { background: #292831; border: tall #292831; color: #aaa4b4; }
     #setup-start { width: 24; }
     #chrome-open { width: 16; height: 3; margin-left: 1; padding: 0 1; }
-    #screens-actions { height: 6; layout: grid; grid-size: 5 2; grid-rows: 3 3; grid-columns: 1fr 1fr 1fr 1fr 1fr; grid-gutter: 0 1; }
+    #screens-actions { height: 7; layout: grid; grid-size: 5 2; grid-rows: 3 3; grid-columns: 1fr 1fr 1fr 1fr 1fr; grid-gutter: 1 1; }
     #screens-actions Button { padding: 0; min-width: 7; width: 1fr; }
-    #quick-actions Button { padding: 0; }
-    #setup-overview, #status-overview { height: auto; margin-bottom: 1; padding: 0 2; background: #172735; border-left: solid #648ba7; }
-    #setup-overview.running { background: #142a32; border-left: solid #62cce5; }
-    #setup-overview.pending { background: #2b2518; border-left: solid #e6ba63; }
-    #setup-overview.failed, #setup-overview.interrupted { background: #321d25; border-left: solid #ee8795; }
-    #setup-overview.completed { background: #162b25; border-left: solid #83e3c4; }
+    #quick-actions Button { padding: 0; margin-right: 1; }
+    #quick-actions Button:last-of-type { margin-right: 0; }
+    #setup-overview, #status-overview { height: auto; margin-bottom: 1; padding: 0 2; background: #2a2634; border-left: solid #a99bc5; }
+    #setup-overview.running { background: #2c2639; border-left: solid #cbc2ef; }
+    #setup-overview.pending { background: #2b2518; border-left: solid #f1d5a3; }
+    #setup-overview.failed, #setup-overview.interrupted { background: #321d25; border-left: solid #f3b8c5; }
+    #setup-overview.completed { background: #162b25; border-left: solid #b5e9d9; }
     #setup-progress, #status-summary { height: auto; max-height: 2; text-style: bold; color: #b5e9d9; }
     #setup-next, #status-next { height: auto; max-height: 2; }
     #setup-summary { height: auto; max-height: 2; padding: 0 2; }
-    DataTable { background: #141d28; border: solid #34475d; border-title-color: #aabdd0; }
-    DataTable > .datatable--header { background: #233344; color: #e9f0f7; text-style: bold; }
-    DataTable > .datatable--cursor { background: #244859; }
-    DataTable:focus { border: solid #83e3c4; }
-    #setup-table { height: 1fr; min-height: 5; background: #152332; }
+    DataTable { background: #201e27; border: solid #50475f; border-title-color: #aabdd0; }
+    DataTable > .datatable--header { background: #383346; color: #e9f0f7; text-style: bold; }
+    DataTable > .datatable--cursor { background: #514661; }
+    DataTable:focus { border: solid #b5e9d9; }
+    #setup-table { height: 1fr; min-height: 5; background: #24212c; }
     #setup-output { height: 7; min-height: 5; margin-top: 1; }
     #status-table { height: 1fr; min-height: 3; }
     #status-detail { height: 9; min-height: 5; margin-top: 1; }
-    TextArea { background: #0e151e; border: round #52677a; border-title-color: #c0d1e0; padding: 0 2; }
-    TextArea:focus { border: round #83e3c4; }
-    Footer { width: 100%; background: #17212d; color: #b5c8da; }
+    TextArea { background: #1b1922; border: round #52677a; border-title-color: #c0d1e0; padding: 0 2; }
+    TextArea:focus { border: round #b5e9d9; }
+    Footer { width: 100%; background: #211f29; color: #b5c8da; }
     Screen.compact #heading { height: 1; padding: 0 2; }
     Screen.compact #tabs { padding: 0 1; }
     Screen.compact #notice, Screen.compact #update-notice { padding: 0 2; }
@@ -157,11 +159,11 @@ class SimpleApp(App[None]):
     Screen.compact #screens-summary { height: 1; margin-bottom: 0; }
     Screen.compact #screens-map, Screen.compact #screens-map.no-layout { height: auto; max-height: 2; padding: 0; border: none; }
     Screen.compact #screens-table { margin-top: 0; }
-    Screen.compact #screens-detail { height: 4; min-height: 3; margin-top: 0; }
+    Screen.compact #screens-detail { height: 3; min-height: 3; margin-top: 0; }
     Screen.compact #screens-help { height: 1; text-wrap: nowrap; text-overflow: ellipsis; }
-    Screen.compact #screens-actions { height: 4; grid-rows: 2 2; margin-top: 0; }
+    Screen.compact #screens-actions { height: 5; grid-rows: 2 2; margin-top: 0; }
     Screen.compact #screens-actions Button { height: 2; border: none; padding: 0; }
-    Screen.compact #screens-actions Button:focus { background: #244859; color: #ccf7e8; text-style: bold; }
+    Screen.compact #screens-actions Button:focus, Screen.compact #quick-actions Button:focus { background: #514661; color: #f3e8ff; text-style: bold; }
     Screen.compact #quick-actions Button { height: 2; border: none; padding: 0; }
     Screen.compact #quick-logs { width: 21; }
     """
@@ -345,7 +347,7 @@ class SimpleApp(App[None]):
         recommend_setup = False
         if self._active_job or (state in JOB_LABELS and state not in ACTIVE):
             heading = '설정 작업 · ' + JOB_LABELS.get(state, '진행 중')
-            style = STATE_STYLES.get(state, 'cyan' if state in ACTIVE else 'yellow')
+            style = STATE_STYLES.get(state, '#cbc2ef' if state in ACTIVE else '#f1d5a3')
             if state in ACTIVE:
                 action = '항목별 진행을 확인하세요. SSH를 닫아도 작업은 계속됩니다.'
             else:
@@ -359,10 +361,10 @@ class SimpleApp(App[None]):
             heading, action = '환경 상태 확인 중', '조회가 끝날 때까지 기다리세요.'
         elif not self._config or not self._status_known:
             heading, action = '설정 실행 전 확인 필요', '상태를 다시 확인하세요.'
-            style = 'yellow'
+            style = '#f1d5a3'
         elif not self._config.get('user'):
             heading, action = '일반 운영 계정이 필요합니다', '일반 사용자로 접속하거나 화면 계정을 지정하세요.'
-            style = 'yellow'
+            style = '#f1d5a3'
         elif self._chrome_mutating or (self._update_status or {}).get('state') in ACTIVE:
             heading, action = '다른 작업 진행 중', '현재 작업이 끝난 뒤 간편 설정을 실행하세요.'
         else:
@@ -370,14 +372,14 @@ class SimpleApp(App[None]):
             if issue:
                 kind = issue.get('state', 'unknown')
                 heading = f"{group_name(issue.get('id'))} · {LABELS.get(kind, '확인 불가')}"
-                style = STATE_STYLES.get(kind, 'yellow')
+                style = STATE_STYLES.get(kind, '#f1d5a3')
                 recommend_setup = kind == 'change_required'
                 action = issue.get('next_action') or (
                     '간편 설정을 실행해 필요한 항목을 적용하세요.' if recommend_setup
                     else '아래 항목에서 원인과 조치를 확인하세요.')
             else:
                 heading, action = '간편 설정 실행 가능', '대상과 설치 옵션을 확인한 뒤 실행하세요.'
-                style = 'green'
+                style = '#b5e9d9'
                 recommend_setup = True
         button = self.query_one('#setup-start', Button)
         button.variant = 'primary' if recommend_setup and not button.disabled else 'default'
@@ -628,7 +630,7 @@ class SimpleApp(App[None]):
             table.clear()
             for row in rows:
                 height = 1 if row.get('parent_id') else (2 if self.size.height >= 40 else 1)
-                table.add_row(self.label_cell(row), self.progress_cell(row), Text(row.get('current_step', ''), style='cyan'), key=row['id'], height=height)
+                table.add_row(self.label_cell(row), self.progress_cell(row), Text(row.get('current_step', ''), style='#cbc2ef'), key=row['id'], height=height)
             if selected in ids:
                 table.move_cursor(row=ids.index(selected), animate=False)
         else:
@@ -637,14 +639,14 @@ class SimpleApp(App[None]):
                 table.update_cell(row['id'], 'state', self.progress_cell(row))
                 table.update_cell(row['id'], 'current', Text(row.get('current_step', '')))
         counts = {}
-        groups = {'ok': ('✓ 정상·완료', 'green'), 'kept': ('✓ 정상·완료', 'green'),
-                  'completed': ('✓ 정상·완료', 'green'), 'running': ('● 진행 중', 'bold cyan'),
-                  'pending': ('◷ 적용 대기', 'yellow'), 'blocked': ('! 조치 필요', 'bold red'),
-                  'error': ('! 조치 필요', 'bold red'), 'unknown': ('? 확인 필요', 'yellow'),
-                  'change_required': ('자동 설정 대상', 'yellow'), 'waiting': ('… 실행 대기', 'dim'),
+        groups = {'ok': ('✓ 정상·완료', '#b5e9d9'), 'kept': ('✓ 정상·완료', '#b5e9d9'),
+                  'completed': ('✓ 정상·완료', '#b5e9d9'), 'running': ('● 진행 중', 'bold #cbc2ef'),
+                  'pending': ('◷ 적용 대기', '#f1d5a3'), 'blocked': ('! 조치 필요', 'bold #f3b8c5'),
+                  'error': ('! 조치 필요', 'bold #f3b8c5'), 'unknown': ('? 확인 필요', '#f1d5a3'),
+                  'change_required': ('자동 설정 대상', '#f1d5a3'), 'waiting': ('… 실행 대기', 'dim'),
                   'not_run': ('— 미실행', 'dim'), 'not_applicable': ('— 해당 없음', 'dim')}
         for row in parents:
-            label, style = groups.get(row['state'], (STATE_LABELS.get(row['state'], row['state']), 'red'))
+            label, style = groups.get(row['state'], (STATE_LABELS.get(row['state'], row['state']), '#f3b8c5'))
             if row['state'] == 'unknown' and row.get('evidence') == 'missing':
                 label, style = '— 결과 없음', 'dim'
             counts.setdefault((label, style), 0)
@@ -655,7 +657,7 @@ class SimpleApp(App[None]):
                 summary.append('   ')
             summary.append(f'{label} {count}', style=style)
         if not self._has_checked and self._setup_report is None and self._display_job is None:
-            summary = Text('… 검사 결과를 기다리고 있습니다.', style='cyan')
+            summary = Text('… 검사 결과를 기다리고 있습니다.', style='#cbc2ef')
         if (self._display_job or {}).get('run_id'):
             summary.append(f"   실행 ID {self._display_job['run_id']}", style='dim')
         self.query_one('#setup-summary', Static).update(summary)
@@ -690,8 +692,8 @@ class SimpleApp(App[None]):
                 return Text('… 검사 중', style='dim')
             if row.get('evidence') == 'missing':
                 return Text('— 세부 기록 없음' if row.get('parent_id') else '— 검사 결과 없음', style='dim')
-            return Text('? 조회 확인 필요', style='yellow')
-        return Text(STATE_LABELS.get(row['state'], row['state']), style=STATE_STYLES.get(row['state'], 'yellow'))
+            return Text('? 조회 확인 필요', style='#f1d5a3')
+        return Text(STATE_LABELS.get(row['state'], row['state']), style=STATE_STYLES.get(row['state'], '#f1d5a3'))
 
     def show_setup_row(self, index):
         if not self.is_running:
@@ -729,7 +731,7 @@ class SimpleApp(App[None]):
             table.clear()
             for index, (name, items) in enumerate(groups.items()):
                 state = max((row.get('state', 'unknown') for row in items), key=lambda value: PRIORITY.get(value, 5))
-                style = 'green' if state == 'ok' else 'dim' if state == 'not_applicable' else 'yellow' if state in {'change_required', 'pending', 'unknown'} else 'red'
+                style = '#b5e9d9' if state == 'ok' else 'dim' if state == 'not_applicable' else '#f1d5a3' if state in {'change_required', 'pending', 'unknown'} else '#f3b8c5'
                 label = '조회 확인 필요' if state == 'unknown' else '자동 설정 대상' if state == 'change_required' else LABELS.get(state, '확인 불가')
                 table.add_row(Text(name, style='bold'), Text(label, style=style), key=str(index))
             if groups:
@@ -750,9 +752,9 @@ class SimpleApp(App[None]):
             action = issue.get('next_action') or (
                 '아래에서 관련 항목의 현재 상태를 확인하세요.' if kind != 'unknown'
                 else '상태를 다시 확인하세요.')
-            self.set_status_header(heading, action, style=STATE_STYLES.get(kind, 'yellow'))
+            self.set_status_header(heading, action, style=STATE_STYLES.get(kind, '#f1d5a3'))
         elif any(row.get('state') == 'ok' for row in rows):
-            self.set_status_header('서버 상태 검사 통과', '실제 DID 표시는 모니터에서 확인하세요.', style='green')
+            self.set_status_header('서버 상태 검사 통과', '실제 DID 표시는 모니터에서 확인하세요.', style='#b5e9d9')
         else:
             self.set_status_header('해당하는 검사 항목이 없습니다.', '현재 장비 구성을 확인하세요.')
 
@@ -867,5 +869,5 @@ class SimpleApp(App[None]):
         if message:
             message += ' · u 업데이트 관리'
         notice = self.query_one('#update-notice', Static)
-        notice.update(Text(message, style='yellow' if state in {'failed', 'interrupted', 'unknown'} else ''))
+        notice.update(Text(message, style='#f1d5a3' if state in {'failed', 'interrupted', 'unknown'} else ''))
         notice.display = bool(message)

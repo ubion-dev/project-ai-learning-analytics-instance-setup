@@ -14,9 +14,9 @@ class AutomaticScreen(ModalScreen):
     BINDINGS = [('escape', 'close', '닫기'), ('q', 'close', '닫기')]
     CSS = """
     AutomaticScreen { align: center middle; background: #000000 65%; }
-    #automatic-dialog { width: 88; max-width: 96%; height: 30; max-height: 95%; padding: 1 2; background: #17212d; border: round #83e3c4; }
+    #automatic-dialog { width: 88; max-width: 96%; height: 30; max-height: 95%; padding: 1 2; background: #211f29; border: round #b5e9d9; }
     #automatic-title { height: 1; color: #b5e9d9; text-style: bold; }
-    #automatic-state { height: 1; padding: 0 1; background: #172735; color: #b5e9d9; text-style: bold; text-wrap: nowrap; text-overflow: ellipsis; }
+    #automatic-state { height: 1; padding: 0 1; background: #2a2634; color: #b5e9d9; text-style: bold; text-wrap: nowrap; text-overflow: ellipsis; }
     #automatic-next { height: 1; padding: 0 1; text-wrap: nowrap; text-overflow: ellipsis; }
     #automatic-body { height: 1fr; min-height: 6; }
     #automatic-policy { height: 3; margin-top: 1; }
@@ -82,30 +82,30 @@ class AutomaticScreen(ModalScreen):
 
     def priority(self, bootstrap, accepted):
         if self.working:
-            return '자동 운영 작업 요청 중', '작업 접수 결과를 기다리세요.', None, 'cyan'
+            return '자동 운영 작업 요청 중', '작업 접수 결과를 기다리세요.', None, '#cbc2ef'
         if self.owner._active_job or (self.owner._update_status or {}).get('state') in {'queued', 'running'}:
-            return '다른 설정·업데이트 작업 진행 중', '작업이 끝난 뒤 자동 운영을 설정하세요.', None, 'cyan'
+            return '다른 설정·업데이트 작업 진행 중', '작업이 끝난 뒤 자동 운영을 설정하세요.', None, '#cbc2ef'
         if self.request_failed:
-            return '자동 운영 요청 실패', '세부 결과를 확인한 뒤 상태 확인을 선택하세요.', 'refresh', 'red'
+            return '자동 운영 요청 실패', '세부 결과를 확인한 뒤 상태 확인을 선택하세요.', 'refresh', '#f3b8c5'
         if not self.value:
-            return '자동 운영 상태 확인 중', '조회 결과를 기다리세요.', None, 'cyan'
+            return '자동 운영 상태 확인 중', '조회 결과를 기다리세요.', None, '#cbc2ef'
         if self.value.get('state') == 'unknown':
-            return '자동 운영 상태 확인 불가', '상태 확인을 선택하세요.', 'refresh', 'yellow'
+            return '자동 운영 상태 확인 불가', '상태 확인을 선택하세요.', 'refresh', '#f1d5a3'
         state = bootstrap.get('state')
         if state in {'queued', 'running'}:
-            return '최초 준비 진행 중', '서명 검증과 등록 결과를 확인하세요.', 'refresh', 'cyan'
+            return '최초 준비 진행 중', '서명 검증과 등록 결과를 확인하세요.', 'refresh', '#cbc2ef'
         if state in {'failed', 'interrupted', 'unknown'}:
             label = {'failed': '최초 준비 실패', 'interrupted': '최초 준비 중단', 'unknown': '최초 준비 상태 확인 불가'}[state]
-            return label, '최초 준비의 세부 결과를 확인하세요.', None, 'red'
+            return label, '최초 준비의 세부 결과를 확인하세요.', None, '#f3b8c5'
         if self.value.get('verifier') != 'ready':
-            return '서명 검증기 준비 필요', '최초 준비를 선택해 설치와 서명을 확인하세요.', 'prepare', 'yellow'
+            return '서명 검증기 준비 필요', '최초 준비를 선택해 설치와 서명을 확인하세요.', 'prepare', '#f1d5a3'
         if self.value.get('enabled'):
-            return '자동 운영 켜짐', '정식 CLI 분산 조회와 03:00–04:00 화면 적용 정책을 확인하세요.', None, 'green'
+            return '자동 운영 켜짐', '정식 CLI 분산 조회와 03:00–04:00 화면 적용 정책을 확인하세요.', None, '#b5e9d9'
         if state != 'completed':
-            return '최초 준비 확인 필요', '최초 준비를 선택해 설치와 서명을 확인하세요.', 'prepare', 'yellow'
+            return '최초 준비 확인 필요', '최초 준비를 선택해 설치와 서명을 확인하세요.', 'prepare', '#f1d5a3'
         if not accepted:
-            return '자동 운영 꺼짐 · 실제 화면 확인 필요', '선택 화면 코드 적용 후 실제 표시와 재부팅을 확인하세요.', 'apply', 'yellow'
-        return '실제 화면 확인 표시됨', '확인 결과를 검토하고 자동 운영 켜기를 선택하세요.', 'enable', 'yellow'
+            return '자동 운영 꺼짐 · 실제 화면 확인 필요', '선택 화면 코드 적용 후 실제 표시와 재부팅을 확인하세요.', 'apply', '#f1d5a3'
+        return '실제 화면 확인 표시됨', '확인 결과를 검토하고 자동 운영 켜기를 선택하세요.', 'enable', '#f1d5a3'
 
     def render_state(self):
         if not self.alive():

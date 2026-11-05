@@ -132,9 +132,18 @@ def test_small_terminal_controls_and_detail_remain_inside_viewport():
                 region = app.query_one(selector).region
                 assert region.x >= 0 and region.y >= 0
                 assert region.right <= 80 and region.bottom <= 23
-            assert app.query_one('#screens-stop', Button).region.width >= 7
-            for button in app.query('#screens-actions Button'):
-                assert button.content_size.width >= cell_len(str(button.label)) + 2
+            start = app.query_one('#screens-start', Button)
+            stop = app.query_one('#screens-stop', Button)
+            edit = app.query_one('#screens-edit', Button)
+            reload = app.query_one('#screens-reload', Button)
+            assert stop.region.x - start.region.right == 1
+            assert edit.region.y - start.region.bottom == 1
+            assert reload.content_size.width >= cell_len(str(reload.label)) + 2
+            assert app.query_one('#screens-apply', Button).disabled
+            start.focus()
+            await pilot.press('tab')
+            assert stop.has_focus
+            assert stop.styles.background != start.styles.background
             await pilot.resize_terminal(120, 36)
             await pilot.pause()
             summary = app.query_one('#screens-result').region
@@ -142,6 +151,8 @@ def test_small_terminal_controls_and_detail_remain_inside_viewport():
             actions = app.query_one('#screens-actions').region
             detail = app.query_one('#screens-detail').region
             assert summary.bottom <= next_action.y < actions.y
+            assert edit.region.y - start.region.bottom == 1
+            assert reload.content_size.width >= cell_len(str(reload.label)) + 2
             assert actions.bottom <= detail.y and detail.bottom <= 35
             await pilot.resize_terminal(125, 42)
             await pilot.pause()

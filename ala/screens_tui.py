@@ -121,11 +121,11 @@ class TargetEditor(ModalScreen[dict | None]):
     BINDINGS = [('escape', 'cancel', '취소')]
     CSS = """
     TargetEditor { align: center middle; background: #000000 65%; }
-    #target-editor { width: 76; max-width: 96%; height: 29; max-height: 96%; padding: 1 2; background: #17212d; border: round #83e3c4; }
+    #target-editor { width: 76; max-width: 96%; height: 29; max-height: 96%; padding: 1 2; background: #211f29; border: round #b5e9d9; }
     #target-fields { height: 1fr; }
     #target-editor Label { height: 1; margin-top: 1; }
     #target-editor Input, #target-editor Select { height: 3; }
-    #target-error { height: auto; color: #ee8795; }
+    #target-error { height: auto; color: #f3b8c5; }
     #target-help { height: 1; color: #aabdd0; text-wrap: nowrap; text-overflow: ellipsis; }
     #target-buttons { height: 3; margin-top: 1; }
     #target-buttons Button { width: 1fr; }
@@ -218,9 +218,9 @@ class ScreenPanel(Vertical):
     #screens-hardware, #screens-result, #screens-next { height: 1; text-wrap: nowrap; text-overflow: ellipsis; }
     #screens-help { height: 2; }
     #screens-hardware, #screens-help { color: #aabdd0; }
-    #screens-result { padding: 0 1; background: #172735; color: #b5e9d9; text-style: bold; }
+    #screens-result { padding: 0 1; background: #2a2634; color: #b5e9d9; text-style: bold; }
     #screens-next { padding: 0 1; color: #e9f0f7; }
-    #screens-map { height: 8; padding: 0 1; background: #172735; border: round #34475d; }
+    #screens-map { height: 8; padding: 0 1; background: #2a2634; border: round #50475f; }
     #screens-map.no-layout { height: auto; max-height: 4; }
     #screens-table { height: 1fr; min-height: 3; margin-top: 1; }
     #screens-detail { height: 6; min-height: 3; margin-top: 1; }
@@ -374,9 +374,9 @@ class ScreenPanel(Vertical):
             if self.retry_enabled(value) and deployment.get('state') == 'blocked':
                 site += ' · 배포 보류'
             output = value.get('output') or ('자동' if value['id'] == 'default' else '미선택')
-            color = 'green' if site == '정상' else 'dim' if site == '중지됨' else 'yellow'
-            items = (f'{value["id"]} · {output}', site_label(value.get('applied_url', value.get('url'))), Text(run+'·'+site, style='yellow' if update_pending else color)) if compact else (
-                value['id'], output, site_label(value.get('applied_url', value.get('url'))), Text(run, style='yellow' if update_pending else ''), Text(site, style=color),
+            color = '#b5e9d9' if site == '정상' else 'dim' if site == '중지됨' else '#f1d5a3'
+            items = (f'{value["id"]} · {output}', site_label(value.get('applied_url', value.get('url'))), Text(run+'·'+site, style='#f1d5a3' if update_pending else color)) if compact else (
+                value['id'], output, site_label(value.get('applied_url', value.get('url'))), Text(run, style='#f1d5a3' if update_pending else ''), Text(site, style=color),
                 {'ok': '확인됨', 'pending': '배치 대기', 'unknown': '확인 불가'}.get(placement.get('state'), '확인 불가'))
             table.add_row(*items, key=value['id'])
         if self.selected:
@@ -409,36 +409,36 @@ class ScreenPanel(Vertical):
     def priority(self, value):
         if not value:
             if self.report.get('state') == 'unknown':
-                return '표시 대상을 확인할 수 없습니다', 'r로 다시 확인하세요.', None, 'yellow'
+                return '표시 대상을 확인할 수 없습니다', 'r로 다시 확인하세요.', None, '#f1d5a3'
             if not self.loaded:
-                return '표시 대상 확인 중', '조회 결과를 기다리세요.', None, 'cyan'
-            return '등록된 표시 대상이 없습니다', '추가를 선택해 화면을 등록하세요.', 'add', 'yellow'
+                return '표시 대상 확인 중', '조회 결과를 기다리세요.', None, '#cbc2ef'
+            return '등록된 표시 대상이 없습니다', '추가를 선택해 화면을 등록하세요.', 'add', '#f1d5a3'
         settings = value.get('settings') or {}
         state = (value.get('service') or {}).get('ActiveState')
         if (self.mutating or self.owner._active_job or self.selected in self.following
                 or self.selected in self.launches or settings.get('state') in {'queued', 'running'}):
-            return '작업 진행 중', '작업 결과를 확인하세요.', None, 'cyan'
+            return '작업 진행 중', '작업 결과를 확인하세요.', None, '#cbc2ef'
         if state == 'failed':
-            return 'Chrome 실행 실패', '선택한 화면의 Chrome 로그를 확인하세요.', 'logs', 'red'
+            return 'Chrome 실행 실패', '선택한 화면의 Chrome 로그를 확인하세요.', 'logs', '#f3b8c5'
         if state not in {'active', 'inactive', 'activating', 'deactivating'} or settings.get('state') == 'unknown':
-            return '화면 상태 확인 불가', 'r로 다시 확인하고 화면 상세를 살펴보세요.', None, 'yellow'
+            return '화면 상태 확인 불가', 'r로 다시 확인하고 화면 상세를 살펴보세요.', None, '#f1d5a3'
         if settings.get('state') in {'failed', 'interrupted'}:
-            return '설정 적용 실패·중단', '선택한 화면의 작업 결과와 원인을 확인하세요.', None, 'red'
+            return '설정 적용 실패·중단', '선택한 화면의 작업 결과와 원인을 확인하세요.', None, '#f3b8c5'
         if settings.get('pending'):
-            return '저장한 설정 적용 대기', '설정 적용을 선택하면 화면이 잠시 끊길 수 있습니다.', 'apply', 'yellow'
+            return '저장한 설정 적용 대기', '설정 적용을 선택하면 화면이 잠시 끊길 수 있습니다.', 'apply', '#f1d5a3'
         if state in {'activating', 'deactivating'}:
-            return 'Chrome 상태 전환 중', '조회 결과를 기다리세요.', None, 'cyan'
+            return 'Chrome 상태 전환 중', '조회 결과를 기다리세요.', None, '#cbc2ef'
         if state == 'inactive':
-            return 'Chrome 중지됨', '표시가 필요하면 시작을 선택하세요.', 'start', 'yellow'
+            return 'Chrome 중지됨', '표시가 필요하면 시작을 선택하세요.', 'start', '#f1d5a3'
         if self.report.get('output_state') not in {None, 'ok'}:
-            return 'Chrome 실행 중 · 출력 확인 필요', '출력 조회와 화면 배치 상세를 확인하세요.', None, 'yellow'
+            return 'Chrome 실행 중 · 출력 확인 필요', '출력 조회와 화면 배치 상세를 확인하세요.', None, '#f1d5a3'
         if (value.get('placement') or {}).get('state') not in {'ok', 'not_applicable'}:
-            return 'Chrome 실행 중 · 창 배치 확인 필요', '선택 대상의 출력과 창 배치를 확인하세요.', None, 'yellow'
+            return 'Chrome 실행 중 · 창 배치 확인 필요', '선택 대상의 출력과 창 배치를 확인하세요.', None, '#f1d5a3'
         if self.retry_enabled(value) and (value.get('frontend_status') or {}).get('state') == 'blocked':
-            return 'Chrome 실행 중 · 프론트 배포 보류', '배포 상세를 확인하고 필요하면 재시도하세요.', 'retry', 'yellow'
+            return 'Chrome 실행 중 · 프론트 배포 보류', '배포 상세를 확인하고 필요하면 재시도하세요.', 'retry', '#f1d5a3'
         if (value.get('health') or {}).get('state') != 'healthy' or not site_confirmed(value):
-            return 'Chrome 실행 중 · 사이트 확인 필요', '선택한 화면의 Chrome 로그와 적용 주소를 확인하세요.', 'logs', 'yellow'
-        return 'Chrome 실행 중 · 사이트 응답 확인', '실제 표시 상태는 DID 화면에서 확인하세요.', None, 'green'
+            return 'Chrome 실행 중 · 사이트 확인 필요', '선택한 화면의 Chrome 로그와 적용 주소를 확인하세요.', 'logs', '#f1d5a3'
+        return 'Chrome 실행 중 · 사이트 응답 확인', '실제 표시 상태는 DID 화면에서 확인하세요.', None, '#b5e9d9'
 
     def render_detail(self):
         value = self.target()

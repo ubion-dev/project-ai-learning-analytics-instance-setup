@@ -59,15 +59,15 @@ class UpdateScreen(ModalScreen):
     BINDINGS = [('escape', 'close', '닫기'), ('q', 'close', '닫기')]
     CSS = """
     UpdateScreen { align: center middle; background: #000000 65%; }
-    #update-dialog { width: 92%; max-width: 88; height: auto; max-height: 95%; padding: 1 2; background: #17212d; border: round #83e3c4; }
+    #update-dialog { width: 92%; max-width: 88; height: auto; max-height: 95%; padding: 1 2; background: #211f29; border: round #b5e9d9; }
     #update-title { height: 1; text-style: bold; color: #b5e9d9; }
-    #update-release { height: 1; padding: 0 1; background: #172735; color: #b5e9d9; text-style: bold; text-wrap: nowrap; text-overflow: ellipsis; }
+    #update-release { height: 1; padding: 0 1; background: #2a2634; color: #b5e9d9; text-style: bold; text-wrap: nowrap; text-overflow: ellipsis; }
     #update-next { height: 1; padding: 0 1; text-wrap: nowrap; text-overflow: ellipsis; }
     #update-versions { height: 2; margin-top: 1; }
     #update-channel { height: 3; }
     #update-channel-label { height: 3; width: 1fr; content-align: left middle; }
     #update-prerelease { width: auto; }
-    #update-detail { height: 6; min-height: 4; padding: 0 1; background: #0e151e; }
+    #update-detail { height: 6; min-height: 4; padding: 0 1; background: #1b1922; }
     #update-controls { height: 3; margin-top: 1; }
     UpdateScreen Button { width: 1fr; min-width: 10; padding: 0 1; }
     #update-close { max-width: 12; }
@@ -162,28 +162,28 @@ class UpdateScreen(ModalScreen):
     def priority(self, status, release, available):
         state = status.get('state', 'unknown')
         if self._submitting:
-            return '업데이트 시작 요청 중', '작업 접수 결과를 기다리세요.', None, 'cyan'
+            return '업데이트 시작 요청 중', '작업 접수 결과를 기다리세요.', None, '#cbc2ef'
         if state in ACTIVE:
             phase = PHASES.get(status.get('phase'))
-            return ' · '.join(filter(None, (LABELS[state], phase))), '작업 상태를 확인하세요.', None, 'cyan'
+            return ' · '.join(filter(None, (LABELS[state], phase))), '작업 상태를 확인하세요.', None, '#cbc2ef'
         if self.owner._active_job:
-            return '환경 설정 작업 진행 중', '설정 작업이 끝난 뒤 업데이트를 시작하세요.', None, 'cyan'
+            return '환경 설정 작업 진행 중', '설정 작업이 끝난 뒤 업데이트를 시작하세요.', None, '#cbc2ef'
         if self._message:
-            return self._message, '다시 확인으로 현재 상태를 조회하세요.', 'check', 'yellow'
+            return self._message, '다시 확인으로 현재 상태를 조회하세요.', 'check', '#f1d5a3'
         if state in {'failed', 'interrupted', 'unknown'}:
             next_action = status.get('next_action') or '다시 확인으로 현재 상태를 조회하세요.'
-            return LABELS[state], str(redact(next_action)), 'check', 'red'
+            return LABELS[state], str(redact(next_action)), 'check', '#f3b8c5'
         if self._checking:
-            return '릴리스 확인 중…', '조회 결과를 기다리세요.', None, 'cyan'
+            return '릴리스 확인 중…', '조회 결과를 기다리세요.', None, '#cbc2ef'
         installed = status.get('installed_version')
         runtime = status.get('runtime_version') or __version__
         if installed and installed != runtime:
-            return '설치 버전과 실행 버전이 다릅니다', 'ala를 종료하고 다시 실행하세요.', None, 'yellow'
+            return '설치 버전과 실행 버전이 다릅니다', 'ala를 종료하고 다시 실행하세요.', None, '#f1d5a3'
         if release.get('exit_code', 1) or release.get('error'):
-            return '릴리스 조회 실패', '연결 상태를 확인하고 다시 확인을 선택하세요.', 'check', 'red'
+            return '릴리스 조회 실패', '연결 상태를 확인하고 다시 확인을 선택하세요.', 'check', '#f3b8c5'
         if available:
-            return f"새 버전 · {release.get('latest', '확인 불가')}", '업데이트 시작을 선택하면 설치를 요청합니다.', 'start', 'yellow'
-        return '이 채널에 새로 설치할 버전이 없습니다', '자동 운영 정책이나 설치·실행 버전을 확인하세요.', None, 'green'
+            return f"새 버전 · {release.get('latest', '확인 불가')}", '업데이트 시작을 선택하면 설치를 요청합니다.', 'start', '#f1d5a3'
+        return '이 채널에 새로 설치할 버전이 없습니다', '자동 운영 정책이나 설치·실행 버전을 확인하세요.', None, '#b5e9d9'
 
     def render_state(self):
         if not self.alive():

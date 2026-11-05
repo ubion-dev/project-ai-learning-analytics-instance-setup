@@ -56,6 +56,7 @@ def installation(tmp_path):
         ),
         # GNU mv has -T, while the macOS development runner uses BSD mv.
         'mv': 'os.rename(sys.argv[-2], sys.argv[-1])\n',
+        'ln': 'os.link(sys.argv[-2], sys.argv[-1])\n',
     }
     for name, body in commands.items():
         command = bin_path / name
@@ -135,3 +136,29 @@ def test_bash_assist_refuses_root_and_symbolic_link(installation):
     assert bashrc.is_symlink()
     assert previous.read_bytes() == before
     assert not downloads.exists()
+
+
+def test_bash_assist_adds_gray_suggestions_to_existing_installation(installation):
+    home, _, bashrc, _, downloads, install = installation
+    assert install().returncode == 0
+    style = home / '.config/blesh/init.sh'
+    assert style.read_text() == "ble-face -s auto_complete 'fg=240'\n"
+
+    style.unlink()
+    before = bashrc.read_bytes()
+    assert install().returncode == 0
+    assert style.read_text() == "ble-face -s auto_complete 'fg=240'\n"
+    assert bashrc.read_bytes() == before
+    assert downloads.read_text().splitlines() == ['download']
+
+
+@pytest.mark.parametrize('name', ['.blerc', '.config/blesh/init.sh'])
+def test_bash_assist_preserves_existing_style_config(installation, name):
+    home, _, _, _, _, install = installation
+    rc = home / name
+    rc.parent.mkdir(parents=True, exist_ok=True)
+    rc.write_text("# custom ble.sh configuration\n")
+    assert install().returncode == 0
+    assert rc.read_text() == "# custom ble.sh configuration\n"
+    if name == '.blerc':
+        assert not (home / '.config/blesh/init.sh').exists()

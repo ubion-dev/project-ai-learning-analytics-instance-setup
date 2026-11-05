@@ -32,8 +32,8 @@ SSH로 접속한 **Rocky에서** 실행합니다. 아래는 공개 시험판 RC2
 ```bash
 (
   set -e
-  version='0.1.0rc24'
-  tag='v0.1.0-rc.24'
+  version='0.1.0rc25'
+  tag='v0.1.0-rc.25'
   archive="ala-${version}.tar.gz"
   url="https://github.com/ubion-dev/project-ai-learning-analytics-instance-setup/releases/download/${tag}"
   mkdir -p "$HOME/ala-downloads/$version"

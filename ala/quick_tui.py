@@ -78,13 +78,13 @@ def diagnosis(report, target):
     for index, name in enumerate(stages):
         status = ('별도 확인' if index == 2 and placement == 'not_applicable' else '확인') if index < confirmed else '점검 필요' if index == confirmed else '확인 대기'
         lines.append(f'{name} · {status}')
-    tone = 'yellow'
+    tone = '#f1d5a3'
     if confirmed == 4:
-        tone = 'green'
+        tone = '#b5e9d9'
     elif confirmed == 1 and running == 'failed':
-        tone = 'red'
+        tone = '#f3b8c5'
     elif confirmed == 1 and running == 'activating':
-        tone = 'cyan'
+        tone = '#cbc2ef'
     return reason, action, '\n'.join(lines), logs, next_button, tone
 
 
@@ -92,10 +92,10 @@ class QuickPanel(Vertical):
     DEFAULT_CSS = """
     QuickPanel { height: 1fr; padding: 0 1; }
     #quick-target { height: 3; }
-    #quick-reason { height: auto; padding: 0 1; color: #b5e9d9; text-style: bold; background: #172735; }
+    #quick-reason { height: auto; padding: 0 1; color: #b5e9d9; text-style: bold; background: #2a2634; }
     #quick-next { height: auto; padding: 0 1; color: #e9f0f7; }
     #quick-note { height: auto; max-height: 2; color: #ffe0af; }
-    #quick-detail { height: 1fr; min-height: 3; border: round #34475d; }
+    #quick-detail { height: 1fr; min-height: 3; border: round #50475f; }
     #quick-actions { height: 3; }
     #quick-actions Button { width: 1fr; min-width: 8; padding: 0; }
     Screen.compact #quick-actions { height: 2; }
@@ -195,11 +195,11 @@ class QuickPanel(Vertical):
             reason = 'DID를 선택하세요' if self.report.get('targets') else 'DID 상태 조회 대기'
             action, stages = '', ''
             next_button = None if self.report.get('targets') else 'refresh'
-            tone = 'cyan' if self.busy else 'yellow'
+            tone = '#cbc2ef' if self.busy else '#f1d5a3'
         if self.launch_pending and target:
             reason = 'Chrome 요청 후 실행 결과 확인 대기'
             action = '새 실행의 창 배치와 사이트 로드가 확인될 때까지 기다리세요.'
-            tone = 'cyan'
+            tone = '#cbc2ef'
         heading = f'이번 부팅 · {self.selected}   {reason}' if target else reason
         self.query_one('#quick-reason', Static).update(Text(heading, style=tone))
         self.query_one('#quick-next', Static).update('다음 조치   '+action if action else '')
