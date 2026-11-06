@@ -35,6 +35,10 @@ SETTINGS = (
     ('org.gnome.software', 'download-updates', 'false'),
     ('org.gnome.software', 'download-updates-notify', 'false'),
 )
+WORKSPACE_SETTINGS = (
+    ('org.gnome.mutter', 'dynamic-workspaces', 'false'),
+    ('org.gnome.desktop.wm.preferences', 'num-workspaces', '1'),
+)
 
 
 def _result(id, state, expected=None, actual=None, action='', detail=''):
@@ -234,10 +238,14 @@ def _graphical_sessions(host, uid, *, greeters=None):
 
 def _user_call(config, host, paths, action):
     uid, _, home = _account(config, host)
-    runtime = host.run(['loginctl', 'show-user', str(uid), '--property=RuntimePath', '--value'])
-    path = runtime.stdout.strip()
-    has_runtime = runtime.returncode == 0 and path.startswith('/') and paths.at(path).is_dir()
-    if not has_runtime and action not in {'prepare', 'autostart-sync'}:
+    # GSettings reads the selected user's database without a live session bus.
+    # Configuration inspections must not depend on graphical/session readiness.
+    path, has_runtime = '', False
+    if action != 'workspace-settings':
+        runtime = host.run(['loginctl', 'show-user', str(uid), '--property=RuntimePath', '--value'])
+        path = runtime.stdout.strip()
+        has_runtime = runtime.returncode == 0 and path.startswith('/') and paths.at(path).is_dir()
+    if not has_runtime and action not in {'prepare', 'autostart-sync', 'workspace-settings'}:
         return {'exit_code': 2, 'state': 'pending', 'reason': '사용자 runtime이 없습니다.',
                 'next_action':'다음 GNOME 로그인 또는 유지보수 재부팅 후 화면 환경을 다시 확인하세요.'}
     environment = [f'HOME={home}', 'PATH=/usr/sbin:/usr/bin:/sbin:/bin', 'LANG=C.UTF-8']
@@ -308,6 +316,75 @@ def _extension_activation(host,*,apply=False):
         confirmed=_extension_activation(host)
         if confirmed['state']!='ok':return {'state':'pending','reason':'GNOME 확장 목록 저장을 재확인하지 못했습니다. 사용자 bus 연결 후 다시 설정하세요.'}
     return {'state':'ok','reason':'GNOME 확장 활성화가 등록되었습니다. 새 설치는 재로그인 후 로드됩니다.'}
+
+
+def _workspace_policy(config, host, *, apply=False, environment=None):
+    """Only the display user's two workspace keys; never manage other windows."""
+    if not config.display:
+        return {'state':'not_applicable','exit_code':0,'settings':{},'changed':False}
+
+    def read():
+        settings = {}
+        for schema, key, _ in WORKSPACE_SETTINGS:
+            value = host.run(['gsettings', 'get', schema, key])
+            if value.returncode == 0:
+                settings[schema + '.' + key] = value.stdout.strip()
+        return settings
+
+    settings = read()
+    response = {'settings':settings,'changed':False,
+                'next_action':'GNOME 로그인 후 간편 설정을 다시 실행하고 작업공간 상태를 확인하세요.'}
+    if len(settings) != len(WORKSPACE_SETTINGS):
+        return response | {'state':'unknown','exit_code':1,'reason':'DID 계정의 작업공간 설정을 조회하지 못했습니다.'}
+    changes = [(schema,key,expected) for schema,key,expected in WORKSPACE_SETTINGS
+               if settings[schema + '.' + key] != expected]
+    if not changes:
+        return response | {'state':'ok','exit_code':0,'reason':'DID 계정의 작업공간 하나가 설정되었습니다.','next_action':''}
+    if not apply:
+        return response | {'state':'change_required','exit_code':1,'reason':'DID 계정의 작업공간을 하나로 설정해야 합니다.',
+                           'next_action':'간편 설정을 실행해 DID 계정의 작업공간 설정을 적용하세요.'}
+    environment = os.environ if environment is None else environment
+    if not environment.get('DBUS_SESSION_BUS_ADDRESS'):
+        return response | {'state':'pending','exit_code':2,'reason':'DID 계정의 실제 사용자 bus가 없어 작업공간 설정을 보류했습니다.',
+                           'next_action':'다음 정상 GNOME 로그인에서 작업공간 설정을 다시 적용합니다. 이후 상태를 확인하세요.'}
+    # Preflight both keys before either write, so an external lock cannot cause
+    # a known partial policy change. Do not override or add dconf locks.
+    for schema, key, _ in WORKSPACE_SETTINGS:
+        writable = host.run(['gsettings', 'writable', schema, key])
+        if writable.returncode or writable.stdout.strip() not in {'true','false'}:
+            return response | {'state':'unknown','exit_code':1,'reason':'작업공간 설정의 쓰기 가능 여부를 확인하지 못했습니다.'}
+        if writable.stdout.strip() != 'true':
+            return response | {'state':'blocked','exit_code':1,'reason':'외부 정책이 DID 계정의 작업공간 설정 변경을 잠갔습니다.',
+                               'next_action':'관리자가 기존 작업공간 정책을 확인한 뒤 간편 설정을 다시 실행하세요.'}
+    failed = False
+    for schema, key, expected in changes:
+        changed = host.run(['gsettings', 'set', schema, key, expected])
+        if changed.returncode:
+            failed = True
+            break
+        response['changed'] = True
+    response['settings'] = settings = read()
+    if failed:
+        return response | {'state':'error','exit_code':1,'reason':'DID 계정의 작업공간 설정 저장을 완료하지 못했습니다.'}
+    if len(settings) != len(WORKSPACE_SETTINGS):
+        return response | {'state':'unknown','exit_code':1,'reason':'저장 후 작업공간 설정을 재조회하지 못했습니다.'}
+    if any(settings[schema + '.' + key] != expected for schema,key,expected in WORKSPACE_SETTINGS):
+        return response | {'state':'pending','exit_code':2,'reason':'저장 후 작업공간 하나의 설정을 확인하지 못했습니다.'}
+    return response | {'state':'ok','exit_code':0,'reason':'DID 계정의 작업공간 하나가 설정되었습니다.','next_action':''}
+
+
+def _workspace_checks(value):
+    settings = value.get('settings') if isinstance(value.get('settings'), dict) else {}
+    results = []
+    for schema, key, expected in WORKSPACE_SETTINGS:
+        actual = settings.get(schema + '.' + key)
+        state = 'unknown' if actual is None else 'ok' if actual == expected else 'change_required'
+        if actual is None and value.get('state') == 'pending':
+            state = 'pending'
+        results.append(_result('display.workspace.' + key, state, expected, actual,
+                               value.get('next_action') or ('간편 설정을 실행해 DID 계정의 작업공간 설정을 적용하세요.' if state != 'ok' else ''),
+                               '지정된 DID 계정의 설정값 검사이며 현재 창의 작업공간 이동 완료를 보증하지 않습니다.'))
+    return results
 
 def _gdm_diagnostics(host):
     """Summarize current-boot evidence without exporting raw authentication logs."""
@@ -420,6 +497,12 @@ def inspect_display_parts(config: Config, host=None, paths=None, *, include_runt
         if schedule:results.append(schedule)
     except (OSError,ValueError,RuntimeError):
         results.append(_result('frontend.timer','unknown','배포 감시 timer 조회','조회 실패'))
+    if config.display:
+        try:
+            workspace = _user_call(config, host, paths, 'workspace-settings')
+        except (OSError, ValueError, RuntimeError):
+            workspace = {'state':'unknown','reason':'DID 계정의 작업공간 설정 조회 실패'}
+        results.extend(_workspace_checks(workspace))
     if not include_runtime:
         return results, []
     configuration, results = results, []
@@ -650,13 +733,19 @@ def apply_display(config: Config, host=None, paths=None):
             if marker.is_file() and marker.stat().st_uid!=uid:
                 _backup_file(marker,paths.backups)
         prepared = _user_call(config, host, paths, 'prepare')
+        workspace = prepared.get('workspace_policy')
+        issues = []
+        if isinstance(workspace, dict) and workspace.get('state') not in {'ok','not_applicable'}:
+            issues.append(_result('display.workspace.apply', workspace.get('state','unknown'),
+                                  'DID 계정의 작업공간 하나', workspace.get('reason','작업공간 설정 확인 필요'),
+                                  workspace.get('next_action','GNOME 로그인 후 간편 설정을 다시 실행하세요.')))
         if prepared.get('exit_code', 1):
-            return [_result('display.prepare', prepared.get('state','pending'), '사용자 자동 시작 준비', prepared.get('reason','사용자 runtime 필요'), 'GNOME 로그인 후 재실행')]
+            return issues + [_result('display.prepare', prepared.get('state','pending'), '사용자 자동 시작 준비', prepared.get('reason','사용자 runtime 필요'), 'GNOME 로그인 후 재실행')]
         schedule=_frontend_schedule(config,host,paths,apply=True)
-        if schedule and schedule.state not in {'ok','not_applicable'}:return [schedule]
+        if schedule and schedule.state not in {'ok','not_applicable'}:return issues + [schedule]
         # Setup only provisions registration. Boot autostart and explicit screen
         # management own the Chrome lifecycle, independently of installation.
-        return inspect_display(config, host, paths, configuration_only=True)
+        return issues + inspect_display(config, host, paths, configuration_only=True)
     except (OSError, ValueError, RuntimeError) as exc:
         return [_result('display.apply', 'blocked', '표시 구성 준비', str(exc), '로그와 경로 확인 후 재실행')]
 
@@ -1027,10 +1116,10 @@ def _stop_postcondition(config,home,host,paths,evidence):
 def user_action(action, *, target='default', config=None, home=None, host=None, paths=None):
     host, paths = host or Host(), paths or Paths()
     if config is None:
-        config, home = _load_user_config(paths,None if action in {'prepare','autostart-sync','settings','outputs','identify-outputs','extension-status','environment'} else target)
+        config, home = _load_user_config(paths,None if action in {'prepare','autostart-sync','settings','workspace-settings','outputs','identify-outputs','extension-status','environment'} else target)
     elif os.getuid() == 0:
         raise PermissionError('Chrome은 일반 사용자로 실행하세요.')
-    if action not in {'prepare','autostart-sync','settings','outputs','identify-outputs','extension-status','environment'}:
+    if action not in {'prepare','autostart-sync','settings','workspace-settings','outputs','identify-outputs','extension-status','environment'}:
         config=_context(config,target if not hasattr(config,'_target_id') else config.target_id)
     unit=unit_name(target if action=='environment' else config.target_id)
     home = Path(home)
@@ -1038,12 +1127,20 @@ def user_action(action, *, target='default', config=None, home=None, host=None, 
         return {'exit_code': 0, 'state': 'ok', 'changed': _prepare_autostart_file(config, home, paths)}
     if action == 'prepare':
         changed = _prepare_user_files(config, home, paths)
+        try:
+            workspace = _workspace_policy(config, host, apply=True)
+        except (OSError, ValueError, RuntimeError):
+            workspace = {'state':'unknown','exit_code':1,'reason':'DID 계정의 작업공간 설정을 완료하지 못했습니다.',
+                         'next_action':'GNOME 로그인 후 간편 설정을 다시 실행하고 작업공간 상태를 확인하세요.'}
         extension=_extension_activation(host,apply=True) if config.display else None
-        if extension and extension['state']!='ok':return extension | {'exit_code':2 if extension['state']=='pending' else 1}
+        if extension and extension['state']!='ok':
+            return extension | {'exit_code':2 if extension['state']=='pending' else 1,'workspace_policy':workspace}
         result = host.run(['systemctl','--user','daemon-reload'])
-        return {'exit_code':0, 'state':'ok', 'changed':changed,
+        return {'exit_code':0, 'state':'ok', 'changed':changed,'workspace_policy':workspace,
                 'reason':result.stderr.strip() if result.returncode else '',
                 'reload_pending':result.returncode != 0}
+    if action == 'workspace-settings':
+        return _workspace_policy(config, host)
     if action == 'settings':
         settings = {}
         for schema,key,_ in SETTINGS:
@@ -1321,6 +1418,15 @@ def session_start(*, config=None, home=None, host=None, paths=None, environment=
         log('environment','imported')
     else:
         log('environment','manager_retained')
+    try:
+        workspace_environment = host.environment if isinstance(host, _SessionHost) else environment
+        workspace = _workspace_policy(config, host, apply=True, environment=workspace_environment)
+        outcome = ('applied' if workspace.get('changed') else 'ready') if workspace['state']=='ok' else workspace['state']
+        log('workspace', outcome, workspace['exit_code'])
+    except (OSError, ValueError, RuntimeError):
+        # A workspace policy failure must not stop or replace existing Chrome.
+        # The read-only workspace checks retain its unresolved settings.
+        log('workspace', 'unknown', 1)
     if initializing:
         log('configuration', 'monitor_initialization_pending')
         return 78

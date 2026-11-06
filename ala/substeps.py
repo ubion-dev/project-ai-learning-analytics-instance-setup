@@ -85,6 +85,7 @@ STAGE_TASKS = {
         task('autologin', 'GDM 자동 로그인·그래픽 부팅', 'display.gdm', 'display.gdm_enabled', 'display.autologin', 'display.default_target', 'display.configuration'),
         task('profile', '표시 프로필·첫 실행 안내 준비', 'display.initial_setup', 'chrome.account', 'chrome.option.user-data-dir'),
         task('service', 'Chrome 자동 시작 등록', 'chrome.unit', 'chrome.autostart'),
+        task('workspace', 'DID 계정의 작업 공간 1개 유지', 'display.workspace.*'),
         task('session', '로그인·Chrome 실행 상태 확인', 'display.session*', 'display.login_screen', 'display.gdm_runtime', 'display.gdm_diagnostics', 'chrome.runtime*', 'chrome.url', 'chrome.environment', 'chrome.legacy', 'chrome.process'),
         task('policy', 'Chrome 실행 옵션·실제 화면 정책 확인', 'display.live.*', 'chrome.option.*', '!chrome.option.user-data-dir', 'chrome.forbidden'),
         task('health', '표시 사이트 감시·자동 복구', 'chrome.health*'),

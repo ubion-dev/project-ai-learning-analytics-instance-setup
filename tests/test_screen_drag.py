@@ -3,7 +3,8 @@ import asyncio
 from copy import deepcopy
 
 import pytest
-from textual.widgets import Button
+from rich.cells import cell_len
+from textual.widgets import Button, Static
 
 from ala.screen_map import ScreenMap
 from ala.screens_tui import MoveConfirmation, ScreenPanel
@@ -234,4 +235,89 @@ def test_apply_preserves_saved_snapshot_when_background_refresh_sees_new_configu
             assert requests == [{'target': 'default', 'expected_config': saved_snapshot}]
             assert app._config['url'] == 'https://example.com/unreviewed'
             assert requests[0]['expected_config'] != service.config
+    asyncio.run(scenario())
+
+
+def mixed_resolution(service):
+    service.screens['logical_outputs'][1].update(
+        width=2560, height=1440, scale=1.25, x=1920, y=-180)
+
+
+@pytest.mark.parametrize('size', [(80, 24), (120, 36)])
+def test_mixed_resolution_unselected_did_can_review_swap_without_mutating(size):
+    async def scenario():
+        service = Service()
+        mixed_resolution(service)
+        app = SimpleApp(service=service, initial_section='screens')
+        async with app.run_test(size=size) as pilot:
+            await pilot.pause()
+            panel = await select_target(app, pilot, 'default')
+            await drag(pilot, app.query_one('#screens-map', ScreenMap), 'DP-1', 'HDMI-1')
+            assert isinstance(app.screen, MoveConfirmation)
+            assert app.screen.target['id'] == 'display-2'
+            assert app.screen.other['id'] == 'default'
+            assert panel.selected == 'default'
+            assert not any(action in MUTATIONS for action, _ in service.calls)
+            await pilot.press('escape')
+            await pilot.pause()
+            assert len(app.screen_stack) == 1
+            assert not any(action in MUTATIONS for action, _ in service.calls)
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize('size', [(80, 24), (120, 36)])
+@pytest.mark.parametrize('after_confirmation', [False, True])
+def test_unselected_did_move_rejection_selects_source_and_exposes_pending_reason(size, after_confirmation):
+    async def scenario():
+        service = Service()
+        mixed_resolution(service)
+        if not after_confirmation:
+            service.screens['targets'][0]['settings'] = {'pending': True}
+        app = SimpleApp(service=service, initial_section='screens')
+        async with app.run_test(size=size) as pilot:
+            await pilot.pause()
+            panel = await select_target(app, pilot, 'default')
+            panel.messages['default'] = '기존 DID 로그 결과'
+            panel.session_notice = {'state': 'ok', 'reason': '이전 모니터 식별 결과'}
+            panel.render_report()
+            await drag(pilot, app.query_one('#screens-map', ScreenMap), 'DP-1', 'HDMI-1')
+            if after_confirmation:
+                assert isinstance(app.screen, MoveConfirmation)
+                service.screens['targets'][0]['settings'] = {'pending': True}
+                await pilot.press('tab', 'enter')
+                await pilot.pause()
+            assert len(app.screen_stack) == 1
+            assert panel.selected == 'display-2'
+            assert panel.session_notice is None
+            assert panel.messages['default'] == '기존 DID 로그 결과'
+            reason = '다른 DID의 설정 적용을 마친 뒤 모니터 배정을 다시 확인하세요.'
+            assert panel.messages['display-2'] == 'DID 이동 · 확인 필요 · '+reason
+            assert str(panel.query_one('#screens-result', Static).render()).startswith('display-2 · DID 이동 · 확인 필요')
+            next_line = panel.query_one('#screens-next', Static)
+            assert str(next_line.render()) == '다음 · '+reason
+            assert cell_len('다음 · '+reason) <= next_line.content_size.width
+            assert not any(action in MUTATIONS for action, _ in service.calls)
+    asyncio.run(scenario())
+
+
+def test_move_rejection_is_not_hidden_by_existing_target_work_tracking():
+    async def scenario():
+        service = Service()
+        source = service.screens['targets'][1]
+        source['settings'] = {'state': 'running', 'operation_id': 'synthetic-apply'}
+        app = SimpleApp(service=service, initial_section='screens')
+        async with app.run_test(size=(80, 24)) as pilot:
+            await pilot.pause()
+            panel = await select_target(app, pilot, 'default')
+            tracking = ('apply', 'settings', 'operation_id', 'synthetic-apply')
+            panel.following['display-2'] = tracking
+            await drag(pilot, app.query_one('#screens-map', ScreenMap), 'DP-1', 'HDMI-1')
+            assert panel.selected == 'display-2'
+            reason = '이 DID의 기존 설정 적용을 마친 뒤 이동하세요.'
+            assert panel.messages['display-2'] == 'DID 이동 · 확인 필요 · '+reason
+            assert str(panel.query_one('#screens-next', Static).render()) == '다음 · '+reason
+            await panel.refresh_state(wait=True)
+            assert panel.messages['display-2'] == 'DID 이동 · 확인 필요 · '+reason
+            assert panel.following['display-2'] == tracking
+            assert not any(action in MUTATIONS for action, _ in service.calls)
     asyncio.run(scenario())

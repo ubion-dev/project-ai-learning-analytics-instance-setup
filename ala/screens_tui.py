@@ -6,6 +6,7 @@ from copy import deepcopy
 from urllib.parse import urlsplit, urlunsplit
 
 from rich.text import Text
+from rich.cells import cell_len
 from textual import events, on
 from textual.app import ComposeResult
 from textual.containers import Horizontal, Vertical, VerticalScroll
@@ -14,7 +15,7 @@ from textual.widgets import Button, Collapsible, Input, Label, OptionList, Selec
 from textual.widgets.option_list import Option
 
 from .chrome_tui import safe_logs, safe_text
-from .screen_map import ScreenMap, topology_text
+from .screen_map import ScreenMap, output_mode_text, topology_text
 from .monitors import resolve_output
 
 
@@ -385,6 +386,8 @@ class ScreenPanel(Vertical):
         self.reading = False
         self._read_lock = asyncio.Lock()
         self.mutating = False
+        self.identifying = False
+        self.session_notice = None
         self.messages = {}
         self.following = {}
         self.swap_following = {}
@@ -419,10 +422,13 @@ class ScreenPanel(Vertical):
         return self.is_mounted and self.owner.is_running and self.owner.query_one('#pages').current == 'screens'
 
     def activate(self):
+        if not self.identifying:
+            self.session_notice = None
+            self.render_report()
         self.run_worker(self.refresh_state(), group='screens-read', exclusive=True, exit_on_error=False)
 
     async def poll(self):
-        if self.active() and not self.reading and not self.mutating:
+        if self.active() and not self.reading and not self.mutating and not self.identifying:
             await self.refresh_state()
 
     async def refresh_state(self, *, wait=False):
@@ -487,7 +493,7 @@ class ScreenPanel(Vertical):
             if self.loaded else '출력·창 조회 확인 필요 · '+str(self.report.get('reason', '조회 중'))))
         map_view = self.query_one('#screens-map', ScreenMap)
         map_view.update_report(self.report, self.selected, self.owner._config,
-                               enabled=not self.mutating and not self.owner._active_job)
+                               enabled=not self.mutating and not self.identifying and not self.owner._active_job)
         map_view.tooltip = '모니터를 클릭하거나 Enter로 설정합니다. 드래그하면 이동·교환을 검토합니다.'
         assigned = {target['id'] for output in self.report.get('logical_outputs') or []
                     for target in self.targets_on_output(output['id'])}
@@ -522,7 +528,7 @@ class ScreenPanel(Vertical):
     def action_state(self, key, value):
         """The same target-specific guard serves every entry point, including modals."""
         help_text = ACTIONS.get(key, ('', '작업 결과를 확인하세요.'))[1]
-        locked = (self.mutating or bool(self.owner._active_job) or self.owner._chrome_mutating
+        locked = (self.mutating or self.identifying or bool(self.owner._active_job) or self.owner._chrome_mutating
                   or (self.owner._update_status or {}).get('state') in {'queued', 'running'})
         if locked:
             return False, '다른 작업이 끝나면 사용할 수 있습니다.'
@@ -596,6 +602,8 @@ class ScreenPanel(Vertical):
         value = self.find_target(target_id)
         settings = (value or {}).get('settings') or {}
         message = self.messages.get(target_id, '')
+        move_rejection = 'DID 이동 · 확인 필요 · '
+        rejected_move = message if message.startswith(move_rejection) else None
         follow = self.following.get(target_id)
         launch = self.launches.get(target_id)
         swap = (value or {}).get('swap') or {}
@@ -631,19 +639,53 @@ class ScreenPanel(Vertical):
                 self.launches.pop(target_id, None)
         elif not message and settings.get('state') in RESULT_LABELS:
             message = self.result_message('설정 적용', settings)
+        if rejected_move:
+            # Keep tracking work in the background without hiding why the
+            # operator's latest move request was rejected.
+            message = rejected_move
+            self.messages[target_id] = message
         headline, next_action, primary, tone = self.priority(value)
         parts = (target_id, headline, message.split('\n', 1)[0])
-        if summary:
+        if message.startswith(move_rejection):
+            parts = (target_id, 'DID 이동 · 확인 필요')
+            next_action = message[len(move_rejection):].split('\n', 1)[0]
+            tone = '#f1d5a3'
+        if summary and self.session_notice is not None:
+            self.render_session_notice()
+        elif summary:
             self.query_one('#screens-result', Static).update(Text(' · '.join(filter(None, parts)), style=tone))
+            self.query_one('#screens-result', Static).tooltip = None
             self.query_one('#screens-next', Static).update('다음 · '+next_action)
+            self.query_one('#screens-next', Static).tooltip = None
         lines = []
         if value:
             runtime = value.get('runtime') or {}
+            def assignment(prefix=''):
+                output_key = prefix+'output'
+                output = (safe_text(value[output_key] or ('자동' if target_id == 'default' else '미배정'))
+                          if output_key in value else '확인 불가')
+                layout = {'fullscreen': '전체화면', 'left': '왼쪽 절반', 'right': '오른쪽 절반'}.get(
+                    value.get(prefix+'layout'), '확인 불가')
+                return output+' · 배치 '+layout
             lines += ['저장 주소 · '+site_label(value.get('url')),
                       '적용 주소 · '+site_label(value.get('applied_url', value.get('url'))),
+                      '저장 출력 · '+assignment(),
+                      '적용 출력 · '+assignment('applied_'),
+                      '적용 출력·배치는 선택된 설정 기준입니다. 실제 창 위치는 창 배치 관측으로 확인하세요.',
                       '설정 · '+('적용 대기' if settings.get('pending') else '적용 확인 필요' if settings.get('state') == 'unknown' else '반영됨'),
                       '실제 사이트 · '+(site_label(value['actual_url']) if value.get('actual_url') else '적용 주소의 문서 확인' if site_confirmed(value) else '확인 대기'),
                       '자동 시작 · '+('켜짐' if value.get('autostart') else '꺼짐')]
+            resolved = resolve_output(
+                {'state': self.report.get('output_state'), 'logical_outputs': self.report.get('logical_outputs') or []},
+                value.get('output'), auto=target_id == 'default')
+            if resolved.get('state') == 'ok':
+                logical = resolved['output']
+                geometry = (f"{logical['x']},{logical['y']} {logical['width']}×{logical['height']}"
+                            if all(type(logical.get(key)) is int for key in ('x', 'y', 'width', 'height'))
+                            and logical['width'] > 0 and logical['height'] > 0 else '확인 불가')
+                lines.append('모니터 · '+output_mode_text(self.report, logical)+' · 논리 영역 '+geometry)
+            else:
+                lines.append('모니터 · 저장 출력의 연결 정보 확인 불가')
             if message:
                 lines.append(message)
             swap = value.get('swap') or {}
@@ -694,8 +736,30 @@ class ScreenPanel(Vertical):
     def details(self, target_id):
         return self.render_detail(target_id, summary=False)
 
+    def render_session_notice(self):
+        """Session-wide identification never becomes an individual DID result."""
+        notice = self.session_notice
+        state = notice.get('state')
+        success = state in {'ok', 'completed', 'ready', 'kept'}
+        running = state in {'queued', 'running'}
+        action = safe_text(notice.get('next_action') or (
+            '실제 모니터에서 표시 번호를 확인하세요.' if success else
+            '모니터 식별 결과를 기다리세요.' if running else
+            '다시 조회한 뒤 모니터 식별을 다시 시도하세요.'))
+        full_action = action
+        width = max(1, self.query_one('#screens-next', Static).content_size.width - cell_len('다음 · '))
+        if cell_len(action) > width and '간편 설정' in action and '재로그인' in action:
+            action = '간편 설정으로 확장 반영 후 GNOME 재로그인하세요.'
+        tone = '#b5e9d9' if success else '#cbc2ef' if running else '#f3b8c5' if state in {'failed', 'error'} else '#f1d5a3'
+        result = self.query_one('#screens-result', Static)
+        result.update(Text(self.result_message('모니터 식별', notice).split('\n', 1)[0], style=tone))
+        result.tooltip = safe_text(notice.get('reason') or '')
+        next_line = self.query_one('#screens-next', Static)
+        next_line.update('다음 · '+action)
+        next_line.tooltip = full_action
+
     def move_allowed(self, target, output):
-        if (not target or self.mutating or self.owner._active_job or self.owner._chrome_mutating
+        if (not target or self.mutating or self.identifying or self.owner._active_job or self.owner._chrome_mutating
                 or (self.owner._update_status or {}).get('state') in {'queued', 'running'}):
             return '다른 작업이 끝난 뒤 이동하세요.'
         if target.get('layout') != 'fullscreen':
@@ -753,6 +817,8 @@ class ScreenPanel(Vertical):
         if topology != self.report.get('logical_outputs', []):
             reason = '모니터 연결이 변경됐습니다. 다시 조회하고 이동하세요.'
         if reason:
+            self.selected = event.target_id
+            self.session_notice = None
             self.messages[event.target_id] = 'DID 이동 · 확인 필요 · ' + reason
             self.render_report()
             return
@@ -780,9 +846,12 @@ class ScreenPanel(Vertical):
                 any((current_other or {}).get(key) != other.get(key) for key in keys)):
             reason = '대상 모니터의 DID가 변경됐습니다. 다시 확인하세요.'
         if reason:
+            self.selected = original['id']
+            self.session_notice = None
             self.messages[original['id']] = 'DID 이동 · 확인 필요 · ' + reason
             self.render_report()
             return
+        self.session_notice = None
         if other is not None:
             self.mutating = self.owner._chrome_mutating = True
             self.owner.update_button()
@@ -854,23 +923,37 @@ class ScreenPanel(Vertical):
         target = target_id or self.selected
         if not self.action_state(action, self.find_target(target))[0]:
             return
+        if action == 'identify':
+            self.identifying = True
+            self.session_notice = {'state': 'running', 'reason': '모니터 식별을 요청하고 있습니다.'}
+            self.render_report()
+            try:
+                result = await self.owner.service.call('screens-identify')
+                if not isinstance(result, dict):
+                    raise ValueError('모니터 식별 응답을 확인하지 못했습니다.')
+                self.session_notice = deepcopy(result)
+            except Exception as exc:
+                self.session_notice = {'state': 'unknown', 'reason': safe_text(str(exc)),
+                                       'next_action': '다시 조회한 뒤 모니터 식별을 다시 시도하세요.'}
+            finally:
+                self.identifying = False
+                self.render_report()
+            await self.refresh_state(wait=True)
+            return
+        self.session_notice = None
         self.mutating = True
         self.render_report()
         try:
-            if action == 'identify':
-                result = await self.owner.service.call('screens-identify')
-                label = '모니터 식별'
-            else:
-                operation = (self.find_target(target) or {}).get('swap') or {}
-                if not operation.get('operation_id'):
-                    return
-                result = await self.owner.service.call('screens-swap-retry', {'operation_id': operation['operation_id']})
-                label = '두 화면 교환 복구'
-                for participant in result.get('targets') or [target]:
-                    self.following.pop(participant, None)
-                    self.launches.pop(participant, None)
-                    if result.get('operation_id'):
-                        self.swap_following[participant] = result['operation_id']
+            operation = (self.find_target(target) or {}).get('swap') or {}
+            if not operation.get('operation_id'):
+                return
+            result = await self.owner.service.call('screens-swap-retry', {'operation_id': operation['operation_id']})
+            label = '두 화면 교환 복구'
+            for participant in result.get('targets') or [target]:
+                self.following.pop(participant, None)
+                self.launches.pop(participant, None)
+                if result.get('operation_id'):
+                    self.swap_following[participant] = result['operation_id']
             self.messages[target] = self.result_message(label, result)
         except Exception as exc:
             self.messages[target] = '요청 확인 필요 · ' + safe_text(str(exc))
@@ -902,8 +985,9 @@ class ScreenPanel(Vertical):
         self.owner.push_screen(self.editor, saved)
 
     async def save_target(self, value, expected):
-        if self.mutating:
+        if self.mutating or self.identifying:
             return None
+        self.session_notice = None
         saved = None
         target = value['id']
         shown_target = target if self.target() and target == self.selected else self.selected
@@ -950,6 +1034,7 @@ class ScreenPanel(Vertical):
         current = next((t for t in self.report.get('targets', []) if t['id'] == target), None)
         if action not in {'start', 'stop', 'restart', 'reload', 'logs', 'retry', 'apply'} or not self.action_state(action, current)[0]:
             return
+        self.session_notice = None
         self.mutating = self.owner._chrome_mutating = True
         previous_pid = (current.get('service') or {}).get('MainPID')
         label = ACTIONS[action][0]

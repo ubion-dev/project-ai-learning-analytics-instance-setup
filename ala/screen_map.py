@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 from dataclasses import dataclass
+import math
 
 from rich.text import Text
 from rich.cells import cell_len
@@ -66,6 +67,49 @@ def _fit(value, width):
     return text.plain
 
 
+def output_mode_text(report, logical_output):
+    """Describe an observed physical mode and scale, never infer either.
+
+    A single unambiguous connector is required for a physical resolution.
+    Mirrored groups have no representative physical mode.  The explicitly
+    labelled logical fallback is the compositor area, not panel pixels.
+    """
+    logical = logical_output if isinstance(logical_output, dict) else {}
+    scale = logical.get('scale')
+    percentage = None
+    if type(scale) in (int, float):
+        try:
+            if scale > 0 and math.isfinite(scale) and math.isfinite(scale * 100):
+                percentage = f'{scale * 100:g}%'
+        except (OverflowError, ValueError):
+            pass
+    scale_text = percentage or '배율 미상'
+
+    connectors = logical.get('connectors')
+    valid = (isinstance(connectors, (list, tuple))
+             and all(isinstance(value, str) and value for value in connectors))
+    if logical.get('mirrored') is True or valid and len(set(connectors)) > 1:
+        return '복제 · ' + scale_text
+
+    def resolution(value):
+        if (isinstance(value, dict) and type(value.get('width')) is int
+                and type(value.get('height')) is int and value['width'] > 0 and value['height'] > 0):
+            return f'{value["width"]}×{value["height"]}'
+        return None
+
+    outputs = report.get('outputs', []) if isinstance(report, dict) else []
+    if valid and len(connectors) == 1 and isinstance(outputs, list):
+        matches = [output for output in outputs if isinstance(output, dict)
+                   and output.get('connector') == connectors[0]]
+        physical = resolution(matches[0]) if len(matches) == 1 else None
+        if physical:
+            return physical + ' · ' + scale_text
+    logical_size = resolution(logical.get('geometry', logical))
+    if logical_size:
+        return '논리 ' + logical_size + ' · ' + scale_text
+    return ('해상도 미상 · ' + percentage) if percentage else '해상도·배율 확인 필요'
+
+
 def _card_status(report, output, targets):
     if report.get('output_state') != 'ok' or output.get('confirmed') is not True:
         return '출력 확인 필요'
@@ -120,9 +164,9 @@ def _topology(report, width, height=7, *, selected=None):
         for column, output in enumerate(group):
             geometry = output.get('geometry', output)
             name = f"#{output['display_number']} {output['id']}"
-            resolution = (f"{geometry['width']}×{geometry['height']}"
-                          if type(geometry.get('width')) is int and type(geometry.get('height')) is int
-                          else '해상도 확인 필요')
+            resolution = output_mode_text(report, output)
+            if cell_len(resolution) > 22 and resolution.endswith('배율 미상'):
+                resolution = resolution.removesuffix('배율 미상') + '배율?'
             targets = _targets_for_output(report, output['id'])
             labels = [('> ' if target.get('id') == selected else '') + str(target.get('id', '')) for target in targets]
             values = (name, resolution, ', '.join(labels) or '배정된 DID 없음', _card_status(report, output, targets))
@@ -146,7 +190,7 @@ def topology_text(report, width=100, height=7):
         for output in logical:
             geometry = output.get('geometry', output)
             if all(type(geometry.get(key)) is int for key in ('x', 'y', 'width', 'height')):
-                lines.append(f"{safe_text(output.get('id') or '출력')} · {geometry['width']}×{geometry['height']} · ({geometry['x']}, {geometry['y']})")
+                lines.append(f"{safe_text(output.get('id') or '출력')} · {output_mode_text(report, output)} · ({geometry['x']}, {geometry['y']})")
         return '\n'.join(lines) or '출력은 감지했지만 배치 좌표는 확인하지 못했습니다.'
     return _topology(report, width, height)[0]
 

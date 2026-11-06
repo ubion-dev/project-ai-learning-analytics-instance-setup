@@ -8,7 +8,7 @@ from textual.app import App, ComposeResult
 from textual.containers import VerticalScroll
 from textual.widgets import Button
 
-from ala.screen_map import ScreenMap
+from ala.screen_map import ScreenMap, output_mode_text
 
 
 def report():
@@ -26,6 +26,98 @@ def report():
              'health': {'checked_at': 'before'}},
         ],
     }
+
+
+def scaled_output():
+    logical = {'id': 'DP-1', 'connectors': ['DP-1'], 'confirmed': True,
+               'x': -2560, 'y': 0, 'width': 2560, 'height': 1440, 'scale': 1.5}
+    observation = {'output_state': 'ok', 'logical_outputs': [logical], 'outputs': [
+        {'id': 'DP-1', 'connector': 'DP-1', 'width': 3840, 'height': 2160, 'active': True},
+    ]}
+    return observation, logical
+
+
+def test_mode_text_uses_physical_current_mode_and_observed_scale_without_mutation():
+    observation, logical = scaled_output()
+    before = deepcopy(observation)
+    assert output_mode_text(observation, logical) == '3840×2160 · 150%'
+    assert observation == before
+
+
+@pytest.mark.parametrize('scale,expected', [(1, '100%'), (1.25, '125%'), (1.5, '150%'), (2.0, '200%')])
+def test_mode_text_formats_positive_observed_scaling(scale, expected):
+    observation, logical = scaled_output()
+    logical['scale'] = scale
+    assert output_mode_text(observation, logical) == '3840×2160 · ' + expected
+
+
+@pytest.mark.parametrize('scale', [None, True, False, 0, -1, -1.25, float('nan'), float('inf'), -float('inf'), '1.5', 1e308])
+def test_unknown_scale_is_never_inferred_from_physical_and_logical_size(scale):
+    observation, logical = scaled_output()
+    logical['scale'] = scale
+    assert output_mode_text(observation, logical) == '3840×2160 · 배율 미상'
+
+
+@pytest.mark.parametrize('condition', ['missing', 'different', 'duplicate', 'duplicate-identical', 'logical-duplicate'])
+def test_ambiguous_connector_mapping_labels_the_logical_fallback(condition):
+    observation, logical = scaled_output()
+    if condition == 'missing':
+        observation['outputs'] = []
+    elif condition == 'different':
+        observation['outputs'][0]['connector'] = 'HDMI-1'
+    elif condition in {'duplicate', 'duplicate-identical'}:
+        duplicate = deepcopy(observation['outputs'][0])
+        if condition == 'duplicate':
+            duplicate.update(width=1920, height=1080)
+        observation['outputs'].append(duplicate)
+    else:
+        logical['connectors'] = ['DP-1', 'DP-1']
+    assert output_mode_text(observation, logical) == '논리 2560×1440 · 150%'
+
+
+@pytest.mark.parametrize('dimensions', [(None, None), (0, 2160), (-3840, 2160), (3840, True), ('3840', 2160)])
+def test_invalid_physical_mode_does_not_become_a_pixel_resolution(dimensions):
+    observation, logical = scaled_output()
+    observation['outputs'][0].update(width=dimensions[0], height=dimensions[1])
+    assert output_mode_text(observation, logical) == '논리 2560×1440 · 150%'
+
+
+@pytest.mark.parametrize('same_mode', [False, True])
+def test_mirrored_outputs_never_choose_a_representative_physical_mode(same_mode):
+    observation, logical = scaled_output()
+    logical.update(id='DP-1+HDMI-1', connectors=['DP-1', 'HDMI-1'], mirrored=True)
+    observation['outputs'].append({'connector': 'HDMI-1', 'width': 3840 if same_mode else 1920,
+                                   'height': 2160 if same_mode else 1080})
+    assert output_mode_text(observation, logical) == '복제 · 150%'
+
+
+def test_missing_resolution_and_scale_are_explicitly_unknown():
+    observation, logical = scaled_output()
+    observation['outputs'] = []
+    logical.update(width=None, height=None)
+    assert output_mode_text(observation, logical) == '해상도 미상 · 150%'
+    logical['scale'] = None
+    assert output_mode_text(observation, logical) == '해상도·배율 확인 필요'
+
+
+@pytest.mark.parametrize('size', [(80, 24), (120, 36)])
+def test_scaled_physical_mode_keeps_fixed_cards_and_gesture_regions(size):
+    async def scenario():
+        observation = report()
+        observation['logical_outputs'][1].update(x=-2560, width=2560, height=1440, scale=1.5)
+        observation['outputs'] = [{'connector': 'DP-1', 'width': 3840, 'height': 2160}]
+        before = deepcopy(observation)
+        app = MapApp(observation)
+        async with app.run_test(size=size) as pilot:
+            await pilot.pause()
+            view = app.query_one(ScreenMap)
+            assert '3840×2160 · 150%' in str(view.render())
+            assert all((region.width, region.height) == (26, 7) for region in view.output_regions.values())
+            await pilot.click(offset=point(view, 'side'))
+            await pilot.pause()
+            assert app.activations == ['side'] and not app.moves
+            assert observation == before
+    asyncio.run(scenario())
 
 
 class MapApp(App):

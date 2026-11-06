@@ -97,10 +97,24 @@ function windows(request,uid,browserTicks) {
         catch (_) { return false; }
     });
 }
+function windowRelationships(window) {
+    const parent=window.get_transient_for();
+    let children=false;
+    window.foreach_transient(() => {children=true; return false;});
+    return {client_type:window.get_client_type(),transient_for:parent ? parent.get_stable_sequence() : null,
+        attached_dialog:window.is_attached_dialog(),attached_children:window.has_attached_dialogs(),transient_children:children};
+}
+function linkedWindow(relationships) {
+    return relationships.transient_for !== null || relationships.attached_dialog ||
+        relationships.attached_children || relationships.transient_children;
+}
 function windowData(window) {
     const rect = window.get_frame_rect();
+    const workspace=window.get_workspace(),active=global.workspace_manager.get_active_workspace();
     return {id:window.get_stable_sequence(),monitor:window.get_monitor(),
-        rect:{x:rect.x,y:rect.y,width:rect.width,height:rect.height},fullscreen:window.is_fullscreen()};
+        rect:{x:rect.x,y:rect.y,width:rect.width,height:rect.height},fullscreen:window.is_fullscreen(),
+        workspace_index:workspace ? workspace.index() : null,on_active_workspace:window.located_on_workspace(active),
+        ...windowRelationships(window)};
 }
 function unmaximize(window) {
     // Mutter 49 unmaximizes both directions without a flags argument.
@@ -109,14 +123,42 @@ function unmaximize(window) {
     else
         window.unmaximize();
 }
+function sameRect(left,right) {
+    return ['x','y','width','height'].every(k => Math.abs(left[k]-right[k]) <= 2);
+}
+function layoutRect(rect,layout) {
+    const result={...rect};
+    if (layout === 'left') result.width=Math.floor(rect.width/2);
+    if (layout === 'right') {
+        result.x+=Math.floor(rect.width/2);
+        result.width-=Math.floor(rect.width/2);
+    }
+    return result;
+}
 export default class AlaDisplay extends Extension {
     enable() {
         this._uid = new Gio.Credentials().get_unix_user();
+        this._placements = new Map();
+        // These public signals exist in both supported Mutter versions. Do not
+        // fight a person's interactive drag with the periodic placement check.
+        this._grabBeginSignal = global.display?.connect('grab-op-begin', (_display,window) => {
+            this._grabbedWindow = window;
+            this._placements.get(window?.get_stable_sequence())?.cancel();
+        });
+        this._grabEndSignal = global.display?.connect('grab-op-end', (_display,window) => {
+            if (this._grabbedWindow === window) this._grabbedWindow = null;
+        });
         this._object = Gio.DBusExportedObject.wrapJSObject(IFACE,this);
         this._object.export(Gio.DBus.session,'/org/ala/Display1');
         this._owner = Gio.bus_own_name_on_connection(Gio.DBus.session,'org.ala.Display1',Gio.BusNameOwnerFlags.NONE,null,null);
     }
     disable() {
+        for (const operation of this._placements?.values() || []) operation.cancel();
+        this._placements?.clear();
+        if (this._grabBeginSignal) global.display.disconnect(this._grabBeginSignal);
+        if (this._grabEndSignal) global.display.disconnect(this._grabEndSignal);
+        this._grabBeginSignal = this._grabEndSignal = 0;
+        this._grabbedWindow = null;
         this._clearOutputLabels();
         this._disconnectOverviewStartup();
         if (this._owner) Gio.bus_unown_name(this._owner);
@@ -136,7 +178,7 @@ export default class AlaDisplay extends Extension {
     }
     GetStateAsync(_args,invocation) {
         this._handle(invocation,async () => ({state:'ok',gnome_version:Config.PACKAGE_VERSION,
-            capabilities:['identify-outputs'],
+            capabilities:['identify-outputs','workspace-placement'],
             display_config:await call(Gio.DBus.session,'org.gnome.Mutter.DisplayConfig','/org/gnome/Mutter/DisplayConfig','org.gnome.Mutter.DisplayConfig','GetCurrentState',null),
             compositor_monitors:Main.layoutManager.monitors.map(m => ({x:m.x,y:m.y,width:m.width,height:m.height}))}));
     }
@@ -287,32 +329,143 @@ export default class AlaDisplay extends Extension {
             return {state:'ok',remaining_window_count:request.windows.filter(id => ids.has(id)).length};
         });
     }
+    _waitPlacement(operation,predicate) {
+        return new Promise(resolve => {
+            let timer=0,finished=false;
+            const finish = result => {
+                if (finished) return;
+                finished=true;
+                if (timer) GLib.Source.remove(timer);
+                operation.wake=null;
+                resolve(result);
+            };
+            operation.wake=() => finish(false);
+            const check = () => {
+                try {
+                    if (!operation.valid() || GLib.get_monotonic_time() >= operation.deadline) {
+                        finish(false);
+                        return GLib.SOURCE_REMOVE;
+                    }
+                    if (predicate()) {
+                        finish(true);
+                        return GLib.SOURCE_REMOVE;
+                    }
+                } catch (_) {
+                    finish(false);
+                    return GLib.SOURCE_REMOVE;
+                }
+                return GLib.SOURCE_CONTINUE;
+            };
+            if (check() === GLib.SOURCE_CONTINUE)
+                timer=GLib.timeout_add(GLib.PRIORITY_DEFAULT,40,check);
+        });
+    }
     PlaceAsync([text],invocation) {
+        const object=this._object;
         this._handle(invocation,async uid => {
             if (text.length>8192) throw new Error('request');
+            if (!object || object !== this._object || !this._identifySessionReady()) throw new Error('inactive session');
             const request=JSON.parse(text), browser=validate(request,uid), found=windows(request,uid,browser.ticks);
             if (found.length !== 1) return {state:found.length ? 'blocked' : 'pending',reason:'관리 창 하나의 식별을 기다립니다.'};
             const rect=request.rect;
             const matches=Main.layoutManager.monitors.filter(m => ['x','y','width','height'].every(k => Number.isSafeInteger(rect?.[k]) && rect[k] === m[k]));
             if (matches.length !== 1) return {state:'pending',reason:'출력 연결이 변경되어 배치를 보류했습니다.'};
-            const monitor=matches[0],windowId=found[0].get_stable_sequence(),index=Main.layoutManager.monitors.indexOf(monitor);
-            // An output selector must still name the same logical group, not
-            // merely a stale numeric monitor index at the requested coordinates.
-            const state=await call(Gio.DBus.session,'org.gnome.Mutter.DisplayConfig','/org/gnome/Mutter/DisplayConfig','org.gnome.Mutter.DisplayConfig','GetCurrentState',null);
-            const group=state[2].filter(l => l[0] === rect.x && l[1] === rect.y);
-            if (group.length !== 1) throw new Error('output');
-            const connectors=group[0][5].map(s => s[0]).sort();
-            if (!connectors.includes(request.output) && connectors.join('+') !== request.output) throw new Error('output');
-            const current=validate(request,uid),rechecked=windows(request,uid,current.ticks);
-            if (rechecked.length !== 1 || rechecked[0].get_stable_sequence() !== windowId || Main.layoutManager.monitors[index] !== monitor) throw new Error('changed');
-            const window=rechecked[0];
-            window.unmake_fullscreen(); unmaximize(window); window.move_to_monitor(index);
-            let x=rect.x,width=rect.width;
-            if (request.layout === 'left') width=Math.floor(width/2);
-            if (request.layout === 'right') {x+=Math.floor(width/2);width-=Math.floor(width/2);}
-            window.move_resize_frame(true,x,rect.y,width,rect.height);
-            if (request.layout === 'fullscreen') window.make_fullscreen();
-            return {state:'pending',reason:'배치 요청 후 실제 창을 재확인하세요.'};
+            const window=found[0],windowId=window.get_stable_sequence(),index=Main.layoutManager.monitors.indexOf(matches[0]);
+            const linked=() => ({state:'blocked',reason:'다른 창과 연결된 관리 창은 함께 이동할 수 있어 배치를 보류했습니다.'});
+            if (linkedWindow(windowRelationships(window))) return linked();
+            if (this._placements.has(windowId) || this._grabbedWindow === window)
+                return {state:'pending',reason:'진행 중인 배치 또는 사용자의 창 이동이 끝나기를 기다립니다.'};
+            const monitors=[...Main.layoutManager.monitors];
+            const rectangles=monitors.map(m => ({x:m.x,y:m.y,width:m.width,height:m.height}));
+            const config=JSON.stringify(protectedConfig());
+            const workspaceManager=global.workspace_manager;
+            const workspace=workspaceManager.get_active_workspace();
+            if (!workspace) throw new Error('active workspace');
+            const operation={active:true,deadline:GLib.get_monotonic_time()+1800000,wake:null,workspaceReady:false};
+            operation.cancel=() => {operation.active=false; operation.wake?.();};
+            operation.valid=() => {
+                try {
+                    if (linkedWindow(windowRelationships(window))) {
+                        operation.linked=true;
+                        return false;
+                    }
+                } catch (_) {
+                    operation.relationshipUnknown=true;
+                    return false;
+                }
+                if (!operation.active || GLib.get_monotonic_time() >= operation.deadline || object !== this._object || !this._identifySessionReady() ||
+                    workspaceManager.get_active_workspace() !== workspace ||
+                    (operation.workspaceReady && !window.located_on_workspace(workspace)) ||
+                    this._grabbedWindow === window || config !== JSON.stringify(protectedConfig()) ||
+                    monitors.length !== Main.layoutManager.monitors.length || monitors.some((m,i) =>
+                        m !== Main.layoutManager.monitors[i] || ['x','y','width','height'].some(k => m[k] !== rectangles[i][k])))
+                    return false;
+                const current=validate(request,uid),owned=windows(request,uid,current.ticks);
+                return owned.length === 1 && owned[0] === window && window.get_stable_sequence() === windowId;
+            };
+            this._placements.set(windowId,operation);
+            let monitorSignal=0,workspaceSignal=0;
+            const pending=() => operation.linked ? linked() : operation.relationshipUnknown ?
+                {state:'unknown',reason:'관리 창과 다른 창의 연결 관계를 확인하지 못해 배치를 보류했습니다.'} :
+                {state:'pending',reason:'배치가 아직 확인되지 않았거나 창·출력·세션이 바뀌었습니다. 다시 조회하세요.'};
+            try {
+                monitorSignal=Main.layoutManager.connect('monitors-changed',operation.cancel);
+                workspaceSignal=workspaceManager.connect('active-workspace-changed',operation.cancel);
+                // A numeric index or equal coordinates alone cannot establish
+                // that the connector still belongs to the requested output.
+                const state=await call(Gio.DBus.session,'org.gnome.Mutter.DisplayConfig','/org/gnome/Mutter/DisplayConfig','org.gnome.Mutter.DisplayConfig','GetCurrentState',null);
+                const group=state[2].filter(l => l[0] === rect.x && l[1] === rect.y);
+                if (group.length !== 1) throw new Error('output');
+                const connectors=group[0][5].map(s => s[0]).sort();
+                if (!connectors.includes(request.output) && connectors.join('+') !== request.output) throw new Error('output');
+                if (!operation.valid()) return pending();
+                if (!window.located_on_workspace(workspace)) {
+                    // Move only this proven, unrelated managed window. Never
+                    // activate a workspace or move the user's global view.
+                    window.change_workspace(workspace);
+                    if (!await this._waitPlacement(operation,() => window.located_on_workspace(workspace))) return pending();
+                }
+                operation.workspaceReady=true;
+                if (!operation.valid()) return pending();
+                const desired=layoutRect(rect,request.layout);
+                const correct=() => window.get_monitor() === index && sameRect(window.get_frame_rect(),desired) &&
+                    window.is_fullscreen() === (request.layout === 'fullscreen') && window.located_on_workspace(workspace);
+                if (correct()) return {state:'ok',windows:[windowData(window)]};
+                const resize = area => window.move_resize_frame(false,area.x,area.y,area.width,area.height);
+                if (request.layout === 'fullscreen' && !window.is_fullscreen()) {
+                    // Wayland sizes/positions take effect after the client's
+                    // configure acknowledgement. Fullscreen only after the
+                    // frame really reaches this output, never its old monitor.
+                    const work=window.get_work_area_for_monitor(index);
+                    const x=Math.max(rect.x,work.x),y=Math.max(rect.y,work.y);
+                    const seed={x,y,width:Math.min(rect.x+rect.width,work.x+work.width)-x,
+                        height:Math.min(rect.y+rect.height,work.y+work.height)-y};
+                    if (!['x','y','width','height'].every(k => Number.isSafeInteger(seed[k])) || seed.width<1 || seed.height<1)
+                        throw new Error('work area');
+                    unmaximize(window);
+                    resize(seed);
+                    if (!await this._waitPlacement(operation,() => window.get_monitor() === index &&
+                        sameRect(window.get_frame_rect(),seed) && !window.is_fullscreen())) return pending();
+                    if (!operation.valid()) return pending();
+                    window.make_fullscreen();
+                } else {
+                    if (request.layout !== 'fullscreen') {
+                        if (window.is_fullscreen()) window.unmake_fullscreen();
+                        unmaximize(window);
+                    }
+                    // Preserve existing fullscreen state. Mutter's constraint
+                    // uses this explicit stage rectangle; no pixel/scale guess
+                    // or relative move_to_monitor offset is applied here.
+                    resize(desired);
+                }
+                if (!await this._waitPlacement(operation,correct)) return pending();
+                return {state:'ok',windows:[windowData(window)]};
+            } finally {
+                operation.cancel();
+                if (monitorSignal) Main.layoutManager.disconnect(monitorSignal);
+                if (workspaceSignal) workspaceManager.disconnect(workspaceSignal);
+                if (this._placements.get(windowId) === operation) this._placements.delete(windowId);
+            }
         });
     }
 }

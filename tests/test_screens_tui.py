@@ -97,6 +97,69 @@ def test_site_overview_omits_query_and_fragment_and_rejects_userinfo():
     assert site_label(None) == '주소 미설정'
 
 
+@pytest.mark.parametrize('size', [(80, 24), (120, 36)])
+@pytest.mark.parametrize('observed', [False, True])
+def test_details_distinguish_saved_and_selected_output_without_changing_map_assignment(size, observed):
+    async def scenario():
+        service = Service()
+        target = service.screens['targets'][1]
+        target.update(output='HDMI-2', layout='right', settings={'pending': True})
+        if observed:
+            target.update(applied_output='DP-1', applied_layout='fullscreen')
+        target['placement'] = {'state': 'ok', 'window_count': 1,
+                               'reason': '선택한 설정의 관리 창 배치를 관측했습니다.'}
+        before = deepcopy(service.screens)
+        app = SimpleApp(service=service, initial_section='screens')
+        async with app.run_test(size=size) as pilot:
+            await pilot.pause()
+            panel = app.query_one('#screens', ScreenPanel)
+            assert not panel.targets_on_output('DP-1')
+            editor = await open_target(pilot, app, 'display-2', details=True)
+            detail = editor.query_one('#screens-detail', TextArea).text
+            assert '저장 출력 · HDMI-2 · 배치 오른쪽 절반' in detail
+            expected = 'DP-1 · 배치 전체화면' if observed else '확인 불가 · 배치 확인 불가'
+            assert '적용 출력 · '+expected in detail
+            assert '적용 출력·배치는 선택된 설정 기준' in detail
+            assert '실제 창 위치는 창 배치 관측' in detail
+            assert '설정 · 적용 대기' in detail
+            assert '창 배치 · 정상' in detail
+            assert service.screens == before
+            assert not any(action in {'screens-save', 'screens-apply', 'screens-action', 'screens-swap-submit'}
+                           for action, _ in service.calls)
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize('size', [(80, 24), (120, 36)])
+@pytest.mark.parametrize('connected', [False, True])
+def test_details_show_observed_monitor_mode_and_logical_area_without_inferring_window_position(size, connected):
+    async def scenario():
+        service = Service()
+        target = service.screens['targets'][1]
+        target.update(layout='right', applied_output='DP-1', applied_layout='fullscreen')
+        service.screens['logical_outputs'][1].update(
+            x=-2560, y=-180, width=2560, height=1440, scale=1.5)
+        service.screens['outputs'][1].update(width=3840, height=2160)
+        if not connected:
+            target['output'] = 'DP-2'
+        before = deepcopy(service.screens)
+        app = SimpleApp(service=service, initial_section='screens')
+        async with app.run_test(size=size) as pilot:
+            await pilot.pause()
+            editor = await open_target(pilot, app, 'display-2', details=True)
+            detail = editor.query_one('#screens-detail', TextArea).text
+            if connected:
+                assert '모니터 · 3840×2160 · 150% · 논리 영역 -2560,-180 2560×1440' in detail
+                assert '저장 출력 · DP-1 · 배치 오른쪽 절반' in detail
+            else:
+                assert '모니터 · 저장 출력의 연결 정보 확인 불가' in detail
+                assert '3840×2160' not in detail and '150%' not in detail
+            assert '실제 창 위치는 창 배치 관측' in detail
+            assert service.screens == before
+            assert not any(action in {'screens-save', 'screens-apply', 'screens-action', 'screens-swap-submit'}
+                           for action, _ in service.calls)
+    asyncio.run(scenario())
+
+
 def test_four_tabs_and_opening_screen_management_is_read_only():
     async def scenario():
         service = Service()
