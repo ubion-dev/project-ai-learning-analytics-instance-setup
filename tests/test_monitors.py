@@ -127,7 +127,8 @@ def test_placement_readonly_does_not_send_place(monkeypatch):
     calls=[]
     def bridge(method,request=None,**kwargs):
         calls.append(method)
-        return {'state':'ok','windows':[{'rect':{'x':0,'y':0,'width':100,'height':100},'fullscreen':False}]}
+        return {'state':'ok','windows':[{'rect':{'x':0,'y':0,'width':100,'height':100},'fullscreen':False,
+                                      'on_active_workspace':True,'workspace_index':0}]}
     monkeypatch.setattr(monitors,'bridge',bridge)
     inventory={'state':'ok','logical_outputs':[{'id':'HDMI-1','connectors':['HDMI-1'],'confirmed':True,'x':0,'y':0,'width':1920,'height':1080}]}
     assert monitors.placement(config,health,inventory=inventory)['state']=='pending'
@@ -147,3 +148,67 @@ def test_placement_requires_single_window_identity(monkeypatch):
 
 def test_legacy_default_does_not_require_new_bridge():
     assert monitors.placement(Config(user='user'),{})['state']=='not_applicable'
+
+
+@pytest.mark.parametrize('active', [True, False, None, 0, 'true'])
+def test_matching_geometry_does_not_hide_another_or_unverified_workspace(monkeypatch, active):
+    config=Config(schema_version=2,user='user',screens=(ScreenConfig(output='HDMI-1'),)).for_screen()
+    health={'supervisor_pid':10,'browser_pid':20,'supervisor_start_ticks':'100',
+            'browser_start_ticks':'200','boot_id':'test-boot'}
+    rect={'x':-2560,'y':-180,'width':2560,'height':1440}
+    inventory={'state':'ok','logical_outputs':[dict(rect,id='HDMI-1',connectors=['HDMI-1'],confirmed=True)]}
+    calls=[]
+    def bridge(method, request=None, **kwargs):
+        calls.append(method)
+        window={'id':1,'rect':rect,'fullscreen':True,'workspace_index':1}
+        if active is not None:
+            window['on_active_workspace']=active
+        return {'state':'ok','windows':[window]}
+    monkeypatch.setattr(monitors,'bridge',bridge)
+    result=monitors.placement(config,health,inventory=inventory)
+    assert result['state']==('ok' if active is True else 'pending')
+    assert calls==['Inspect']
+    if active is not True:
+        assert '작업 공간' in result['reason']
+
+
+@pytest.mark.parametrize('after', [True, False])
+def test_workspace_apply_reobserves_only_the_selected_did(monkeypatch, after):
+    config=Config(schema_version=2,user='user',screens=(
+        ScreenConfig(output='HDMI-1'),ScreenConfig(id='other',output='DP-1'))).for_screen()
+    health={'supervisor_pid':10,'browser_pid':20,'supervisor_start_ticks':'100',
+            'browser_start_ticks':'200','boot_id':'test-boot'}
+    rect={'x':0,'y':0,'width':1920,'height':1080}
+    inventory={'state':'ok','logical_outputs':[dict(rect,id='HDMI-1',connectors=['HDMI-1'],confirmed=True)]}
+    calls=[]
+    applied=False
+    def bridge(method, request=None, **kwargs):
+        nonlocal applied
+        calls.append((method,deepcopy(request)))
+        if method=='Place':
+            applied=True
+            return {'state':'ok'}
+        return {'state':'ok','windows':[{'id':1,'rect':rect,'fullscreen':True,
+                'workspace_index':0 if applied and after else 1,'on_active_workspace':applied and after}]}
+    monkeypatch.setattr(monitors,'bridge',bridge)
+    result=monitors.placement(config,health,inventory=inventory,apply=True)
+    assert result['state']==('ok' if after else 'pending')
+    assert [method for method,_ in calls]==['Inspect','Place','Inspect']
+    assert all(request['target']=='default' for _,request in calls)
+    assert all('workspace_index' not in request for _,request in calls)
+
+
+def test_old_extension_missing_workspace_evidence_never_receives_place(monkeypatch):
+    config=Config(schema_version=2,user='user',screens=(ScreenConfig(output='HDMI-1'),)).for_screen()
+    health={'supervisor_pid':10,'browser_pid':20,'supervisor_start_ticks':'100',
+            'browser_start_ticks':'200','boot_id':'test-boot'}
+    rect={'x':0,'y':0,'width':1920,'height':1080}
+    inventory={'state':'ok','logical_outputs':[dict(rect,id='HDMI-1',connectors=['HDMI-1'],confirmed=True)]}
+    calls=[]
+    def bridge(method, request=None, **kwargs):
+        calls.append(method)
+        return {'state':'ok','windows':[{'id':1,'rect':rect,'fullscreen':True}]}
+    monkeypatch.setattr(monitors,'bridge',bridge)
+    result=monitors.placement(config,health,inventory=inventory,apply=True)
+    assert result['state']=='pending' and '재로그인' in result['next_action']
+    assert calls==['Inspect']

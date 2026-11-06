@@ -22,6 +22,7 @@ class FakeHost:
         self.states={display.UNIT: {'ActiveState':'inactive','MainPID':'0','Result':'success','LoadState':'loaded'},
                      display.LEGACY: {'ActiveState':'inactive','MainPID':'0','Result':'success','LoadState':'not-found'}}
         self.settings={schema+'.'+key:expected for schema,key,expected in display.SETTINGS}
+        self.settings.update({schema+'.'+key:expected for schema,key,expected in display.WORKSPACE_SETTINGS})
         self.settings.update({'org.gnome.shell.disable-user-extensions':'false','org.gnome.shell.enabled-extensions':"['ala-display@example.com']"})
         self.script_result={'exit_code':2, 'state':'pending', 'reason':'Chrome 미실행'}
         self.get_default='graphical.target'
@@ -46,9 +47,13 @@ class FakeHost:
         if argv[0]=='runuser':
             if argv[-1]=='prepare':
                 display._prepare_user_files(self.config,self.paths.at('/home/user'),self.paths)
-                return Command(0,json.dumps({'exit_code':0,'state':'ok'}))
+                environment={'DBUS_SESSION_BUS_ADDRESS':'unix:path=/run/user/test/bus'} if self.runtime else {}
+                workspace=display._workspace_policy(self.config,self,apply=True,environment=environment)
+                return Command(0,json.dumps({'exit_code':0,'state':'ok','workspace_policy':workspace}))
             if argv[-1]=='settings':
                 return Command(0,json.dumps({'exit_code':0,'settings':self.settings}))
+            if argv[-1]=='workspace-settings':
+                return Command(0,json.dumps(display._workspace_policy(self.config,self)))
             if argv[-1]=='ensure-start' or (argv[-1]=='check' and self.real_user_check):
                 result=display.user_action(argv[-1],config=self.config,home=self.paths.at('/home/user'),host=self,paths=self.paths)
                 return Command(result.get('exit_code',0),json.dumps(result))
@@ -76,6 +81,11 @@ class FakeHost:
         if argv[:2]==['gsettings','get']:
             name=argv[2]+'.'+argv[3]
             return Command(0,self.settings[name]+'\n')
+        if argv[:2]==['gsettings','writable']:
+            return Command(0,'true\n')
+        if argv[:2]==['gsettings','set']:
+            self.settings[argv[2]+'.'+argv[3]]=argv[4]
+            return Command(0)
         if argv[0]=='journalctl' and 'gdm.service' in argv:
             return self.gdm_logs
         if argv[0]=='journalctl':
@@ -239,6 +249,88 @@ def test_live_setting_differences_are_pending(setup):
     host.settings['org.gnome.desktop.session.idle-delay']='uint32 300'
     result=display.inspect_display(config,host,paths)
     assert any(r.id=='display.live.idle-delay' and r.state=='pending' for r in result)
+
+
+def test_workspace_configuration_checks_are_readonly_and_independent_of_runtime(setup):
+    config, paths, host = setup
+    host.runtime=False;host.sessions=0
+    host.settings['org.gnome.mutter.dynamic-workspaces']='true'
+    host.settings['org.gnome.desktop.wm.preferences.num-workspaces']='4'
+    before=set(paths.root.rglob('*'))
+    checks={result.id:result for result in display.inspect_display(config,host,paths,configuration_only=True)}
+    assert checks['display.workspace.dynamic-workspaces'].state=='change_required'
+    assert checks['display.workspace.num-workspaces'].actual=='4'
+    assert not any(argv[0]=='loginctl' for argv,_ in host.calls)
+    assert all(argv[-1]=='workspace-settings' for argv,_ in host.calls if argv[0]=='runuser')
+    assert not any(argv[:2] in (['gsettings','set'],['gsettings','writable']) for argv,_ in host.calls)
+    assert set(paths.root.rglob('*'))==before
+
+
+def test_apply_sets_display_users_workspace_without_global_policy_or_service_restart(setup):
+    config, paths, host = setup
+    host.settings['org.gnome.mutter.dynamic-workspaces']='true'
+    host.settings['org.gnome.desktop.wm.preferences.num-workspaces']='4'
+    host.settings['org.gnome.mutter.workspaces-only-on-primary']='false'
+    host.states[display.UNIT].update(ActiveState='active',MainPID='111')
+    policy=paths.at('/etc/dconf/db/rocky_setup.d/00-display')
+    policy.parent.mkdir(parents=True);policy.write_text('existing unrelated desktop policy\n')
+    before=policy.read_bytes(),policy.stat().st_mtime_ns
+    result=display.apply_display(config,host,paths)
+    assert Report(result).exit_code==0
+    assert host.settings['org.gnome.mutter.dynamic-workspaces']=='false'
+    assert host.settings['org.gnome.desktop.wm.preferences.num-workspaces']=='1'
+    assert host.settings['org.gnome.mutter.workspaces-only-on-primary']=='false'
+    assert (policy.read_bytes(),policy.stat().st_mtime_ns)==before
+    assert all(argv[:4]==['runuser','-u','user','--'] for argv,_ in host.calls if argv[0]=='runuser')
+    assert host.states[display.UNIT]['MainPID']=='111'
+    assert not any('restart' in argv or 'stop' in argv or 'reboot' in argv for argv,_ in host.calls)
+
+
+def test_setup_without_user_bus_defers_workspace_but_keeps_registration(setup):
+    config, paths, host = setup
+    host.runtime=False;host.sessions=0
+    host.settings['org.gnome.mutter.dynamic-workspaces']='true'
+    host.settings['org.gnome.desktop.wm.preferences.num-workspaces']='4'
+    result={item.id:item for item in display.apply_display(config,host,paths)}
+    assert result['display.workspace.apply'].state=='pending'
+    assert result['display.workspace.num-workspaces'].state=='change_required'
+    assert paths.at('/home/user/.config/autostart/ala-display.desktop').is_file()
+    assert paths.at('/etc/systemd/user/ala-chrome.service').is_file()
+    assert not any(argv[:2]==['gsettings','set'] for argv,_ in host.calls)
+
+
+@pytest.mark.parametrize('failed',[False,True])
+def test_normal_login_applies_workspace_before_chrome_and_policy_failure_does_not_block_it(setup,capsys,failed):
+    config, paths, host, home = user_fixture(setup)
+    host.settings['org.gnome.mutter.dynamic-workspaces']='true'
+    host.settings['org.gnome.desktop.wm.preferences.num-workspaces']='4'
+    original=host.run
+    def run(argv,**kwargs):
+        if failed and argv[:2]==['gsettings','writable']:
+            host.calls.append((argv,kwargs))
+            return Command(0,'false\n')
+        return original(argv,**kwargs)
+    host.run=run
+    environment={'WAYLAND_DISPLAY':'wayland-0','DBUS_SESSION_BUS_ADDRESS':'unix:path=/run/user/test/bus'}
+    assert display.session_start(config=config,home=home,host=host,paths=paths,environment=environment)==0
+    commands=[argv for argv,_ in host.calls]
+    start=commands.index(['systemctl','--user','start','--no-block',display.UNIT])
+    before=commands[:start]
+    if failed:
+        assert '[ala-autostart] phase=workspace outcome=blocked rc=1' in capsys.readouterr().out
+        assert not any(argv[:2]==['gsettings','set'] for argv in commands)
+    else:
+        assert ['gsettings','set','org.gnome.desktop.wm.preferences','num-workspaces','1'] in before
+        assert '[ala-autostart] phase=workspace outcome=applied rc=0' in capsys.readouterr().out
+
+
+def test_display_disabled_does_not_read_or_apply_workspace_settings(setup):
+    config, paths, host = setup
+    config=replace(config,display=False);host.config=config
+    display.apply_display(config,host,paths)
+    display.inspect_display(config,host,paths)
+    assert not any(argv[0]=='runuser' and argv[-1]=='workspace-settings' for argv,_ in host.calls)
+    assert not any(argv[:2]==['gsettings','set'] for argv,_ in host.calls)
 
 
 def test_duplicate_sessions_block_actions_and_no_runtime_is_pending(setup):
@@ -743,6 +835,8 @@ def test_ala31_missing_bus_context_uses_only_verified_current_user_socket(failur
             monkeypatch.setattr(Path,'lstat',observed_stat)
             monkeypatch.setenv('DBUS_SESSION_BUS_ADDRESS','unverified incoming context')
             host=FakeHost(paths,config);original=host.run
+            host.settings['org.gnome.mutter.dynamic-workspaces']='true'
+            host.settings['org.gnome.desktop.wm.preferences.num-workspaces']='4'
             def run(argv,**kwargs):
                 if argv[:3]==['systemctl','--user','show-environment']:
                     address=(kwargs.get('env') or {}).get('DBUS_SESSION_BUS_ADDRESS')
@@ -758,8 +852,11 @@ def test_ala31_missing_bus_context_uses_only_verified_current_user_socket(failur
                 assert len(_started_commands(host))==1
                 calls=[kwargs for argv,kwargs in host.calls if 'import-environment' in argv or argv[:3]==['systemctl','--user','start']]
                 assert calls and all(item['env']['DBUS_SESSION_BUS_ADDRESS']=='unix:path=/run/user/test/bus' for item in calls)
+                writes=[kwargs for argv,kwargs in host.calls if argv[:2]==['gsettings','set']]
+                assert len(writes)==2 and all(item['env']['DBUS_SESSION_BUS_ADDRESS']=='unix:path=/run/user/test/bus' for item in writes)
             else:
                 assert not _started_commands(host)
+                assert not any(argv[:2]==['gsettings','set'] for argv,_ in host.calls)
             output=capsys.readouterr().out
             assert 'private connection' not in output and 'unverified incoming' not in output
         finally:
@@ -1253,7 +1350,8 @@ def test_configuration_only_inspection_is_readonly_without_session_or_runtime_qu
     result=display.inspect_display(config,host,paths,configuration_only=True)
     assert Report(result).exit_code==0
     assert not any(r.id.startswith(('chrome.runtime','chrome.health','display.session','display.live.')) for r in result)
-    assert not any(argv[0] in {'loginctl','runuser','journalctl'} for argv,_ in host.calls)
+    assert not any(argv[0] in {'loginctl','journalctl'} for argv,_ in host.calls)
+    assert all(argv[-1]=='workspace-settings' for argv,_ in host.calls if argv[0]=='runuser')
     assert before=={str(p):(p.read_bytes(),p.stat().st_mtime_ns) for p in paths.root.rglob('*') if p.is_file()}
     full=display.inspect_display(config,host,paths)
     assert any(r.id=='display.session' and r.state=='pending' for r in full)

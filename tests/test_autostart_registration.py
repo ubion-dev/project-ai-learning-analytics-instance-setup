@@ -126,7 +126,10 @@ def test_pending_or_malformed_initialization_fence_never_launches(setup, entrypo
         with pytest.raises(ValueError):
             invoke()
     assert [argv for argv, _ in host.calls] == (
-        [['systemctl', '--user', 'show-environment']] if entrypoint == 'login' and contents is None else [])
+        [['systemctl', '--user', 'show-environment'],
+         ['gsettings', 'get', 'org.gnome.mutter', 'dynamic-workspaces'],
+         ['gsettings', 'get', 'org.gnome.desktop.wm.preferences', 'num-workspaces']]
+        if entrypoint == 'login' and contents is None else [])
     assert not (home / '.config/ala').exists()
 
 

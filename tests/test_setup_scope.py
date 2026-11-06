@@ -63,9 +63,12 @@ def test_configuration_scope_keeps_gpu_reboot_wait_and_url_input_wait(monkeypatc
 
 
 def test_configuration_children_hide_runtime_but_full_view_keeps_it():
-    report=Report([CheckResult('chrome.autostart','ok')],scope='configuration').to_dict()
+    report=Report([CheckResult('chrome.autostart','ok'),
+                   CheckResult('display.workspace.dynamic-workspaces','change_required'),
+                   CheckResult('display.workspace.num-workspaces','ok')],scope='configuration').to_dict()
     rows,_=child_rows('chrome',report=report)
-    assert {r['id'] for r in rows}=={'chrome.autologin','chrome.profile','chrome.service'}
+    assert {r['id'] for r in rows}=={'chrome.autologin','chrome.profile','chrome.service','chrome.workspace'}
+    assert next(r for r in rows if r['id']=='chrome.workspace')['state']=='change_required'
     report.pop('scope')
     rows,_=child_rows('chrome',report=report)
     assert {'chrome.session','chrome.health','chrome.policy'} <= {r['id'] for r in rows}

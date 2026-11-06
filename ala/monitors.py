@@ -165,7 +165,7 @@ def topology(*,host=None):
 
 def identify_outputs(*, host=None):
     """Explicitly show bounded labels; a successful RPC is not panel evidence."""
-    action = '간편 설정에서 화면 확장을 반영한 뒤 GNOME 세션에 재로그인하고 다시 식별하세요.'
+    action = '상태 확인에서 확장 파일을 점검한 뒤 GNOME에 재로그인하세요.'
     try:
         inventory = topology(host=host)
         if inventory.get('state') != 'ok':
@@ -260,8 +260,14 @@ def placement(config,health,*,host=None,apply=False,inventory=None):
                 'confirmed_window_count':len(windows),'reason':'관리 창 하나의 생성·식별을 기다립니다.' if not windows else '관리 창이 여러 개여서 임의로 배치하지 않습니다.'}
     expected=desired_rect(selected,config.layout)
     actual=windows[0].get('rect',{})
+    on_active_workspace=windows[0].get('on_active_workspace')
+    if type(on_active_workspace) is not bool:
+        return {'state':'pending','windows':windows,'confirmed_window_count':1,
+                'output':resolved['selector'],'layout':config.layout,'expected':expected,
+                'reason':'현재 작업 공간에 있는 관리 창인지 확인할 수 없습니다.',
+                'next_action':'간편 설정으로 화면 확장을 반영한 뒤 GNOME에 재로그인하세요.'}
     correct=(all(type(actual.get(k)) is int and abs(actual[k]-expected[k])<=2 for k in expected)
-             and windows[0].get('fullscreen')==(config.layout=='fullscreen'))
+             and windows[0].get('fullscreen')==(config.layout=='fullscreen') and on_active_workspace)
     if not correct and apply:
         placed=bridge('Place',request,host=host)
         if placed.get('state') not in {'ok','pending'}:return placed | {'confirmed_window_count':1}
@@ -270,4 +276,7 @@ def placement(config,health,*,host=None,apply=False,inventory=None):
         return placement(config,health,host=host,apply=False,inventory=inventory)
     return {'state':'ok' if correct else 'pending','windows':windows,'confirmed_window_count':1,
             'output':resolved['selector'],'layout':config.layout,'expected':expected,
-            'reason':'관리 창의 실제 배치를 확인했습니다.' if correct else '실제 창 배치 적용·확인을 기다립니다.'}
+            'workspace_index':windows[0].get('workspace_index'),'on_active_workspace':on_active_workspace,
+            'reason':('관리 창의 실제 배치를 확인했습니다.' if correct else
+                      '관리 창이 현재 작업 공간에 있지 않습니다.' if not on_active_workspace else
+                      '실제 창 배치 적용·확인을 기다립니다.')}

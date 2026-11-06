@@ -15,7 +15,9 @@ from .config import Config
 from .model import redact
 
 PREPARATION_IDS = {'display.configuration', 'display.autologin', 'display.gdm_enabled',
-                   'display.default_target', 'display.initial_setup', 'chrome.unit', 'chrome.autostart'}
+                   'display.default_target', 'display.initial_setup', 'chrome.unit', 'chrome.autostart',
+                   'display.workspace.dynamic-workspaces', 'display.workspace.num-workspaces',
+                   'display.workspace.apply'}
 HEALTH_LABELS = {'healthy': '주 문서·HTTP 연결 확인', 'waiting_site': '사이트 응답 대기',
                  'waiting_configuration': '설정 안내 표시 중',
                  'recovering': '연결 복구 중', 'failed': '감시 실패', 'unknown': '감시 확인 불가'}

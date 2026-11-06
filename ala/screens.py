@@ -57,6 +57,24 @@ def _applied_context(config, target, host, paths):
     return model.for_screen(target, revision=selected['revision'])
 
 
+def _workspace_runtime_guard(config, inventory, host, paths):
+    """Check a candidate's additive capability before replacing a working DID."""
+    from pathlib import Path
+    from .runtime import RuntimeStore
+    release=(config.runtime_pin or {}).get('release') or str(Path(__file__).resolve().parents[1])
+    metadata=Path(release)/'COMPATIBILITY.json'
+    if not metadata.exists():
+        return None
+    supported=RuntimeStore(paths,host)._read(metadata)
+    if supported.get('workspace_protocol') != 1:
+        return None
+    if 'workspace-placement' not in inventory.get('capabilities', []):
+        return {'state':'pending','exit_code':2,
+                'reason':'후보 화면 코드에 필요한 작업 공간 배치 확장이 아직 로드되지 않았습니다.',
+                'next_action':'간편 설정으로 확장 파일을 반영하고 GNOME 재로그인 후 화면 코드를 다시 적용하세요.'}
+    return None
+
+
 def _inventory(config,host,paths):
     first=config.screen_targets()[0]
     # Topology is session-wide, not a target runtime operation. Carrying a
@@ -131,7 +149,8 @@ def inspect_screens(config:Config,host=None,paths=None):
             if context.schema_version==1 and context.output is None:
                 placement={'state':'not_applicable','reason':'기존 기본 화면의 배치를 유지합니다.','confirmed_window_count':None}
             targets.append({'id':screen.id,'url':screen.url,'applied_url':context.url,'actual_url':None,'output':screen.output,
-                            'layout':screen.layout,'autostart':screen.autostart,'frontend':screen.frontend.to_dict(),
+                            'layout':screen.layout,'applied_output':context.output,'applied_layout':context.layout,
+                            'autostart':screen.autostart,'frontend':screen.frontend.to_dict(),
                             'service':service,'health':health,'placement':placement,'state':observed.get('state','unknown'),
                             'results':observed.get('results',[]),'next_action':observed.get('next_action',''),
                             'reason':observed.get('reason','')})
@@ -183,10 +202,12 @@ def preflight(config,host=None,paths=None):
         observation=replace(config,runtime_pin=None).for_screen(config.target_id,revision=config.config_revision)
         environment=display._user_call(observation,host,paths,'environment')
         if environment.get('exit_code')!=0 or environment.get('state')!='ready':return environment
-        if config.schema_version==2:
+        if config.schema_version==2 or config.output is not None:
             inventory=_inventory(observation,host,paths)
             resolved=_conflict(config,config.target_id,inventory,host=host,paths=paths,selected=config)
             if resolved['state']!='ok':return resolved | {'exit_code':1 if resolved['state']=='blocked' else 2}
+            unsupported=_workspace_runtime_guard(config,inventory,host,paths)
+            if unsupported:return unsupported
         return {'state':'ready','exit_code':0,'reason':'단일 그래픽 세션·실제 화면 환경·서비스·대상 출력의 시작 전제를 확인했습니다.'}
     except (OSError,ValueError,RuntimeError):
         return {'state':'unknown','exit_code':1,'reason':'화면 전환의 시작 전제를 확인하지 못해 기존 표시를 유지합니다.'}

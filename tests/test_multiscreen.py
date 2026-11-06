@@ -150,6 +150,10 @@ def test_multi_login_queues_each_target_once_and_retains_existing(tmp_path):
             if argv[:2]==['gdbus','wait']:return Command(0)
             if argv[-1:] == ['org.ala.Display1.DismissStartupOverview']:
                 return Command(0, repr((json.dumps({'protocol': 1, 'state': 'ok', 'overview': 'kept'}),)))
+            if argv==['gsettings','get','org.gnome.mutter','dynamic-workspaces']:
+                return Command(0,'false\n')
+            if argv==['gsettings','get','org.gnome.desktop.wm.preferences','num-workspaces']:
+                return Command(0,'1\n')
             if argv[2]=='show-environment':return Command(0,'WAYLAND_DISPLAY=wayland-0\n')
             if argv[2]=='show':return Command(0,'ActiveState='+states[argv[3]]+'\nResult=success\nLoadState=loaded\nMainPID=0\n')
             if argv[2]=='start':states[argv[-1]]='active';return Command(0)

@@ -60,7 +60,9 @@ def test_old_extension_is_unknown_and_never_receives_identify(observation):
     host = IdentifyHost(observation)
     result = monitors.identify_outputs(host=host)
     assert result['state'] == 'unknown'
+    assert '상태 확인' in result['next_action']
     assert '재로그인' in result['next_action']
+    assert '간편 설정' not in result['next_action']
     assert host.calls == ['GetState']
 
 

@@ -32,6 +32,16 @@ def test_site_monitoring_has_separate_actual_health_evidence():
     assert rows['health']['evidence'] == 'missing'
 
 
+def test_workspace_policy_is_a_named_setup_detail_separate_from_chrome_runtime():
+    rows, _ = children('chrome', report=checks(
+        ('display.workspace.dynamic-workspaces', 'ok'),
+        ('display.workspace.num-workspaces', 'change_required'),
+        ('chrome.runtime', 'ok')))
+    assert rows['workspace']['label']=='DID 계정의 작업 공간 1개 유지'
+    assert rows['workspace']['state']=='change_required'
+    assert rows['session']['state']=='ok'
+
+
 def test_catalog_is_known_safe_and_every_install_stage_has_details():
     assert len(STAGE_TASKS) == 11
     for parent, tasks in STAGE_TASKS.items():
