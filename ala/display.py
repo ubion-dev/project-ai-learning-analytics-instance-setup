@@ -1116,13 +1116,16 @@ def _stop_postcondition(config,home,host,paths,evidence):
 def user_action(action, *, target='default', config=None, home=None, host=None, paths=None):
     host, paths = host or Host(), paths or Paths()
     if config is None:
-        config, home = _load_user_config(paths,None if action in {'prepare','autostart-sync','settings','workspace-settings','outputs','identify-outputs','extension-status','environment'} else target)
+        config, home = _load_user_config(paths,None if action in {'prepare','autostart-sync','reload-units','settings','workspace-settings','outputs','identify-outputs','extension-status','environment'} else target)
     elif os.getuid() == 0:
         raise PermissionError('Chrome은 일반 사용자로 실행하세요.')
-    if action not in {'prepare','autostart-sync','settings','workspace-settings','outputs','identify-outputs','extension-status','environment'}:
+    if action not in {'prepare','autostart-sync','reload-units','settings','workspace-settings','outputs','identify-outputs','extension-status','environment'}:
         config=_context(config,target if not hasattr(config,'_target_id') else config.target_id)
     unit=unit_name(target if action=='environment' else config.target_id)
     home = Path(home)
+    if action == 'reload-units':
+        result=host.run(['systemctl','--user','daemon-reload'])
+        return {'exit_code':result.returncode,'state':'ok' if result.returncode==0 else 'unknown'}
     if action == 'autostart-sync':
         return {'exit_code': 0, 'state': 'ok', 'changed': _prepare_autostart_file(config, home, paths)}
     if action == 'prepare':

@@ -139,6 +139,8 @@ def submit_reload(config, target='default', release=None, *, paths=None, host=No
     store = ControlStore(paths, host)
     pinned, _ = store.runtime.release(release or Path(__file__).resolve().parents[1])
     with change_lock(paths):
+        from .screen_swap import guard
+        guard(paths=paths,host=host,target=target)
         if any(row['state'] in {'queued', 'running'} for row in JobStore(paths, host).list()):
             raise RuntimeError('설치 중에는 화면 갱신을 시작하지 않습니다.')
         state = store.runtime.load(target)

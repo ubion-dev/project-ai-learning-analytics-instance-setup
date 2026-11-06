@@ -360,6 +360,55 @@ class TargetChooser(ModalScreen[str | None]):
         self.dismiss(None)
 
 
+class ResetConfirmation(ModalScreen[bool]):
+    BINDINGS = [('escape','cancel','취소')]
+    CSS = """
+    ResetConfirmation { align: center middle; background: #000000 65%; }
+    #reset-dialog { width: 82; max-width: 96%; height: 90%; padding: 1 2; background: #211f29; border: round #cbc2ef; }
+    #reset-title { height: 2; color: #f1d5a3; text-style: bold; }
+    #reset-description { height: 1fr; }
+    #reset-buttons { height: 3; }
+    #reset-buttons Button { width: 1fr; margin-right: 1; }
+    """
+    def __init__(self,plan):
+        super().__init__()
+        self.plan=plan
+
+    def compose(self):
+        with Vertical(id='reset-dialog'):
+            yield Static('DID 전체 초기화 · 변경 대상 확인',id='reset-title')
+            before=self.plan.get('before',[])
+            after=self.plan.get('after',[])
+            lines=[f'기존 DID {len(before)}개 → 모니터별 안내 {len(after)}개',
+                   '전체 화면 설정을 백업한 뒤 관리 Chrome을 중지합니다.',
+                   '사이트·배정·자동 시작·프론트 연동을 초기화합니다.',
+                   '계정·설치 환경·Chrome 프로필과 로그인 정보는 유지합니다.','', '현재 설정:']
+            for target in before:
+                lines.append(safe_text(target['id'])+' · '+site_label(target.get('url'))+' · '+safe_text(target.get('output') or '자동'))
+            lines.extend(['','초기화 후:'])
+            for target in after:
+                lines.append(safe_text(target['id'])+' · '+safe_text(target['output'])+' · 안내·전체화면·자동 시작 켜짐·프론트 꺼짐')
+            lines.extend(['','제외 DID: '+', '.join(self.plan.get('removed') or ['없음']),
+                          '기존 수동 중지를 해제하고 안내 시작: '+', '.join(self.plan.get('manual_stops') or ['없음']),
+                          '승인 이후 새로 요청한 수동 중지는 우선합니다.',
+                          '중단·재부팅 시 기록된 결정으로 복구합니다.','완료된 초기화를 되돌리는 복원 버튼은 제공하지 않습니다.'])
+            yield TextArea('\n'.join(lines),id='reset-description',read_only=True,show_cursor=False)
+            with Horizontal(id='reset-buttons'):
+                yield Button('취소',id='reset-cancel')
+                yield Button('백업 후 전체 초기화',id='reset-confirm',variant='warning')
+
+    def on_mount(self):
+        self.query_one('#reset-cancel',Button).focus()
+
+    def action_cancel(self):
+        self.dismiss(False)
+
+    @on(Button.Pressed)
+    def pressed(self,event):
+        event.stop()
+        self.dismiss(event.button.id=='reset-confirm')
+
+
 class ScreenPanel(Vertical):
     DEFAULT_CSS = """
     ScreenPanel { height: 1fr; }
@@ -376,6 +425,8 @@ class ScreenPanel(Vertical):
     #screens-unassigned { height: auto; padding: 0; }
     #screens-unassigned-list { height: auto; max-height: 5; }
     #screens-add { height: 3; width: 100%; }
+    #screens-tools { height: auto; padding: 0; }
+    #screens-tools Button { height: 3; width: 100%; }
     """
 
     def __init__(self, owner, **kwargs):
@@ -393,6 +444,8 @@ class ScreenPanel(Vertical):
         self.swap_following = {}
         self.launches = {}
         self.loaded = False
+        self._reset_follow = None
+        self._reset_config_seen = None
         self.editor = None
         self._unassigned_rows = None
 
@@ -402,6 +455,10 @@ class ScreenPanel(Vertical):
         yield Static('화면 관리를 열면 연결된 출력과 창을 조회합니다.', id='screens-summary', markup=False)
         with VerticalScroll(id='screens-map-scroll'):
             yield ScreenMap(id='screens-map')
+            with Collapsible(title='관리 도구',id='screens-tools',collapsed=True):
+                yield Button('DID 전체 초기화',id='screens-reset')
+                yield Button('초기화 작업 복구',id='screens-reset-recover',disabled=True)
+                yield Static('초기화 기록 없음',id='screens-reset-status',markup=False)
         with Collapsible(title='화면 추가·연결되지 않은 화면', id='screens-unassigned', collapsed=True):
             yield OptionList(id='screens-unassigned-list')
             yield Button('화면 추가', id='screens-add')
@@ -446,6 +503,16 @@ class ScreenPanel(Vertical):
             if not isinstance(value, dict) or not isinstance(value.get('targets'), list):
                 raise ValueError('잘못된 화면 조회 응답')
             self.report = value
+            reset=value.get('reset') or {}
+            if (reset.get('operation_id') and reset.get('state') in {'completed','rolled_back'}
+                    and reset['operation_id']!=self._reset_config_seen):
+                shown=await self.owner.service.call('config-show')
+                self.owner._config=deepcopy(shown['config'])
+                self._reset_config_seen=reset['operation_id']
+            if reset.get('state') in {'queued','running','unknown','recovery_required'} or (self._reset_follow and reset.get('operation_id')==self._reset_follow):
+                self.session_notice = dict(reset,label='DID 전체 초기화')
+                if reset.get('state') in {'completed','rolled_back'}:
+                    self._reset_follow=None
             self.loaded = True
         except Exception as exc:
             self.report = {'targets': [], 'reason': safe_text(str(exc)), 'state': 'unknown'}
@@ -512,6 +579,18 @@ class ScreenPanel(Vertical):
         section.title = f'연결되지 않은 화면 {len(rows)}개 · 화면 추가' if rows else '화면 추가'
         self.query_one('#screens-identify', Button).disabled = not self.action_state('identify', self.target())[0]
         self.query_one('#screens-add', Button).disabled = not self.action_state('add', None)[0]
+        reset=self.report.get('reset') or {}
+        reset_text='초기화 기록 없음'
+        if reset.get('operation_id'):
+            reset_text='작업 '+safe_text(reset['operation_id'])+' · '+safe_text(reset.get('state'))+' · '+safe_text(reset.get('phase'))
+            reset_text+='\n'+safe_text(reset.get('reason') or '')
+            reset_text+='\n대상: '+', '.join(safe_text(t) for t in reset.get('targets',[]))
+            if reset.get('schedule_warning'):
+                reset_text+='\n'+safe_text(reset['schedule_warning'])
+            reset_text+='\n백업: /var/lib/ala/display-resets/'+safe_text(reset['operation_id'])+'.json (관리자 전용)'
+        self.query_one('#screens-reset-status',Static).update(reset_text)
+        self.query_one('#screens-reset',Button).disabled = not self.action_state('add',None)[0]
+        self.query_one('#screens-reset-recover',Button).disabled = self.mutating or (self.report.get('reset') or {}).get('state') not in {'unknown','recovery_required'}
         self.render_detail()
         if self.editor and self.editor.is_mounted:
             self.editor.refresh_status()
@@ -530,6 +609,9 @@ class ScreenPanel(Vertical):
         help_text = ACTIONS.get(key, ('', '작업 결과를 확인하세요.'))[1]
         locked = (self.mutating or self.identifying or bool(self.owner._active_job) or self.owner._chrome_mutating
                   or (self.owner._update_status or {}).get('state') in {'queued', 'running'})
+        reset=(self.report.get('reset') or {}).get('state')
+        if reset in {'queued','running','unknown','recovery_required'} and key not in {'stop','logs'}:
+            return False, 'DID 전체 초기화·복구 결과를 확인하세요.'
         if locked:
             return False, '다른 작업이 끝나면 사용할 수 있습니다.'
         if key in {'add', 'identify'}:
@@ -746,13 +828,23 @@ class ScreenPanel(Vertical):
             '실제 모니터에서 표시 번호를 확인하세요.' if success else
             '모니터 식별 결과를 기다리세요.' if running else
             '다시 조회한 뒤 모니터 식별을 다시 시도하세요.'))
+        if notice.get('label')=='DID 전체 초기화' and not notice.get('next_action'):
+            action=('모니터를 식별한 뒤 각 안내 화면의 사이트 주소를 설정하세요.' if success else
+                    '초기화 작업의 진행 단계와 대상별 결과를 확인하세요.' if running else
+                    '관리 도구에서 초기화 작업 상태와 복구 안내를 확인하세요.')
         full_action = action
         width = max(1, self.query_one('#screens-next', Static).content_size.width - cell_len('다음 · '))
         if cell_len(action) > width and '간편 설정' in action and '재로그인' in action:
             action = '간편 설정으로 확장 반영 후 GNOME 재로그인하세요.'
         tone = '#b5e9d9' if success else '#cbc2ef' if running else '#f3b8c5' if state in {'failed', 'error'} else '#f1d5a3'
         result = self.query_one('#screens-result', Static)
-        result.update(Text(self.result_message('모니터 식별', notice).split('\n', 1)[0], style=tone))
+        headline=self.result_message(notice.get('label','모니터 식별'),notice).split('\n',1)[0]
+        if notice.get('label')=='DID 전체 초기화' and state=='completed' and notice.get('execution_verified') is False:
+            headline='DID 전체 초기화 · 배정 확정 · 실행 확인 대기'
+            action='GNOME 로그인 후 모니터별 안내 화면과 빠른 점검을 확인하세요.'
+            full_action=action
+            tone='#f1d5a3'
+        result.update(Text(headline,style=tone))
         result.tooltip = safe_text(notice.get('reason') or '')
         next_line = self.query_one('#screens-next', Static)
         next_line.update('다음 · '+action)
@@ -912,12 +1004,51 @@ class ScreenPanel(Vertical):
     @on(Button.Pressed)
     def pressed(self, event):
         key = (event.button.id or '').removeprefix('screens-')
-        if key == 'add':
+        if key == 'reset' and not event.button.disabled:
+            self.owner.run_worker(self.review_reset(),group='reset-control',exclusive=True,exit_on_error=False)
+        elif key == 'reset-recover' and not event.button.disabled:
+            self.owner.run_worker(self.reset_request('screens-reset-recover',{'operation_id':(self.report.get('reset') or {}).get('operation_id')}),group='reset-control',exclusive=True,exit_on_error=False)
+        elif key == 'add':
             self.edit_target(new=True)
         elif key == 'refresh':
             self.activate()
         elif key == 'identify' and not event.button.disabled:
             self.owner.run_worker(self.session_action(key), group='screen-session-control', exclusive=True, exit_on_error=False)
+
+    async def review_reset(self):
+        if self.mutating or not self.action_state('add',None)[0]:
+            return
+        self.mutating=True
+        self.render_report()
+        try:
+            plan=await self.owner.service.call('screens-reset-preview')
+            if plan.get('state')!='ready':
+                self.session_notice=dict(plan,label='DID 전체 초기화')
+                return
+            def selected(approved):
+                if approved:
+                    self.owner.run_worker(self.reset_request('screens-reset-submit',{'review':plan['review']}),group='reset-control',exclusive=True,exit_on_error=False)
+            self.owner.push_screen(ResetConfirmation(plan),selected)
+        except Exception as exc:
+            self.session_notice={'label':'DID 전체 초기화','state':'unknown','reason':safe_text(str(exc))}
+        finally:
+            self.mutating=False
+            self.render_report()
+
+    async def reset_request(self,action,payload):
+        if self.mutating:
+            return
+        self.mutating=True
+        self.render_report()
+        try:
+            result=await self.owner.service.call(action,payload)
+            self._reset_follow=result.get('operation_id')
+            self.session_notice=dict(result,label='DID 전체 초기화')
+        except Exception as exc:
+            self.session_notice={'label':'DID 전체 초기화','state':'unknown','reason':safe_text(str(exc))}
+        finally:
+            self.mutating=False
+            await self.refresh_state(wait=True)
 
     async def session_action(self, action, *, target_id=None):
         target = target_id or self.selected

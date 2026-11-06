@@ -200,6 +200,20 @@ def busy_screen_swaps():
             fail('화면 교환 기록이 손상됐습니다. 복구 상태를 확인한 뒤 CLI를 갱신하세요.')
 
 def busy_display_operations():
+    fence = ROOT / 'var/lib/ala-runtime/display-reset.json'
+    if fence.exists() or fence.is_symlink():
+        for parent in [fence, *fence.parents]:
+            if parent.is_symlink():
+                fail('DID 초기화 보호 경로의 심볼릭 링크를 허용하지 않습니다.')
+            if parent == ROOT:
+                break
+            if parent.exists():
+                info=parent.stat()
+                if info.st_uid != OWNER or info.st_mode & 0o022:
+                    fail('DID 초기화 보호 기록 권한 확인 필요')
+        value=json.loads(fence.read_text())
+        if type(value.get('pending')) is not bool or value['pending']:
+            fail('DID 초기화 또는 복구 완료 후 CLI를 갱신하세요.')
     busy_screen_swaps()
     targets = ROOT / 'var/lib/ala-runtime/targets'
     if not targets.exists():
