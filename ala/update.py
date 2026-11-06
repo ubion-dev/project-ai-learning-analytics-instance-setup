@@ -329,6 +329,9 @@ def check_bundle_compatibility(bundle, *, paths=None, host=None):
             or any(type(schema) is not int or schema not in {1, 2} for schema in supported)
             or len(set(supported)) != len(supported)):
         raise ValueError('자동 갱신 후보의 관리·화면·프론트 프로토콜이 호환되지 않습니다.')
+    from .display_reset import read_fence
+    if read_fence(paths) is not None and value.get('display_reset_protocol')!=1:
+        raise ValueError('초기화 보호 기록을 지원하는 갱신 후보가 필요합니다.')
     required = {1}  # Existing schema-1 installations remain a supported baseline.
     store = RuntimeStore(paths, host)
     store._safe(paths.config)

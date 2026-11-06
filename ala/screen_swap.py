@@ -94,6 +94,12 @@ class Store:
 
 def guard(*, paths=None, host=None, target=None, operation_id=None):
     """An unfinished journal fences changes even after its lease/boot expired."""
+    from .display_reset import guard as reset_guard
+    reset_guard(paths=paths, host=host)
+    if target is not None:
+        from .display_reset import read_fence
+        if target in (read_fence(paths) or {}).get('retired',[]):
+            raise RuntimeError('초기화에서 제외된 DID입니다. 다른 ID로 새 화면을 추가하세요.')
     pending = Store(paths, host).pending(target)
     if any(v['operation_id'] != operation_id for v in pending):
         raise RuntimeError('두 화면 교환 또는 복구가 진행 중입니다. 교환 상태를 확인하세요.')
@@ -101,6 +107,8 @@ def guard(*, paths=None, host=None, target=None, operation_id=None):
 
 def note_stop(target, *, paths=None, host=None):
     """Called under the common lock before a public stop invalidates a lease."""
+    from .display_reset import note_stop as reset_stop
+    reset_stop(target, paths=paths, host=host)
     store = Store(paths, host)
     for value in store.pending(target):
         stopped = value.setdefault('stop_requests', [])

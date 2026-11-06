@@ -107,7 +107,7 @@ def build(output: Path, wheelhouse: Path | None = None, root=ROOT):
         (stage / 'COMPATIBILITY.json').write_text(json.dumps({
             'schema_version': 1, 'runtime_protocol': 1, 'config_schemas': [1, 2],
             'extension_protocol': 1, 'frontend_protocol': 1,
-            'setup_page_protocol': 1, 'screen_swap_protocol': 1, 'workspace_protocol': 1,
+            'setup_page_protocol': 1, 'screen_swap_protocol': 1, 'workspace_protocol': 1, 'display_reset_protocol': 1,
         }, sort_keys=True, indent=2) + '\n')
         files = {str(p.relative_to(stage)): digest(p) for p in sorted(stage.rglob('*')) if p.is_file()}
         (stage / 'MANIFEST.json').write_text(json.dumps({'schema_version': 1, 'version': version, 'files': files}, sort_keys=True, indent=2) + '\n')

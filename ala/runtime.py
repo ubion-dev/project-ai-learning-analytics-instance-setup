@@ -369,12 +369,15 @@ class RuntimeStore:
         self._write(self.state_path(target), state)
         return state
 
-    def selections(self):
+    def selections(self, *, include_retired=False):
         directory = self.base / 'targets'
         if not directory.exists():
             return []
         self._safe(directory)
-        return [self.load(path.name) for path in sorted(directory.iterdir()) if path.is_dir() and TARGET.fullmatch(path.name)]
+        from .display_reset import read_fence
+        fence=read_fence(self.paths)
+        retired=set((fence or {}).get('retired',[])) if not include_retired else set()
+        return [self.load(path.name) for path in sorted(directory.iterdir()) if path.is_dir() and TARGET.fullmatch(path.name) and path.name not in retired]
 
 
 def snapshot(target='default', *, paths=None, host=None):
@@ -506,6 +509,8 @@ def bootstrap(target, release, config, *, paths=None, host=None):
 
 def load_user_selection(target='default', *, paths=None, host=None, observation=False):
     """A user may read, never create, a root-owned committed/trial snapshot."""
+    from .display_reset import user_guard
+    user_guard(target, paths=paths, observation=observation)
     store = RuntimeStore(paths, host)
     state = store.load(target)
     if state is None:

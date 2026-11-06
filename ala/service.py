@@ -60,6 +60,10 @@ class Operations:
 
     def _check_target_preservation(self, current, new):
         from .runtime import RuntimeStore
+        from .display_reset import read_fence
+        retired=set((read_fence(self.paths) or {}).get('retired',[]))
+        if retired & {screen.id for screen in new.screen_targets()}:
+            raise ValueError('초기화에서 제외된 ID는 복구용으로 보존합니다. 다른 ID로 화면을 추가하세요.')
         states = RuntimeStore(self.paths, self.host).selections()
         if states and current.user != new.user:
             raise ValueError('등록된 화면 계정 변경은 별도 이전이 필요합니다. 현재 계정과 표시를 유지했습니다.')
@@ -85,6 +89,15 @@ class Operations:
                 store.stage(screen.id, release, config.to_dict())
 
     def dispatch(self, action, payload):
+        if action in {'screens-reset-preview','screens-reset-submit','screens-reset-status','screens-reset-recover'}:
+            from . import display_reset
+            if action == 'screens-reset-preview':
+                return display_reset.preview(self.config(),release=self.release,paths=self.paths,host=self.host)
+            if action == 'screens-reset-submit':
+                return display_reset.submit(payload.get('review'),release=self.release,paths=self.paths,host=self.host)
+            if action == 'screens-reset-recover':
+                return display_reset.recover(payload.get('operation_id'),release=self.release,paths=self.paths,host=self.host)
+            return display_reset.status(paths=self.paths,host=self.host,operation_id=payload.get('operation_id'))
         if action in {'screens-swap-submit', 'screens-swap-status', 'screens-swap-retry'}:
             from . import screen_swap
             if action == 'screens-swap-status':
@@ -162,6 +175,8 @@ class Operations:
             frontend = read_status(paths=self.paths)
             from . import display_onboarding, screen_swap
             value['initialization'] = display_onboarding.status(paths=self.paths, host=self.host)
+            from .display_reset import status as reset_status
+            value['reset'] = reset_status(paths=self.paths,host=self.host)
             for target in value.get('targets', []):
                 target['swap'] = screen_swap.status(paths=self.paths, host=self.host, target=target['id'])
                 target['reload'] = reload_status(target['id'], paths=self.paths, host=self.host)
