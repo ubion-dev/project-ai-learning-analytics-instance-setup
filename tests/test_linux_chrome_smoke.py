@@ -69,6 +69,53 @@ def require(condition, message):
         pytest.fail(message, pytrace=False)
 
 
+def test_real_linux_three_independent_chrome_waiting_windows_survive_one_handoff(tmp_path):
+    """Real Chrome concurrency and private profiles, without a GNOME claim."""
+    if sys.platform != 'linux': pytest.skip('Linux Chrome smoke is unavailable on this OS.')
+    require(os.geteuid() != 0, 'Waiting windows require an ordinary user and sandbox.')
+    chrome = shutil.which('google-chrome-stable') or shutil.which('google-chrome')
+    require(bool(chrome), 'Waiting windows require official Chrome.')
+    interfaces = [line.split(':', 1)[0].strip() for line in Path('/proc/self/net/dev').read_text().splitlines()[2:] if ':' in line]
+    require(bool(interfaces) and all(name == 'lo' for name in interfaces), 'Waiting-window smoke requires isolated networking.')
+    import time
+    from ala.cdp import PipeBrowser
+    from ala import display_health as health
+    from ala.config import Config
+    from ala.screen_coverage import identifier
+    supervisors = []
+    try:
+        for output in ('DP-1', 'DP-2', 'DP-3'):
+            target = identifier(output)
+            profile = tmp_path / '.config/ala/chrome-wait' / target
+            argv = [chrome, '--headless=new', '--disable-background-networking', '--disable-component-update',
+                    '--disable-default-apps', '--disable-extensions', '--disable-sync', '--metrics-recording-only',
+                    '--disable-dev-shm-usage', '--no-first-run', '--no-default-browser-check', '--password-store=basic',
+                    '--remote-debugging-pipe', '--user-data-dir=' + str(profile), health.RECOVERY_URL]
+            supervisor = health.Supervisor(Config(user='user', url=None), tmp_path, argv, target_id=target,
+                setup_context_callback=lambda output=output: {'output': output},
+                transport_factory=lambda args: PipeBrowser(args, spawn=quiet_spawn))
+            supervisors.append(supervisor)
+            supervisor.start()
+        deadline = time.monotonic() + 15
+        while not all(s.value.get('local_page_ready') for s in supervisors) and time.monotonic() < deadline:
+            for supervisor in supervisors:
+                event = supervisor.browser.next_event(timeout=0.1)
+                if event is not None: supervisor.event(event)
+        require(all(s.value.get('local_page_ready') is True for s in supervisors), 'Every independent waiting document must load.')
+        require(len({s.browser.pid for s in supervisors}) == 3, 'Each output must have an independent Chrome process.')
+        supervisors[0].browser.close()
+        for supervisor in supervisors[1:]:
+            require(supervisor.browser.poll() is None, 'Closing one waiting window must preserve other Chrome processes.')
+            tree = supervisor.browser.call('DOM.getDocument', session_id=supervisor.session)
+            found = supervisor.browser.call('DOM.querySelector', {'nodeId': tree['root']['nodeId'], 'selector': 'svg.setup-image'}, session_id=supervisor.session)
+            require(bool(found.get('nodeId')), 'Other output waiting images must remain loaded after handoff.')
+    except Exception:
+        pytest.fail('Independent sandboxed waiting-window lifecycle verification failed.', pytrace=False)
+    finally:
+        for supervisor in supervisors:
+            if supervisor.browser is not None: supervisor.browser.close()
+
+
 def quiet_spawn(program, arguments, environment, *, file_actions):
     # Chromium sets this before setproctitle_init. Adding a missing environment
     # entry then can break its original contiguous argv/environ layout check.

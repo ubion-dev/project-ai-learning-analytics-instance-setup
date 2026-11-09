@@ -27,13 +27,13 @@ ssh user@서버IP
 
 ## 4. ala 설치
 
-SSH로 접속한 **Rocky에서** 실행합니다. 아래는 공개 시험판 RC32의 설치 명령입니다. [Mac에서 받아 SCP로 전달](docs/INSTALL.md#mac에서-받아-scp로-전달)
+SSH로 접속한 **Rocky에서** 실행합니다. 아래는 공개 시험판 RC33의 설치 명령입니다. [Mac에서 받아 SCP로 전달](docs/INSTALL.md#mac에서-받아-scp로-전달)
 
 ```bash
 (
   set -e
-  version='0.1.0rc32'
-  tag='v0.1.0-rc.32'
+  version='0.1.0rc33'
+  tag='v0.1.0-rc.33'
   archive="ala-${version}.tar.gz"
   url="https://github.com/ubion-dev/project-ai-learning-analytics-instance-setup/releases/download/${tag}"
   mkdir -p "$HOME/ala-downloads/$version"

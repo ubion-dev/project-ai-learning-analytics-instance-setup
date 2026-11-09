@@ -100,6 +100,9 @@ def _committed_screen(config, target, store):
 def _autostart_enabled(config, paths):
     if not config.display:
         return False
+    from .screen_coverage import enabled
+    if enabled(config, paths):
+        return True
     targets = config.screen_targets()
     if any(target.autostart for target in targets):
         return True
@@ -723,6 +726,8 @@ def apply_display(config: Config, host=None, paths=None):
                 if current.stdout.strip() != 'graphical.target':
                     if host.execute(['systemctl','set-default','graphical.target']):
                         raise RuntimeError('그래픽 부팅 target 설정 실패')
+        from .screen_coverage import prepare as prepare_coverage
+        coverage_registered = prepare_coverage(config, RELEASE, paths, host)
         if desktop.exists() or desktop.is_symlink():
             _safe_parents(desktop)
             if not desktop.is_file() or DESKTOP_MARKER not in desktop.read_text():
@@ -737,8 +742,16 @@ def apply_display(config: Config, host=None, paths=None):
             if marker.is_file() and marker.stat().st_uid!=uid:
                 _backup_file(marker,paths.backups)
         prepared = _user_call(config, host, paths, 'prepare')
+        coverage_started = None
+        if config.display and coverage_registered:
+            coverage_started = _user_call(config, host, paths, 'coverage-start')
         workspace = prepared.get('workspace_policy')
         issues = []
+        if coverage_started is not None and coverage_started.get('exit_code', 1):
+            issues.append(_result('display.waiting', coverage_started.get('state', 'pending'),
+                                  '출력별 대기 안내 서비스 시작',
+                                  coverage_started.get('reason', '대기 안내의 시작을 확인하지 못했습니다.'),
+                                  '화면 계정의 GNOME 로그인과 ala-screen-coverage.service 상태를 확인하세요.'))
         if isinstance(workspace, dict) and workspace.get('state') not in {'ok','not_applicable'}:
             issues.append(_result('display.workspace.apply', workspace.get('state','unknown'),
                                   'DID 계정의 작업공간 하나', workspace.get('reason','작업공간 설정 확인 필요'),
@@ -1120,13 +1133,16 @@ def _stop_postcondition(config,home,host,paths,evidence):
 def user_action(action, *, target='default', config=None, home=None, host=None, paths=None, request=None):
     host, paths = host or Host(), paths or Paths()
     if config is None:
-        config, home = _load_user_config(paths,None if action in {'prepare','autostart-sync','reload-units','settings','workspace-settings','outputs','identify-outputs','extension-status','environment','monitor-layout','extension-enable','setup-preview-start'} else target)
+        config, home = _load_user_config(paths,None if action in {'prepare','autostart-sync','reload-units','settings','workspace-settings','outputs','identify-outputs','extension-status','environment','monitor-layout','extension-enable','setup-preview-start','coverage-start'} else target)
     elif os.getuid() == 0:
         raise PermissionError('Chrome은 일반 사용자로 실행하세요.')
-    if action not in {'prepare','autostart-sync','reload-units','settings','workspace-settings','outputs','identify-outputs','extension-status','environment','monitor-layout','extension-enable','setup-preview-start'}:
+    if action not in {'prepare','autostart-sync','reload-units','settings','workspace-settings','outputs','identify-outputs','extension-status','environment','monitor-layout','extension-enable','setup-preview-start','coverage-start'}:
         config=_context(config,target if not hasattr(config,'_target_id') else config.target_id)
     unit=unit_name(target if action=='environment' else config.target_id)
     home = Path(home)
+    if action == 'coverage-start':
+        from .screen_coverage import ensure
+        return ensure(config, home, host, paths)
     if action == 'setup-preview-start':
         from .setup_preview import ensure
         return ensure(config, home, host, paths)
@@ -1406,7 +1422,8 @@ def session_start(*, config=None, home=None, host=None, paths=None, environment=
             except (OSError, ValueError, RuntimeError, KeyError):
                 log('configuration', 'selection_rejected', 1)
                 codes.append(1)
-    if not targets and not initializing:
+    from .screen_coverage import enabled as coverage_enabled
+    if not targets and not initializing and not coverage_enabled(config, paths):
         if not codes:
             log('configuration','disabled')
         return 1 if codes else 0
@@ -1445,6 +1462,13 @@ def session_start(*, config=None, home=None, host=None, paths=None, environment=
         # A workspace policy failure must not stop or replace existing Chrome.
         # The read-only workspace checks retain its unresolved settings.
         log('workspace', 'unknown', 1)
+    from .screen_coverage import enabled as coverage_enabled, ensure as ensure_coverage
+    if coverage_enabled(config, paths):
+        try:
+            result = ensure_coverage(config, home, host, paths)
+            log('coverage', result.get('state', 'unknown'), result.get('exit_code', 2))
+        except (OSError, ValueError, RuntimeError):
+            log('coverage', 'pending', 2)
     if initializing:
         log('configuration', 'monitor_initialization_pending')
         from .display_onboarding import preview_for_user
@@ -1582,7 +1606,7 @@ def url_ready(url, *, opener=None):
 
 
 def run_chrome(*, target='default', config=None, home=None, host=None, paths=None, opener=None, supervisor_factory=None,
-               clock=None, sleeper=None, stop_requested=None, setup_preview=False):
+               clock=None, sleeper=None, stop_requested=None, setup_preview=False, screen_wait=False):
     host, paths = host or Host(), paths or Paths()
     if config is None:
         config,home=_load_user_config(paths,target,runtime=True)
@@ -1599,7 +1623,15 @@ def run_chrome(*, target='default', config=None, home=None, host=None, paths=Non
         current = Config.from_dict(RuntimeStore(paths, host)._read(paths.config))
         preview_allowed = config.target_id == TARGET and config.url is None and authorized(current, paths, host)
         if not preview_allowed: return 78
-    if pending_for_user(config, paths) and not preview_allowed:
+    waiting_allowed = False
+    if screen_wait:
+        from .screen_coverage import authorized, identifier
+        from .runtime import RuntimeStore
+        current = Config.from_dict(RuntimeStore(paths, host)._read(paths.config))
+        waiting_allowed = (config.url is None and config.target_id == identifier(config.output)
+                           and authorized(current, config.output, paths, host))
+        if not waiting_allowed: return 78
+    if pending_for_user(config, paths) and not (preview_allowed or waiting_allowed):
         return 78
     home=Path(home)
     try:
@@ -1610,13 +1642,17 @@ def run_chrome(*, target='default', config=None, home=None, host=None, paths=Non
         return 78
     if config.schema_version==2 and not preview_allowed:
         from .monitors import topology,resolve_output
-        resolved=resolve_output(topology(host=host),config.output,auto=config.target_id=='default')
+        inventory = topology(host=host)
+        from .screen_coverage import bound_context
+        bound_context(config, inventory)
+        resolved=resolve_output(inventory,config.output,auto=config.target_id=='default')
         if resolved['state']!='ok':
-            _autostart_log('output','placement_pending' if config.url is None else 'unresolved',2 if config.url is None else 78)
-            if config.url is not None: return 78
+            _autostart_log('output','placement_pending',2)
+            # Launch the local recovery page now; placement keeps retrying.
         if resolved['state']=='ok' and config.output is None:
             object.__setattr__(config,'_output',resolved['selector'])
-    profile=home / '.config/ala/chrome-setup-preview' if preview_allowed else _profile(home,config.target_id)
+    profile=(home / '.config/ala/chrome-wait' / config.target_id if waiting_allowed else
+             home / '.config/ala/chrome-setup-preview' if preview_allowed else _profile(home,config.target_id))
     _safe_parents(profile)
     if _foreign_profile_pid(paths,profile,allowed=(os.getpid(),)):
         raise RuntimeError('관리 밖 Chrome이 표시 프로필을 사용 중입니다.')
@@ -1640,6 +1676,8 @@ def run_chrome(*, target='default', config=None, home=None, host=None, paths=Non
     if config.url is None:
         def setup_context():
             if preview_allowed: return {'preparing': True}
+            if waiting_allowed:
+                return {'output': config.output, 'preparing': config.output is None}
             from .monitors import topology, resolve_output
             selected = resolve_output(topology(host=host), config.output, auto=config.target_id == 'default')
             output = selected.get('output') or {}

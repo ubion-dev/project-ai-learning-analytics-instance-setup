@@ -44,13 +44,14 @@ function processInfo(pid) {
     if (!uid) throw new Error('uid');
     return {uid:Number(uid[1]),ppid:Number(values[1]),ticks:values[19]};
 }
-function protectedConfig() {
-    const file = Gio.File.new_for_path('/etc/ala/config.json');
+function protectedJson(path) {
+    const file = Gio.File.new_for_path(path);
     const info = file.query_info('standard::type,standard::is-symlink,unix::uid,unix::mode',Gio.FileQueryInfoFlags.NOFOLLOW_SYMLINKS,null);
     if (info.get_is_symlink() || info.get_file_type() !== Gio.FileType.REGULAR ||
         info.get_attribute_uint32('unix::uid') !== 0 || (info.get_attribute_uint32('unix::mode') & 0o022)) throw new Error('config');
-    return JSON.parse(read('/etc/ala/config.json'));
+    return JSON.parse(read(path));
 }
+function protectedConfig() { return protectedJson('/etc/ala/config.json'); }
 function targetProfile(id) {
     return GLib.get_home_dir() + (id === 'default' ? '/.config/ala/chrome-display' : `/.config/ala/chrome-displays/${id}`);
 }
@@ -59,20 +60,32 @@ function validate(request, uid) {
     const config = protectedConfig();
     if (config.user !== GLib.get_user_name() || !config.display) throw new Error('account');
     const targets = config.schema_version === 1 ? [{id:'default'}] : config.screens;
-    if (!Array.isArray(targets) || !targets.some(t => t.id === request.target)) throw new Error('target');
+    if (!Array.isArray(targets)) throw new Error('target');
     if (read('/proc/sys/kernel/random/boot_id',128).trim() !== request.boot_id) throw new Error('boot');
     const supervisor = processInfo(request.supervisor_pid), browser = processInfo(request.browser_pid);
     if (supervisor.uid !== uid || browser.uid !== uid || browser.ppid !== request.supervisor_pid ||
         supervisor.ticks !== request.supervisor_start_ticks || browser.ticks !== request.browser_start_ticks) throw new Error('identity');
     const args = read(`/proc/${request.supervisor_pid}/cmdline`,65536).split('\0').filter(Boolean);
+    const waiting = args[3] === '_screen-wait';
+    if (waiting) {
+        const policy = protectedJson('/var/lib/ala-runtime/screen-coverage.json');
+        const output = request.output;
+        if (policy.protocol !== 1 || policy.enabled !== true || policy.user !== config.user ||
+            typeof output !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9_.:+-]{0,127}$/.test(output) ||
+            request.layout !== 'fullscreen' || targets.some(t => t.id === request.target) ||
+            request.target !== 'ala-wait-' + GLib.compute_checksum_for_string(GLib.ChecksumType.SHA256,output,-1).slice(0,20))
+            throw new Error('waiting target');
+    } else if (!targets.some(t => t.id === request.target)) throw new Error('target');
     const suffix = request.target === 'default' ? ['_chrome-run'] : ['_chrome-run','--target',request.target];
-    const expectedSuffixes = request.target === 'default' ? [suffix,['_chrome-run','--target','default']] : [suffix];
+    const expectedSuffixes = waiting ? [['_screen-wait',request.output]] :
+        request.target === 'default' ? [suffix,['_chrome-run','--target','default']] : [suffix];
     if (args[1] !== '-I' || !/^\/opt\/ala\/(?:current|releases\/[^/]+)\/entry\.py$/.test(args[2] || '') ||
         !expectedSuffixes.some(s => JSON.stringify(args.slice(3)) === JSON.stringify(s))) throw new Error('supervisor');
     let exe = GLib.file_read_link(`/proc/${request.browser_pid}/exe`).replace(/ \(deleted\)$/,'');
     if (exe !== '/opt/google/chrome/chrome') throw new Error('executable');
     const raw = read(`/proc/${request.browser_pid}/cmdline`,1048576);
-    const profile = targetProfile(request.target), token = `--user-data-dir=${profile}`;
+    const profile = waiting ? GLib.get_home_dir() + `/.config/ala/chrome-wait/${request.target}` : targetProfile(request.target);
+    const token = `--user-data-dir=${profile}`;
     const parts = raw.split('\0').filter(Boolean);
     const exact = parts.filter(p => p === token).length === 1;
     // Chromium may flatten argv without quoting. Only a whitespace-free exact
@@ -180,7 +193,7 @@ export default class AlaDisplay extends Extension {
     }
     GetStateAsync(_args,invocation) {
         this._handle(invocation,async () => ({state:'ok',gnome_version:Config.PACKAGE_VERSION,
-            capabilities:['identify-outputs','workspace-placement','monitor-layout-trial'],
+            capabilities:['identify-outputs','workspace-placement','monitor-layout-trial','output-waiting-windows'],
             layout_session:this._layoutSession,
             display_config:await call(Gio.DBus.session,'org.gnome.Mutter.DisplayConfig','/org/gnome/Mutter/DisplayConfig','org.gnome.Mutter.DisplayConfig','GetCurrentState',null),
             compositor_monitors:Main.layoutManager.monitors.map(m => ({x:m.x,y:m.y,width:m.width,height:m.height}))}));
