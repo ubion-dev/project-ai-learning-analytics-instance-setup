@@ -1,5 +1,11 @@
 # ala 공개판 진행 기록
 
+## 2026-11-09 RC32 모니터 준비 전 안내 구현
+
+- 사용자 요청에 따라 초기 안내 준비가 진행 중이면 Chrome 설치·활성 그래픽 세션을 확인한 뒤 독립 일반 사용자 서비스와 프로필로 로컬 설정 이미지를 먼저 표시하도록 구현했다. 확장이나 모니터 좌표를 기다리지 않으며 Docker/GPU 등 후속 단계도 계속 진행한다. 확정 출력별 안내 문서의 실제 로드를 확인한 뒤 임시 안내를 종료한다.
+- 기존 사이트·실행 중인 Chrome·수동 중지·미관리 서비스·프로필을 보존한다. 구성 변경이나 요청 종료는 임시 안내의 종료 조건이다. 출력 확인 전 일반 미설정 DID의 로컬 안내는 허용하되 사이트가 있는 DID의 출력 검증은 유지한다. 실제 표시 보장과 장비 설정 완료로 오인하지 않도록 안내·상태를 구분한다.
+- 전용 안내·인계·실패·권한/서비스 경로·독립 프로필·로컬 문서 관련 회귀 62개를 통과했고 로컬 Mac에서 Linux 전용 6개는 건너뛰었다. 전체 회귀·공개 검사·배포 묶음·CI와 실제 Linux Chrome의 오프라인 이미지 렌더링을 검증한 뒤 새 불변 RC32를 게시한다. 실제 Rocky/GNOME 패널 수용은 미수행이며 지정되지 않은 장비는 변경하지 않았다.
+
 ## 2026-11-09 RC31 서명 배포 완료
 
 - [PR #21](https://github.com/ubion-dev/project-ai-learning-analytics-instance-setup/pull/21)을 검증 후 main의 `387ed0a`로 병합하고 새 불변 태그 `v0.1.0-rc.31`을 게시했다. [서명 릴리스 실행](https://github.com/ubion-dev/project-ai-learning-analytics-instance-setup/actions/runs/42575997044)이 성공했으며 [RC31 시험판](https://github.com/ubion-dev/project-ai-learning-analytics-instance-setup/releases/tag/v0.1.0-rc.31)에 설치 묶음·SHA-256·Sigstore 서명 번들이 게시됐다. 기존 배포 파일은 덮어쓰지 않았다.

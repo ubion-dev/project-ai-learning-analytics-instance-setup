@@ -231,7 +231,8 @@ def screen_action(action,config:Config,target='default',host=None,paths=None,*,t
         active=(current.get('service') or {}).get('ActiveState') in {'active','activating'}
         if not (action=='start' and active):
             guard=_conflict(config,target,_inventory(config,host,paths),host=host,paths=paths,selected=context)
-            if guard['state']!='ok':return guard | {'exit_code':1 if guard['state']=='blocked' else 2}
+            if guard['state']!='ok' and not (context.url is None and guard['state']=='pending'):
+                return guard | {'exit_code':1 if guard['state']=='blocked' else 2}
     result=display.chrome_action(action,context,host=host,paths=paths)
     if action in {'start','restart'} and result.get('state')=='starting':
         return result | {'exit_code':2,'state':'pending','submitted':True,

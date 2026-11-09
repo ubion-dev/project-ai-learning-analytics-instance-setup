@@ -191,6 +191,16 @@ def run_worker(run_id, paths=None, host=None, engine_factory=None):
             raw['stages'].append(dict(id=stage_id, state=state, time=now()))
             store.save(raw)
             print(f'[{state}] {stage_id}', flush=True)
+            if stage_id == 'chrome' and state in {'completed', 'pending'} and raw.get('initialize_displays') is True:
+                try:
+                    from .display_onboarding import preview_ready
+                    result = preview_ready(run_id, paths=paths, host=host)
+                    if result is not None:
+                        raw['setup_preview'] = result
+                        store.save(raw)
+                except (OSError, ValueError, RuntimeError, KeyError):
+                    # A local image must never abort the remaining install stages.
+                    pass
         def substep(stage_id, step_id, state):
             raw.setdefault('substeps', []).append(dict(stage=stage_id, id=step_id, state=state, time=now()))
             store.save(raw)

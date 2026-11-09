@@ -85,6 +85,28 @@ def test_worker_failure_is_durable(store):
     assert run_worker(job['run_id'],store.paths,store.host,Engine)==1
     assert store.load(job['run_id'])['reason']=='mock failure'
 
+@pytest.mark.parametrize('preview_fails', [False, True])
+def test_worker_shows_setup_preview_before_docker_and_gpu_without_aborting(store, monkeypatch, preview_fails):
+    observed = []
+    def preview_ready(*args, **kwargs):
+        observed.append('preview')
+        if preview_fails: raise RuntimeError('synthetic preview failure')
+        return {'state': 'starting', 'exit_code': 0}
+    monkeypatch.setattr('ala.display_onboarding.preview_ready', preview_ready)
+    monkeypatch.setattr('ala.display_onboarding.request', lambda *a, **kw: {'state': 'completed'})
+    class Engine:
+        def __init__(self, *args, **kwargs): pass
+        def apply(self, on_stage):
+            on_stage('chrome', 'completed')
+            observed.extend(['docker', 'gpu'])
+            return Report([])
+    job = store.submit(Config(user='user'), Path('/release'), Path('/python'))
+    job['initialize_displays'] = True
+    store.save(job)
+    assert run_worker(job['run_id'], store.paths, store.host, Engine) == 0
+    assert observed == ['preview', 'docker', 'gpu']
+    assert store.load(job['run_id'])['state'] == 'completed'
+
 def test_lock_exclusion_and_path_validation(store):
     with change_lock(store.paths):
         with pytest.raises(RuntimeError):

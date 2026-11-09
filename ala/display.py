@@ -839,8 +839,8 @@ def _profile(home,target='default'):
     return home / ('.config/ala/chrome-display' if target=='default' else '.config/ala/chrome-displays/'+target)
 
 
-def chrome_arguments(config, home, manager, *, supervised=False):
-    args = ['/usr/bin/google-chrome-stable', '--user-data-dir=' + str(_profile(home,config.target_id)),
+def chrome_arguments(config, home, manager, *, supervised=False, profile=None):
+    args = ['/usr/bin/google-chrome-stable', '--user-data-dir=' + str(profile or _profile(home,config.target_id)),
             '--no-first-run', '--no-default-browser-check',
             '--hide-crash-restore-bubble', '--password-store=basic']
     if config.layout=='fullscreen':args.insert(2,'--start-fullscreen')
@@ -1120,13 +1120,16 @@ def _stop_postcondition(config,home,host,paths,evidence):
 def user_action(action, *, target='default', config=None, home=None, host=None, paths=None, request=None):
     host, paths = host or Host(), paths or Paths()
     if config is None:
-        config, home = _load_user_config(paths,None if action in {'prepare','autostart-sync','reload-units','settings','workspace-settings','outputs','identify-outputs','extension-status','environment','monitor-layout','extension-enable'} else target)
+        config, home = _load_user_config(paths,None if action in {'prepare','autostart-sync','reload-units','settings','workspace-settings','outputs','identify-outputs','extension-status','environment','monitor-layout','extension-enable','setup-preview-start'} else target)
     elif os.getuid() == 0:
         raise PermissionError('Chrome은 일반 사용자로 실행하세요.')
-    if action not in {'prepare','autostart-sync','reload-units','settings','workspace-settings','outputs','identify-outputs','extension-status','environment','monitor-layout','extension-enable'}:
+    if action not in {'prepare','autostart-sync','reload-units','settings','workspace-settings','outputs','identify-outputs','extension-status','environment','monitor-layout','extension-enable','setup-preview-start'}:
         config=_context(config,target if not hasattr(config,'_target_id') else config.target_id)
     unit=unit_name(target if action=='environment' else config.target_id)
     home = Path(home)
+    if action == 'setup-preview-start':
+        from .setup_preview import ensure
+        return ensure(config, home, host, paths)
     if action == 'extension-enable':
         return _extension_activation(host, apply=True)
     if action == 'monitor-layout':
@@ -1444,6 +1447,14 @@ def session_start(*, config=None, home=None, host=None, paths=None, environment=
         log('workspace', 'unknown', 1)
     if initializing:
         log('configuration', 'monitor_initialization_pending')
+        from .display_onboarding import preview_for_user
+        if preview_for_user(config, paths):
+            from .setup_preview import ensure
+            try:
+                result = ensure(config, home, host, paths)
+                log('setup_preview', result.get('state', 'unknown'), result.get('exit_code', 2))
+            except (OSError, ValueError, RuntimeError):
+                log('setup_preview', 'pending', 2)
         return 78
     for context in targets:
         codes.append(_session_target_start(context,home,host,paths,log))
@@ -1571,7 +1582,7 @@ def url_ready(url, *, opener=None):
 
 
 def run_chrome(*, target='default', config=None, home=None, host=None, paths=None, opener=None, supervisor_factory=None,
-               clock=None, sleeper=None, stop_requested=None):
+               clock=None, sleeper=None, stop_requested=None, setup_preview=False):
     host, paths = host or Host(), paths or Paths()
     if config is None:
         config,home=_load_user_config(paths,target,runtime=True)
@@ -1581,7 +1592,14 @@ def run_chrome(*, target='default', config=None, home=None, host=None, paths=Non
     if not config.display:
         return 2
     from .display_onboarding import pending_for_user
-    if pending_for_user(config, paths):
+    preview_allowed = False
+    if setup_preview:
+        from .setup_preview import TARGET, authorized
+        from .runtime import RuntimeStore
+        current = Config.from_dict(RuntimeStore(paths, host)._read(paths.config))
+        preview_allowed = config.target_id == TARGET and config.url is None and authorized(current, paths, host)
+        if not preview_allowed: return 78
+    if pending_for_user(config, paths) and not preview_allowed:
         return 78
     home=Path(home)
     try:
@@ -1590,15 +1608,15 @@ def run_chrome(*, target='default', config=None, home=None, host=None, paths=Non
     except _ReadinessCanceled:
         _autostart_log('readiness','canceled',78)
         return 78
-    if config.schema_version==2:
+    if config.schema_version==2 and not preview_allowed:
         from .monitors import topology,resolve_output
         resolved=resolve_output(topology(host=host),config.output,auto=config.target_id=='default')
         if resolved['state']!='ok':
-            _autostart_log('output','unresolved',78)
-            return 78
-        if config.output is None:
+            _autostart_log('output','placement_pending' if config.url is None else 'unresolved',2 if config.url is None else 78)
+            if config.url is not None: return 78
+        if resolved['state']=='ok' and config.output is None:
             object.__setattr__(config,'_output',resolved['selector'])
-    profile=_profile(home,config.target_id)
+    profile=home / '.config/ala/chrome-setup-preview' if preview_allowed else _profile(home,config.target_id)
     _safe_parents(profile)
     if _foreign_profile_pid(paths,profile,allowed=(os.getpid(),)):
         raise RuntimeError('관리 밖 Chrome이 표시 프로필을 사용 중입니다.')
@@ -1610,15 +1628,18 @@ def run_chrome(*, target='default', config=None, home=None, host=None, paths=Non
     if not marker.exists():
         atomic_write(marker,'ala display profile v1\n',0o600)
     from .display_health import Supervisor
-    args=chrome_arguments(config,home,manager,supervised=True)
+    args=chrome_arguments(config,home,manager,supervised=True,profile=profile)
     options={}
+    if stop_requested is not None:
+        options['stop_requested'] = stop_requested
     if config.target_id!='default' or config.config_revision or config.frontend.enabled or config.schema_version==2:
-        options={'target_id':config.target_id,'config_revision':config.config_revision,'frontend':config.frontend}
-    if config.schema_version==2 or config.output is not None:
+        options.update(target_id=config.target_id,config_revision=config.config_revision,frontend=config.frontend)
+    if not preview_allowed and (config.schema_version==2 or config.output is not None):
         from .monitors import placement
         options['placement_callback']=lambda value:placement(config,value,host=host,apply=True)
     if config.url is None:
         def setup_context():
+            if preview_allowed: return {'preparing': True}
             from .monitors import topology, resolve_output
             selected = resolve_output(topology(host=host), config.output, auto=config.target_id == 'default')
             output = selected.get('output') or {}

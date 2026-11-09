@@ -39,11 +39,13 @@ RECOVERY_URL = 'data:text/html;charset=utf-8,' + urllib.parse.quote(RECOVERY_HTM
 STATES = {'waiting_site', 'waiting_configuration', 'healthy', 'recovering', 'failed', 'unknown'}
 
 
-def setup_page(*, output=None, display_number=None, target_id='default'):
+def setup_page(*, output=None, display_number=None, target_id='default', preparing=False):
     """An internal document, never a user-configurable URL or network endpoint."""
     number = str(display_number) if type(display_number) is int and 1 <= display_number <= 16 else '확인 필요'
     label = html.escape(str(output or '출력 확인 대기'))
     target = html.escape(str(target_id))
+    heading = '기기 설정 중' if preparing else '화면 설정 중'
+    context = '모니터 연결과 표시 환경을 준비하고 있습니다.' if preparing else f'화면 {number} · {label} · DID {target}'
     document = f'''<!doctype html><html lang="ko"><meta charset="utf-8">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'">
 <title>ALA 화면 설정 안내</title><style>
@@ -51,9 +53,18 @@ html{{background:#17161d;color:#e9f0f7;font-family:sans-serif}}
 body{{margin:0;min-height:100vh;display:grid;place-content:center;text-align:center;padding:0 5vw;box-sizing:border-box}}
 .number{{font-size:clamp(4rem,15vw,12rem);color:#b5e9d9;font-weight:bold}}
 h1{{font-size:clamp(1.5rem,3vw,3rem)}}p{{font-size:clamp(1rem,2vw,2rem);color:#cbc2ef}}
-</style><div class="number">화면 {number}</div><p>{label} · DID {target}</p>
-<h1>화면 관리에서 사이트를 설정해 주세요</h1>
-<p>SSH에서 ala 실행 → 화면 관리 → 설정 → 사이트 주소 저장 → 설정 적용</p></html>'''
+.setup-image{{width:min(42vw,480px);height:24vh;margin:auto;color:#b5e9d9}}
+.pulse{{animation:pulse 2s ease-in-out infinite}}
+@keyframes pulse{{50%{{opacity:.35}}}}
+@media(prefers-reduced-motion:reduce){{.pulse{{animation:none}}}}
+</style><svg class="setup-image" viewBox="0 0 320 180" role="img" aria-label="모니터 설정 안내">
+<rect x="15" y="16" width="210" height="130" rx="12" fill="#242735" stroke="currentColor" stroke-width="5"/>
+<path d="M98 147v18m-30 0h60" fill="none" stroke="currentColor" stroke-width="5" stroke-linecap="round"/>
+<rect x="206" y="57" width="100" height="98" rx="10" fill="#242735" stroke="#cbc2ef" stroke-width="5"/>
+<g fill="currentColor" class="pulse"><circle cx="78" cy="80" r="7"/><circle cx="120" cy="80" r="7"/><circle cx="162" cy="80" r="7"/></g>
+</svg><h1>{heading}</h1><p>{context}</p>
+<p>준비가 끝나면 이 안내가 모니터별 화면으로 이어집니다.<br>화면 관리에서 모니터 배치와 사이트를 설정해 주세요.</p>
+<p>SSH에서 ala 실행 → 화면 관리 → 사이트 주소 저장 → 설정 적용</p></html>'''
     return 'data:text/html;charset=utf-8,' + urllib.parse.quote(document)
 
 
@@ -421,7 +432,8 @@ class Supervisor:
             except (OSError, ValueError, RuntimeError, KeyError, TypeError):
                 context = {}
         url = setup_page(output=context.get('output', self.config.output),
-                         display_number=context.get('display_number'), target_id=self.target_id)
+                         display_number=context.get('display_number'), target_id=self.target_id,
+                         preparing=context.get('preparing') is True)
         self.value.update(last_checked=stamp(self.clock()), state='waiting_configuration',
                           http_status=None, target_matches_config=False,
                           reason='설정 안내 표시 중' if self.value.get('local_page_ready') else '설정 안내 문서 확인 중',

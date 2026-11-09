@@ -116,8 +116,11 @@ def update_phase(phase):
 def main(argv=None, *, service=None):
     argv = list(sys.argv[1:] if argv is None else argv)
     # Not part of the public command grammar. Root-owned installed entry only.
-    if argv and argv[0] in {'_privileged','_worker','_session','_chrome-run','_chrome-user','_update-worker', '_runtime-dispatch', '_auto-update', '_frontend-worker', '_frontend-control', '_auto-bootstrap', '_runtime-worker', '_screen-worker', '_display-onboarding-worker', '_swap-worker', '_swap-recover', '_reset-worker', '_reset-recover', '_layout-worker', '_layout-recover', '_layout-restore'}:
+    if argv and argv[0] in {'_privileged','_worker','_session','_chrome-run','_chrome-user','_update-worker', '_runtime-dispatch', '_auto-update', '_frontend-worker', '_frontend-control', '_auto-bootstrap', '_runtime-worker', '_screen-worker', '_display-onboarding-worker', '_swap-worker', '_swap-recover', '_reset-worker', '_reset-recover', '_layout-worker', '_layout-recover', '_layout-restore', '_setup-preview'}:
         try:
+            if argv == ['_setup-preview']:
+                from .setup_preview import run
+                return run()
             if argv == ['_layout-restore']:
                 from .jobs import trusted_release
                 from .system import platform_error

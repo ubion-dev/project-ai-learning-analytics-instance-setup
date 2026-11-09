@@ -17,6 +17,52 @@ pytestmark = pytest.mark.skipif(
 )
 
 
+@pytest.mark.parametrize('preparing', [False, True])
+def test_real_linux_offline_setup_image_and_document_without_http(tmp_path, preparing):
+    if sys.platform != 'linux':
+        pytest.skip('Linux Chrome smoke is unavailable on this OS.')
+    require(os.geteuid() != 0, 'Setup image smoke requires a normal user and Chrome sandbox.')
+    chrome = shutil.which('google-chrome-stable') or shutil.which('google-chrome')
+    require(bool(chrome), 'Setup image smoke requires official Chrome.')
+    interfaces = [line.split(':', 1)[0].strip() for line in Path('/proc/self/net/dev').read_text().splitlines()[2:] if ':' in line]
+    require(bool(interfaces) and all(name == 'lo' for name in interfaces), 'Setup image smoke requires isolated loopback-only networking.')
+    import base64
+    import time
+    from ala.cdp import PipeBrowser
+    from ala import display_health as health
+    from ala.config import Config
+    browser = None
+    supervisor = None
+    try:
+        argv = [chrome, '--headless=new', '--disable-background-networking', '--disable-component-update',
+                '--disable-default-apps', '--disable-extensions', '--disable-sync', '--metrics-recording-only',
+                '--disable-dev-shm-usage', '--no-first-run', '--no-default-browser-check', '--password-store=basic',
+                '--remote-debugging-pipe', '--user-data-dir=' + str(tmp_path / 'setup-image-profile'), health.RECOVERY_URL]
+        supervisor = health.Supervisor(Config(user='user', url=None), tmp_path, argv,
+            setup_context_callback=lambda: {'preparing': preparing, 'output': 'DP-1', 'display_number': 1},
+            transport_factory=lambda args: PipeBrowser(args, spawn=quiet_spawn))
+        supervisor.start()
+        browser = supervisor.browser
+        deadline = time.monotonic() + 10
+        while not supervisor.value.get('local_page_ready') and time.monotonic() < deadline:
+            event = browser.next_event(timeout=0.1)
+            if event is not None: supervisor.event(event)
+        require(supervisor.value.get('local_page_ready') is True, 'Local setup document did not finish loading.')
+        tree = browser.call('DOM.getDocument', session_id=supervisor.session)
+        root = tree.get('root', {}).get('nodeId')
+        image = browser.call('DOM.querySelector', {'nodeId': root, 'selector': 'svg.setup-image'}, session_id=supervisor.session)
+        require(bool(image.get('nodeId')), 'Inline monitor setup image was not rendered in the document.')
+        frame = browser.call('Page.captureScreenshot', {'format': 'png'}, session_id=supervisor.session)
+        data = base64.b64decode(frame.get('data', ''))
+        require(data.startswith(b'\x89PNG\r\n\x1a\n') and len(data) > 1000, 'Setup document screenshot was empty.')
+        require(supervisor.value['state'] == 'waiting_configuration' and supervisor.value['target_matches_config'] is False,
+                'Local setup image must remain configuration-pending, not a healthy site.')
+    except Exception:
+        pytest.fail('Sandboxed offline setup-image rendering or document verification failed.', pytrace=False)
+    finally:
+        if browser is not None: browser.close()
+
+
 def require(condition, message):
     # Do not let assertion introspection publish proc argv or temporary paths.
     if not condition:
