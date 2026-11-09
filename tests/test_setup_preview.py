@@ -41,7 +41,7 @@ def test_preview_kept_until_owned_per_monitor_local_document_is_ready(environmen
     paths, host, release, config, inventory, _ = enable(environment)
     original = deepcopy(inventory)
     inventory['logical_outputs'] = []
-    ready = [False]
+    ready = set()
     actions = []
     def user_call(model, host, paths, action):
         actions.append(action)
@@ -52,7 +52,7 @@ def test_preview_kept_until_owned_per_monitor_local_document_is_ready(environmen
         if action == 'ensure-start': return {'state': 'starting', 'exit_code': 0}
         if action == 'status':
             return {'state': 'running', 'process_verified': True,
-                    'health': {'state': 'waiting_configuration', 'local_page_ready': ready[0]}}
+                    'health': {'state': 'waiting_configuration', 'local_page_ready': model.target_id in ready}}
         raise AssertionError(action)
     monkeypatch.setattr(display, '_user_call', user_call)
     onboarding.request(config, release, paths=paths, host=host)
@@ -61,7 +61,11 @@ def test_preview_kept_until_owned_per_monitor_local_document_is_ready(environmen
     saved = Config.load(paths.config)
     assert result['state'] == 'pending' and result['phase'] == 'starting'
     assert not onboarding.pending_for_user(saved, paths) and onboarding.preview_for_user(saved, paths)
-    ready[0] = True
+    ready.add(saved.screen_targets()[0].id)
+    assert len(saved.screen_targets()) > 1
+    assert onboarding.run_pending(paths=paths, host=host)['state'] == 'pending'
+    assert onboarding.preview_for_user(saved, paths)
+    ready.update(screen.id for screen in saved.screen_targets())
     assert onboarding.run_pending(paths=paths, host=host)['state'] == 'completed'
     assert not onboarding.preview_for_user(saved, paths)
 

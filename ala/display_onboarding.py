@@ -522,12 +522,12 @@ def _run(paths, host, value):
             return _wait(paths, host, value, '사용자 화면 환경과 안내 화면 시작을 기다립니다.')
     value['start_results'] = starts
     if value.get('preview_active'):
-        ready = False
+        ready = True
         for screen in candidate.screen_targets():
             observed = display._user_call(candidate.for_screen(screen.id), host, paths, 'status')
             health = observed.get('health') or {}
-            if observed.get('process_verified') is True and health.get('state') == 'waiting_configuration' and health.get('local_page_ready') is True:
-                ready = True
+            if not (observed.get('process_verified') is True and health.get('state') == 'waiting_configuration' and health.get('local_page_ready') is True):
+                ready = False
                 break
         if not ready:
             return _wait(paths, host, value, '설정 중 안내를 유지하며 모니터별 안내 문서의 실제 로드를 기다립니다.',
