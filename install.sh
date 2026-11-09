@@ -200,6 +200,27 @@ def busy_screen_swaps():
             fail('화면 교환 기록이 손상됐습니다. 복구 상태를 확인한 뒤 CLI를 갱신하세요.')
 
 def busy_display_operations():
+    layout = ROOT / 'var/lib/ala/monitor-layout/current.json'
+    if layout.exists() or layout.is_symlink():
+        for item in [layout, *layout.parents]:
+            if item.is_symlink():
+                fail('모니터 배치 복구 경로의 심볼릭 링크를 허용하지 않습니다.')
+            if item == ROOT:
+                break
+            if item.exists():
+                info = item.stat()
+                if info.st_uid != OWNER or info.st_mode & 0o022:
+                    fail('모니터 배치 복구 기록 권한 확인 필요')
+        info = layout.lstat()
+        if not stat.S_ISREG(info.st_mode) or info.st_size > 1024 * 1024:
+            fail('모니터 배치 복구 기록 형식 확인 필요')
+        value = json.loads(layout.read_text())
+        backup = value.get('backup')
+        if (type(value.get('schema_version')) is not int or value['schema_version'] != 1
+                or type(value.get('persistent')) is not bool or not isinstance(backup, dict)
+                or hashlib.sha256(json.dumps(backup, sort_keys=True, separators=(',', ':'), allow_nan=False).encode()).hexdigest() != value.get('backup_sha256')
+                or value.get('state') not in {'confirmed', 'rolled_back', 'not_applied'}):
+            fail('모니터 배치 확인 또는 복구 완료 후 CLI를 갱신하세요.')
     fence = ROOT / 'var/lib/ala-runtime/display-reset.json'
     if fence.exists() or fence.is_symlink():
         for parent in [fence, *fence.parents]:

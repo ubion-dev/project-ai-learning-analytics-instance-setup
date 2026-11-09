@@ -51,7 +51,7 @@ def protected_directory(path: Path, mode=0o700):
         raise PermissionError(f'소유자/쓰기 권한을 확인하세요: {path}')
 
 @contextmanager
-def change_lock(paths=Paths(), *, blocking=False):
+def change_lock(paths=Paths(), *, blocking=False, monitor_operation_id=None):
     lock = paths.at('/run/lock/ala/operation.lock')
     protected_directory(lock.parent, 0o755)
     fd = os.open(lock, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
@@ -63,6 +63,8 @@ def change_lock(paths=Paths(), *, blocking=False):
             fcntl.flock(fd, fcntl.LOCK_EX | (0 if blocking else fcntl.LOCK_NB))
         except BlockingIOError:
             raise RuntimeError('다른 설치 또는 도구 변경 작업이 진행 중입니다.') from None
+        from .monitor_change import guard
+        guard(paths, monitor_operation_id)
         yield
     finally:
         os.close(fd)

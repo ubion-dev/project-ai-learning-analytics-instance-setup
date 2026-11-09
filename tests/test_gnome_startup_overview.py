@@ -82,6 +82,7 @@ const Gio = {
     FileQueryInfoFlags: {NOFOLLOW_SYMLINKS: 0},
 };
 const GLib = {
+    uuid_string_random:()=> '00000000-0000-0000-0000-000000000001',
     Variant: class {
         constructor(_type, value) { this.value = value; }
         deep_unpack() { return this.value; }

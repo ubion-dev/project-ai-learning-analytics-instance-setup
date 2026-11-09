@@ -236,7 +236,7 @@ def _graphical_sessions(host, uid, *, greeters=None):
     return sessions, ''
 
 
-def _user_call(config, host, paths, action):
+def _user_call(config, host, paths, action, *, request=None):
     uid, _, home = _account(config, host)
     # GSettings reads the selected user's database without a live session bus.
     # Configuration inspections must not depend on graphical/session readiness.
@@ -257,6 +257,10 @@ def _user_call(config, host, paths, action):
             return {'exit_code':1,'state':'unknown','reason':'root 실행 스냅샷 경로를 확인하지 못했습니다.'}
         environment += ['ALA_RUNTIME_CONFIG='+pin,'ALA_RUNTIME_TARGET='+config.target_id,'ALA_RUNTIME_ACTION='+action]
     target_args=[] if config.target_id=='default' else ['--target',config.target_id]
+    if request is not None:
+        if action != 'monitor-layout':
+            raise ValueError('이 사용자 작업은 추가 입력을 받지 않습니다.')
+        target_args = ['--request', json.dumps(request, separators=(',', ':'), allow_nan=False)]
     result = host.run(['runuser', '-u', config.user, '--', 'env', '-i', *environment, str(RELEASE / '.venv/bin/python'),
                        '-I', str(RELEASE / 'entry.py'), '_chrome-user', action,*target_args], timeout=30)
     try:
@@ -1113,16 +1117,24 @@ def _stop_postcondition(config,home,host,paths,evidence):
                     'reason':'Chrome 프로세스는 종료됐으며 GNOME 관리 창이 사라지기를 기다립니다.'}
     return None
 
-def user_action(action, *, target='default', config=None, home=None, host=None, paths=None):
+def user_action(action, *, target='default', config=None, home=None, host=None, paths=None, request=None):
     host, paths = host or Host(), paths or Paths()
     if config is None:
-        config, home = _load_user_config(paths,None if action in {'prepare','autostart-sync','reload-units','settings','workspace-settings','outputs','identify-outputs','extension-status','environment'} else target)
+        config, home = _load_user_config(paths,None if action in {'prepare','autostart-sync','reload-units','settings','workspace-settings','outputs','identify-outputs','extension-status','environment','monitor-layout','extension-enable'} else target)
     elif os.getuid() == 0:
         raise PermissionError('Chrome은 일반 사용자로 실행하세요.')
-    if action not in {'prepare','autostart-sync','reload-units','settings','workspace-settings','outputs','identify-outputs','extension-status','environment'}:
+    if action not in {'prepare','autostart-sync','reload-units','settings','workspace-settings','outputs','identify-outputs','extension-status','environment','monitor-layout','extension-enable'}:
         config=_context(config,target if not hasattr(config,'_target_id') else config.target_id)
     unit=unit_name(target if action=='environment' else config.target_id)
     home = Path(home)
+    if action == 'extension-enable':
+        return _extension_activation(host, apply=True)
+    if action == 'monitor-layout':
+        from .monitors import bridge
+        if not isinstance(request, dict):
+            raise ValueError('모니터 배치 입력이 필요합니다.')
+        value = bridge('ApplyLayout', request, host=host)
+        return value | {'exit_code': 0 if value.get('state') == 'ok' else 2}
     if action == 'reload-units':
         result=host.run(['systemctl','--user','daemon-reload'])
         return {'exit_code':result.returncode,'state':'ok' if result.returncode==0 else 'unknown'}
