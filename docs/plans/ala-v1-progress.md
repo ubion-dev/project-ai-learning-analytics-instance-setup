@@ -1,5 +1,12 @@
 # ala 공개판 진행 기록
 
+## 2026-11-09 RC31 서명 배포 완료
+
+- [PR #21](https://github.com/ubion-dev/project-ai-learning-analytics-instance-setup/pull/21)을 검증 후 main의 `387ed0a`로 병합하고 새 불변 태그 `v0.1.0-rc.31`을 게시했다. [서명 릴리스 실행](https://github.com/ubion-dev/project-ai-learning-analytics-instance-setup/actions/runs/42575997044)이 성공했으며 [RC31 시험판](https://github.com/ubion-dev/project-ai-learning-analytics-instance-setup/releases/tag/v0.1.0-rc.31)에 설치 묶음·SHA-256·Sigstore 서명 번들이 게시됐다. 기존 배포 파일은 덮어쓰지 않았다.
+- Linux CI에서 회귀 1,915개와 하위 검사 56개, 실제 Chrome 샌드박스 smoke 4개를 통과했다. 로컬 빌드와 Linux CI 묶음은 내용과 바이트가 일치했다. 게시 파일을 인증 없이 다시 다운로드해 동일 바이트·SHA-256·전체 manifest·격리 진입점을 검증했고, 고정 RC31 workflow 신원·저장소·태그·push 조건의 Sigstore 서명을 검증했다. RC30 신원으로 검증하면 거부되는 것도 확인했다.
+- Rocky에서는 `ala update --prerelease` → `ala --version` → `ala` 순서로 갱신하고 **화면 관리 → 모니터 배치·해상도**를 연다. 기존 설치는 화면의 **확장 갱신** 후 GNOME에서 한 번 로그아웃·로그인해야 새 코드가 로드된다. SSH 재접속과는 다르며 자동 로그아웃·GDM 재시작·재부팅은 하지 않는다.
+- 실제 Rocky/GNOME/패널의 화면·해상도·배율·확인 제한 시간·로그인 복원 수용은 아직 수행하지 않았다. [수용 기록](../ACCEPTANCE.md)에 별도로 확인하며, 지정되지 않은 실제 장비에는 접속하거나 설정을 변경하지 않았다.
+
 ## 2026-11-09 RC31 모니터 편집·저장·배포 준비
 
 - 사용자가 중간 단계마다 멈추지 않고 기능 완성과 Rocky에서 갱신 가능한 배포까지 진행하도록 명시적으로 승인했다. 합의한 모니터 기능을 완성하는 범위로 진행하며 분석 서버·중앙 관리 구현 완료를 주장하지 않는다. 지정되지 않은 실제 장비는 변경하지 않는다.
