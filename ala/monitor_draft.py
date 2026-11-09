@@ -1,0 +1,130 @@
+"""Monitor editor state. Pointer movement is never a configuration mutation."""
+from copy import deepcopy
+
+from .monitor_layout import build_plan
+
+
+class LayoutDraft:
+    def __init__(self, settings):
+        if settings.get('state') != 'ok' or 'edit_template' not in settings:
+            raise ValueError('활성 모니터별 지원 모드를 확인하세요. 복제 출력은 편집하지 않습니다.')
+        self.settings = deepcopy(settings)
+        self.request = deepcopy(settings['edit_template'])
+        self.selected = sorted(o['id'] for o in self.request['outputs'])[0]
+
+    @property
+    def dirty(self):
+        return self.request != self.settings['edit_template']
+
+    def output(self, output_id=None):
+        return next(o for o in self.request['outputs'] if o['id'] == (output_id or self.selected))
+
+    def modes(self, output_id=None):
+        return next(o['modes'] for o in self.settings['outputs'] if o['id'] == (output_id or self.selected))
+
+    def mode(self, output_id=None):
+        value = self.output(output_id)
+        return next(m for m in self.modes(output_id) if m['id'] == value['mode_id'])
+
+    def set_mode(self, mode_id):
+        if mode_id not in {m['id'] for m in self.modes()}:
+            raise ValueError('이 모니터의 지원 모드에서 선택하세요.')
+        value = self.output()
+        value['mode_id'] = mode_id
+        if value['scale'] not in self.mode()['supported_scales']:
+            value['scale'] = None
+
+    def set_scale(self, scale):
+        if type(scale) not in (int, float) or scale not in self.mode()['supported_scales']:
+            raise ValueError('선택한 모드에서 지원하는 배율을 선택하세요.')
+        self.output()['scale'] = scale
+
+    def rects(self):
+        logical = {o['connectors'][0]: o for o in self.settings['logical_outputs']}
+        result = []
+        for value in self.request['outputs']:
+            mode = self.mode(value['id'])
+            scale = value['scale'] or mode['preferred_scale']
+            width, height = mode['width'], mode['height']
+            if logical[value['id']]['transform'] % 2:
+                width, height = height, width
+            if self.settings['layout_mode'] == 1:
+                width, height = width / scale, height / scale
+            result.append(dict(value, width=round(width), height=round(height)))
+        return result
+
+    def validate(self):
+        return build_plan(self.settings, self.request)
+
+    def drop(self, source_id, x, y, target_id=None, *, snap=120):
+        """Commit once on release; reject a collision without moving a third output."""
+        if type(x) is not int or type(y) is not int or not -65536 <= x <= 65536 or not -65536 <= y <= 65536:
+            raise ValueError('모니터 좌표 범위를 확인하세요.')
+        before = deepcopy(self.request)
+        boxes = {o['id']: o for o in self.rects()}
+        source = self.output(source_id)
+        a = boxes[source_id]
+        if target_id and target_id != source_id:
+            target, b = self.output(target_id), boxes[target_id]
+            source['x'], source['y'], target['x'], target['y'] = b['x'], b['y'], a['x'], a['y']
+            # Adjacent unequal screens share the same pair footprint after a swap.
+            if a['y'] == b['y'] and a['x'] + a['width'] == b['x']:
+                source['x'] = a['x'] + b['width']
+            elif a['y'] == b['y'] and b['x'] + b['width'] == a['x']:
+                target['x'] = b['x'] + a['width']
+            elif a['x'] == b['x'] and a['y'] + a['height'] == b['y']:
+                source['y'] = a['y'] + b['height']
+            elif a['x'] == b['x'] and b['y'] + b['height'] == a['y']:
+                target['y'] = b['y'] + a['height']
+        else:
+            others = [b for key, b in boxes.items() if key != source_id]
+            xs = [edge for b in others for edge in (b['x'], b['x'] + b['width'], b['x'] - a['width'])]
+            ys = [edge for b in others for edge in (b['y'], b['y'] + b['height'], b['y'] - a['height'])]
+            near_x = min(xs, key=lambda p: abs(p - x), default=x)
+            near_y = min(ys, key=lambda p: abs(p - y), default=y)
+            source['x'], source['y'] = near_x if abs(near_x - x) <= snap else x, near_y if abs(near_y - y) <= snap else y
+        rects = self.rects()
+        touched = {source_id, target_id}
+        for index, a in enumerate(rects):
+            for b in rects[index + 1:]:
+                if (a['id'] in touched or b['id'] in touched) and (
+                        max(a['x'], b['x']) < min(a['x'] + a['width'], b['x'] + b['width'])
+                        and max(a['y'], b['y']) < min(a['y'] + a['height'], b['y'] + b['height'])):
+                    self.request = before
+                    raise ValueError('이 위치는 다른 모니터와 겹칩니다. 변경 전 위치를 유지했습니다.')
+
+    def nudge(self, dx, dy):
+        a = next(o for o in self.rects() if o['id'] == self.selected)
+        candidates = []
+        for b in self.rects():
+            if a['id'] == b['id']:
+                continue
+            cx, cy = b['x'] - a['x'], b['y'] - a['y']
+            if (dx and cx * dx > 0) or (dy and cy * dy > 0):
+                candidates.append((abs(cx) + abs(cy), b['id']))
+        if candidates:
+            self.drop(a['id'], a['x'], a['y'], min(candidates)[1])
+        else:
+            self.drop(a['id'], a['x'] + dx * a['width'], a['y'] + dy * a['height'])
+
+
+class Projection:
+    """Fit physical proportions to terminal cells (roughly twice as tall as wide)."""
+    def __init__(self, rects, width, height):
+        self.width, self.height = max(8, width), max(4, height)
+        self.min_x = min(r['x'] for r in rects) - 400
+        self.min_y = min(r['y'] for r in rects) - 300
+        world_w = max(r['x'] + r['width'] for r in rects) - self.min_x + 400
+        world_h = max(r['y'] + r['height'] for r in rects) - self.min_y + 300
+        self.factor = min((self.width - 2) / world_w, (self.height - 2) * 2 / world_h)
+        self.regions = {r['id']: (round((r['x'] - self.min_x) * self.factor),
+                                    round((r['y'] - self.min_y) * self.factor / 2),
+                                    max(3, round(r['width'] * self.factor)),
+                                    max(3, round(r['height'] * self.factor / 2))) for r in rects}
+
+    def hit(self, x, y, *, exclude=None):
+        return next((key for key, (left, top, w, h) in self.regions.items()
+                     if key != exclude and left <= x < left + w and top <= y < top + h), None)
+
+    def world(self, x, y):
+        return round(x / self.factor + self.min_x), round(y * 2 / self.factor + self.min_y)

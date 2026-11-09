@@ -1,4 +1,4 @@
-/* Protocol 1. No titles, arbitrary commands, display reconfiguration or URL data. */
+/* Protocol 1. Fixed window operations and session-only monitor layout trials. */
 import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
 import Meta from 'gi://Meta';
@@ -11,6 +11,7 @@ import * as Config from 'resource:///org/gnome/shell/misc/config.js';
 const SHELL_MAJOR = Config.PACKAGE_VERSION.split('.')[0];
 const IFACE = `<node><interface name="org.ala.Display1">
 <method name="GetState"><arg type="s" direction="out"/></method>
+<method name="ApplyLayout"><arg type="s" direction="in"/><arg type="s" direction="out"/></method>
 <method name="IdentifyOutputs"><arg type="s" direction="out"/></method>
 <method name="DismissStartupOverview"><arg type="s" direction="out"/></method>
 <method name="Inspect"><arg type="s" direction="in"/><arg type="s" direction="out"/></method>
@@ -138,6 +139,7 @@ function layoutRect(rect,layout) {
 export default class AlaDisplay extends Extension {
     enable() {
         this._uid = new Gio.Credentials().get_unix_user();
+        this._layoutSession = GLib.uuid_string_random();
         this._placements = new Map();
         // These public signals exist in both supported Mutter versions. Do not
         // fight a person's interactive drag with the periodic placement check.
@@ -178,9 +180,73 @@ export default class AlaDisplay extends Extension {
     }
     GetStateAsync(_args,invocation) {
         this._handle(invocation,async () => ({state:'ok',gnome_version:Config.PACKAGE_VERSION,
-            capabilities:['identify-outputs','workspace-placement'],
+            capabilities:['identify-outputs','workspace-placement','monitor-layout-trial'],
+            layout_session:this._layoutSession,
             display_config:await call(Gio.DBus.session,'org.gnome.Mutter.DisplayConfig','/org/gnome/Mutter/DisplayConfig','org.gnome.Mutter.DisplayConfig','GetCurrentState',null),
             compositor_monitors:Main.layoutManager.monitors.map(m => ({x:m.x,y:m.y,width:m.width,height:m.height}))}));
+    }
+    ApplyLayoutAsync([text],invocation) {
+        const object = this._object;
+        this._handle(invocation,async () => {
+            if (typeof text !== 'string' || text.length > 262144 || !object || !this._identifySessionReady() ||
+                protectedConfig().display !== true)
+                throw new Error('layout session');
+            const request = JSON.parse(text);
+            if (request.session !== this._layoutSession || !['verify','temporary'].includes(request.method) ||
+                !Number.isSafeInteger(request.serial) || !Array.isArray(request.outputs) ||
+                !request.outputs.length || request.outputs.length > 64)
+                throw new Error('layout request');
+            const state = await call(Gio.DBus.session,'org.gnome.Mutter.DisplayConfig','/org/gnome/Mutter/DisplayConfig',
+                'org.gnome.Mutter.DisplayConfig','GetCurrentState',null);
+            if (object !== this._object || !this._identifySessionReady() || protectedConfig().display !== true ||
+                request.serial !== state[0])
+                throw new Error('stale layout');
+            const physical = new Map(state[1].map(m => [m[0][0],m]));
+            const active = new Map(state[2].map(l => {
+                if (l[5].length !== 1) throw new Error('mirrored layout');
+                return [l[5][0][0],l];
+            }));
+            if (active.size !== request.outputs.length || state[1].some(m => m[2]['is-for-lease']))
+                throw new Error('layout membership');
+            const seen = new Set();
+            const logical = request.outputs.map(output => {
+                const old = active.get(output.id), monitor = physical.get(output.id);
+                if (!old || !monitor || seen.has(output.id) ||
+                    !Number.isSafeInteger(output.x) || output.x < 0 || output.x > 65536 ||
+                    !Number.isSafeInteger(output.y) || output.y < 0 || output.y > 65536 ||
+                    typeof output.scale !== 'number' || !Number.isFinite(output.scale) ||
+                    output.transform !== old[3] || output.primary !== old[4])
+                    throw new Error('layout output');
+                seen.add(output.id);
+                const mode = monitor[1].find(m => m[0] === output.mode_id);
+                if (!mode || !mode[5].includes(output.scale)) throw new Error('layout mode');
+                // These settings must not be reset by a layout-only request.
+                // Non-default RGB range has no round-trip contract here.
+                const props = monitor[2], preserved = {};
+                if (props['rgb-range'] !== undefined && props['rgb-range'] !== 1)
+                    throw new Error('unsupported RGB preservation');
+                if (props['is-underscanning'] !== undefined) {
+                    if (typeof props['is-underscanning'] !== 'boolean') throw new Error('underscanning');
+                    preserved.underscanning = new GLib.Variant('b',props['is-underscanning']);
+                }
+                if (props['color-mode'] !== undefined) {
+                    if (!Number.isSafeInteger(props['color-mode']) || props['color-mode'] < 0)
+                        throw new Error('color mode');
+                    preserved['color-mode'] = new GLib.Variant('u',props['color-mode']);
+                }
+                return [output.x,output.y,output.scale,output.transform,output.primary,
+                    [[output.id,output.mode_id,preserved]]];
+            });
+            if (state[3]['global-scale-required'] && new Set(request.outputs.map(o => o.scale)).size !== 1)
+                throw new Error('global scale');
+            const props = {};
+            if (state[3]['supports-changing-layout-mode'])
+                props['layout-mode'] = new GLib.Variant('u',state[3]['layout-mode']);
+            await call(Gio.DBus.session,'org.gnome.Mutter.DisplayConfig','/org/gnome/Mutter/DisplayConfig',
+                'org.gnome.Mutter.DisplayConfig','ApplyMonitorsConfig',new GLib.Variant('(uua(iiduba(ssa{sv}))a{sv})',
+                    [request.serial,request.method === 'verify' ? 0 : 1,logical,props]));
+            return {state:'ok',persistent:false};
+        },'모니터 배치 검증·적용을 완료하지 못했습니다. 세션과 지원 모드를 다시 조회하세요.');
     }
     _clearOutputLabels() {
         if (this._identifyTimer) GLib.Source.remove(this._identifyTimer);

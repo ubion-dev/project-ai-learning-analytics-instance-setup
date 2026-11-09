@@ -81,6 +81,7 @@ const Gio = {
     FileQueryInfoFlags:{NOFOLLOW_SYMLINKS:0},FileType:{REGULAR:1},
 };
 const GLib = {
+    uuid_string_random:()=> '00000000-0000-0000-0000-000000000001',
     Variant:class {constructor(_type,value) {this.value=value;}deep_unpack() {return this.value;}},
     get_user_name:()=> 'user',
     file_get_contents(path) {
@@ -133,7 +134,7 @@ def test_state_query_only_advertises_capability_without_showing_labels(version):
     run_extension("""
 const extension=new AlaDisplay();extension.enable();
 const result=await invoke(extension,'GetState');
-assert.deepEqual(result.capabilities,['identify-outputs','workspace-placement']);
+assert.deepEqual(result.capabilities,['identify-outputs','workspace-placement','monitor-layout-trial']);
 assert.equal(result.protocol,1);assertClean();
 """, version)
 

@@ -462,8 +462,9 @@ class ScreenPanel(Vertical):
         with Collapsible(title='화면 추가·연결되지 않은 화면', id='screens-unassigned', collapsed=True):
             yield OptionList(id='screens-unassigned-list')
             yield Button('화면 추가', id='screens-add')
-        yield Static('클릭·Enter 설정  ·  방향키 선택  ·  드래그 이동·교환', id='screens-help', markup=False)
+        yield Static('사이트 설정은 클릭·Enter · OS 배치는 모니터 배치·해상도 · 사이트 드래그는 DID 배정', id='screens-help', markup=False)
         with Horizontal(id='screens-actions'):
+            yield Button('모니터 배치·해상도', id='screens-monitor-layout')
             yield Button('모니터 식별', id='screens-identify')
             yield Button('다시 조회', id='screens-refresh')
 
@@ -528,7 +529,7 @@ class ScreenPanel(Vertical):
         return next((v for v in self.report.get('targets', []) if v.get('id') == target_id), None)
 
     def render_help(self):
-        self.query_one('#screens-help', Static).update('클릭·Enter 설정  ·  방향키 선택  ·  드래그 이동·교환')
+        self.query_one('#screens-help', Static).update('사이트 설정은 클릭·Enter · OS 배치는 모니터 배치·해상도 · 사이트 드래그는 DID 배정')
 
     def on_descendant_focus(self, event: events.DescendantFocus):
         self.render_help()
@@ -1004,7 +1005,10 @@ class ScreenPanel(Vertical):
     @on(Button.Pressed)
     def pressed(self, event):
         key = (event.button.id or '').removeprefix('screens-')
-        if key == 'reset' and not event.button.disabled:
+        if key == 'monitor-layout' and not event.button.disabled:
+            from .monitor_tui import MonitorEditor
+            self.owner.push_screen(MonitorEditor(self))
+        elif key == 'reset' and not event.button.disabled:
             self.owner.run_worker(self.review_reset(),group='reset-control',exclusive=True,exit_on_error=False)
         elif key == 'reset-recover' and not event.button.disabled:
             self.owner.run_worker(self.reset_request('screens-reset-recover',{'operation_id':(self.report.get('reset') or {}).get('operation_id')}),group='reset-control',exclusive=True,exit_on_error=False)

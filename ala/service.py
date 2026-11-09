@@ -89,6 +89,39 @@ class Operations:
                 store.stage(screen.id, release, config.to_dict())
 
     def dispatch(self, action, payload):
+        if action == 'monitor-extension-refresh':
+            from .display import _install_extension, _user_call
+            from .screens import inspect_session
+            from .display_reset import guard as reset_guard
+            from .screen_swap import guard as swap_guard
+            with change_lock(self.paths):
+                reset_guard(paths=self.paths, host=self.host)
+                swap_guard(paths=self.paths, host=self.host)
+                config = self.config()
+                if inspect_session(config, self.host) != 'ok':
+                    raise RuntimeError('활성·잠금 해제 GNOME 화면 계정을 확인하세요.')
+                _install_extension(self.paths)
+                result = _user_call(config, self.host, self.paths, 'extension-enable')
+            return result | {'reason': '확장 파일을 갱신했습니다. GNOME에서 한 번 로그아웃한 뒤 다시 로그인하세요. SSH를 끊는 것과 다릅니다.'}
+        if action in {'monitor-profile-status', 'monitor-profile-disable', 'monitor-profile-retry'}:
+            from . import monitor_profiles
+            if action == 'monitor-profile-status':
+                return monitor_profiles.status(paths=self.paths, host=self.host)
+            if action == 'monitor-profile-disable':
+                return monitor_profiles.disable(paths=self.paths, host=self.host)
+            return monitor_profiles.restore(release=self.release, paths=self.paths, host=self.host, retry=True)
+        if action in {'monitor-layout-submit', 'monitor-layout-status', 'monitor-layout-confirm',
+                      'monitor-layout-revert', 'monitor-layout-recover'}:
+            from . import monitor_change
+            if action == 'monitor-layout-submit':
+                return monitor_change.submit(payload.get('layout'), persistent=payload.get('persistent', False),
+                                             release=self.release, paths=self.paths, host=self.host)
+            if action == 'monitor-layout-status':
+                return monitor_change.status(paths=self.paths, host=self.host)
+            if action == 'monitor-layout-recover':
+                return monitor_change.recover(payload.get('operation_id'), paths=self.paths, host=self.host)
+            return monitor_change.decide(payload.get('operation_id'),
+                'confirm' if action == 'monitor-layout-confirm' else 'revert', paths=self.paths, host=self.host)
         if action in {'screens-reset-preview','screens-reset-submit','screens-reset-status','screens-reset-recover'}:
             from . import display_reset
             if action == 'screens-reset-preview':
@@ -163,6 +196,24 @@ class Operations:
             if action == 'runtime-stage':
                 return result
             return submit_apply(target, release=self.release, paths=self.paths, host=self.host)
+        if action in {'monitor-layout-state', 'monitor-layout-plan'}:
+            from .screens import _inventory, inspect_session
+            from .monitor_layout import build_plan
+            config = self.config()
+            session = inspect_session(config, self.host)
+            if session != 'ok':
+                return {'state': 'pending', 'session': session, 'exit_code': 2,
+                        'apply_supported': False,
+                        'reason': '화면 계정의 활성 GNOME 세션 하나와 잠금 해제를 확인하세요.'}
+            inventory = _inventory(config, self.host, self.paths)
+            settings = inventory.get('layout_settings', {'state': 'unknown'})
+            if inventory.get('state') != 'ok' or settings.get('state') != 'ok':
+                return {'state': 'unknown', 'exit_code': 2, 'apply_supported': False,
+                        'reason': settings.get('reason') or inventory.get('reason') or
+                                  '모니터별 지원 모드·배율을 확인하지 못했습니다.'}
+            if action == 'monitor-layout-state':
+                return settings | {'trial_supported': 'monitor-layout-trial' in inventory.get('capabilities', [])}
+            return build_plan(settings, payload.get('layout'))
         if action == 'screens-inspect':
             from .screens import inspect_screens, inspect_session
             from .runtime import settings_status, snapshot

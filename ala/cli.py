@@ -58,7 +58,10 @@ def parser():
     chrome.add_argument('--target', help='표시 대상 ID (생략하면 기존 기본 대상)')
     chrome.add_argument('--json', action='store_true')
     display = sub.add_parser('display', help='연결된 출력·관리 창·사이트 상태')
-    display.add_argument('action', nargs='?', choices=['list', 'status'], default='status')
+    display.add_argument('action', nargs='?', choices=['list', 'status', 'modes', 'plan', 'trial', 'apply',
+                         'trial-status', 'confirm', 'revert', 'recover'], default='status')
+    display.add_argument('file', nargs='?', type=Path, help='plan/trial의 배치 JSON 파일')
+    display.add_argument('--operation-id', help='confirm/revert/recover의 배치 시험 작업 ID')
     display.add_argument('--json', action='store_true')
     runs = sub.add_parser('runs').add_subparsers(dest='action', required=True)
     runs.add_parser('list').add_argument('--json', action='store_true')
@@ -113,8 +116,27 @@ def update_phase(phase):
 def main(argv=None, *, service=None):
     argv = list(sys.argv[1:] if argv is None else argv)
     # Not part of the public command grammar. Root-owned installed entry only.
-    if argv and argv[0] in {'_privileged','_worker','_session','_chrome-run','_chrome-user','_update-worker', '_runtime-dispatch', '_auto-update', '_frontend-worker', '_frontend-control', '_auto-bootstrap', '_runtime-worker', '_screen-worker', '_display-onboarding-worker', '_swap-worker', '_swap-recover', '_reset-worker', '_reset-recover'}:
+    if argv and argv[0] in {'_privileged','_worker','_session','_chrome-run','_chrome-user','_update-worker', '_runtime-dispatch', '_auto-update', '_frontend-worker', '_frontend-control', '_auto-bootstrap', '_runtime-worker', '_screen-worker', '_display-onboarding-worker', '_swap-worker', '_swap-recover', '_reset-worker', '_reset-recover', '_layout-worker', '_layout-recover', '_layout-restore'}:
         try:
+            if argv == ['_layout-restore']:
+                from .jobs import trusted_release
+                from .system import platform_error
+                from .monitor_profiles import restore
+                if os.geteuid() != 0 or platform_error():
+                    raise PermissionError('Rocky Linux root 작업입니다.')
+                release = trusted_release(Path(__file__).resolve().parents[1])
+                print(json.dumps(restore(release=release), ensure_ascii=False))
+                return 0
+            if argv[0] in {'_layout-worker', '_layout-recover'} and len(argv) == 2:
+                from .jobs import trusted_release
+                from .system import platform_error
+                from .monitor_change import run_worker, recover
+                if os.geteuid() != 0 or platform_error():
+                    raise PermissionError('Rocky Linux root 작업입니다.')
+                trusted_release(Path(__file__).resolve().parents[1])
+                result = (run_worker if argv[0] == '_layout-worker' else recover)(argv[1])
+                print(json.dumps(result, ensure_ascii=False))
+                return 0 if result.get('state') in {'confirmed', 'rolled_back', 'not_applied'} else 1
             if argv[0] in {'_display-onboarding-worker', '_swap-worker', '_swap-recover', '_reset-worker', '_reset-recover'}:
                 from .jobs import trusted_release
                 from .system import platform_error
@@ -221,6 +243,10 @@ def main(argv=None, *, service=None):
                 return run_chrome() if target == 'default' else run_chrome(target=target)
             if argv[0] == '_chrome-user' and len(argv) in {2, 3, 4}:
                 from .display import user_action
+                if len(argv) == 4 and argv[1:3] == ['monitor-layout', '--request']:
+                    value = user_action('monitor-layout', request=json.loads(argv[3]))
+                    print(json.dumps(value, ensure_ascii=False))
+                    return value.get('exit_code', 0)
                 target = None if len(argv) == 2 else argv[2] if len(argv) == 3 else argv[3] if argv[2] == '--target' else None
                 if len(argv) > 2 and target is None:
                     return 64
@@ -233,6 +259,11 @@ def main(argv=None, *, service=None):
             return 1
     p = parser()
     args = p.parse_args(argv)
+    if args.command == 'display':
+        if (args.action in {'plan', 'trial', 'apply'}) != (args.file is not None):
+            p.error('display plan/trial에는 배치 파일 하나가 필요합니다. 다른 명령에는 파일을 사용하지 않습니다.')
+        if (args.action in {'confirm', 'revert', 'recover'}) != (args.operation_id is not None):
+            p.error('display confirm/revert/recover에는 --operation-id가 필요합니다.')
     if args.command in {'setup', 'prepare'} and args.detach and not args.apply:
         p.error('--detach는 --apply와 함께 사용하세요.')
     if args.command == 'update':
@@ -371,7 +402,17 @@ def main(argv=None, *, service=None):
             result = svc.request('chrome', payload); emit(result, as_json)
             return result.get('exit_code', 0)
         if args.command == 'display':
-            result = svc.request('screens-inspect'); emit(result, as_json)
+            if args.action in {'plan', 'trial', 'apply'}:
+                from .monitor_layout import load_request
+                payload = {'layout': load_request(args.file)}
+                if args.action == 'apply': payload['persistent'] = True
+                result = svc.request('monitor-layout-plan' if args.action == 'plan' else 'monitor-layout-submit', payload)
+            elif args.action in {'trial-status', 'confirm', 'revert', 'recover'}:
+                result = svc.request('monitor-layout-status' if args.action == 'trial-status' else 'monitor-layout-' + args.action,
+                                     {} if args.operation_id is None else {'operation_id': args.operation_id})
+            else:
+                result = svc.request('monitor-layout-state' if args.action == 'modes' else 'screens-inspect')
+            emit(result, as_json)
             return result.get('exit_code', 0)
         if args.command == 'runs':
             result = svc.request('runs-list' if args.action == 'list' else 'runs-show', {} if args.action == 'list' else {'run_id': args.run_id})

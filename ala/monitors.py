@@ -41,7 +41,7 @@ def hardware_topology(paths=None):
 
 
 def bridge(method, request=None, *, host=None):
-    if method not in {'GetState', 'Inspect', 'Place', 'Closed', 'DismissStartupOverview', 'IdentifyOutputs'}:
+    if method not in {'GetState', 'Inspect', 'Place', 'Closed', 'DismissStartupOverview', 'IdentifyOutputs', 'ApplyLayout'}:
         raise ValueError('허용되지 않은 화면 bridge 작업입니다.')
     host = host or Host()
     argv = ['gdbus','call','--session','--dest',BUS,'--object-path',OBJECT,
@@ -152,10 +152,13 @@ def topology(*,host=None):
         if (not isinstance(capabilities, list) or len(capabilities) > 32
                 or any(not isinstance(item, str) or len(item) > 64 for item in capabilities)):
             raise ValueError()
+        from .monitor_layout import read_settings
         return {'state':'ok','protocol':PROTOCOL,'gnome_version':value['gnome_version'],
                 'serial':serial,'outputs':outputs,
                 'logical_outputs':[item | {'display_number': numbers[item['id']]} for item in normalized],
                 'capabilities': capabilities,
+                'layout_settings': read_settings(raw),
+                'layout_session': value.get('layout_session'),
                 'reason':'OS가 인식한 출력입니다. 외부 제어 장비의 패널 수는 확인하지 않습니다.'}
     except (ValueError,KeyError,TypeError,IndexError,StopIteration,AttributeError):
         return {'state':'unknown','outputs':[],'logical_outputs':[],
