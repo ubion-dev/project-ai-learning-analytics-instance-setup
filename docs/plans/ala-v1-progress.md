@@ -1,5 +1,12 @@
 # ala 공개판 진행 기록
 
+## 2026-11-09 RC32 서명 배포 완료
+
+- [PR #23](https://github.com/ubion-dev/project-ai-learning-analytics-instance-setup/pull/23)을 검증 후 main의 `764e9ff`로 병합하고 새 불변 태그 `v0.1.0-rc.32`를 게시했다. [서명 릴리스 실행](https://github.com/ubion-dev/project-ai-learning-analytics-instance-setup/actions/runs/42582913711)이 성공해 [RC32 시험판](https://github.com/ubion-dev/project-ai-learning-analytics-instance-setup/releases/tag/v0.1.0-rc.32)에 설치 묶음·SHA-256·Sigstore 서명 번들이 게시됐다. 기존 배포 파일은 변경하지 않았다.
+- 최종 PR CI와 서명 릴리스에서 각각 회귀 1,932개·하위 검사 56개·샌드박스 Linux Chrome 6개를 통과했다. Linux 검사는 네트워크가 루프백뿐인 환경의 실제 로컬 안내 문서 로드·SVG DOM·PNG 캡처를 포함하며 실제 Rocky/GNOME 패널 수용과는 구분한다. 중복 push CI에서는 기존 업데이트 TUI의 비동기 완료 확인 검사 1개가 실패했지만 같은 코드의 PR·릴리스 전체 검증은 통과했다.
+- 검사 도구 다운로드의 HTTP 504로 서명 작업을 재시도했으며 다섯 번째 실행에서 검증·서명·게시를 마쳤다. 게시 파일 3개를 GitHub 공식 자산 API에서 인증 없이 내려받아 로컬·Linux CI와 동일 바이트·전체 manifest·격리 진입점·태그에 고정된 Sigstore 신원을 검증했다. 이전 태그 신원으로 검증하면 거부됨을 확인했고 격리 RC31 설치의 공개 업데이트 조회도 RC32를 제안했다. 일반 릴리스 다운로드 주소의 504 응답을 별도로 관측했고, 동일 주소의 `?download=1` 경로에서도 파일 3개 다운로드와 해시·manifest·진입점·서명 전체 검증을 통과했다. 릴리스 안내에 기존 SHA-256·manifest 방식의 수동 설치 대안을 명시했다.
+- Rocky에서는 `ala update --prerelease` → `ala --version` → `ala`로 갱신하고 간편 설정의 **모니터별 안내 화면 준비**를 요청한다. Chrome 설치·잠금 해제된 그래픽 세션은 필요하다. 모든 대상의 안내 문서 로드 전에는 임시 안내를 유지하며 실제 패널 표시는 운영자가 확인한다. 실제 장비 변경·Rocky/GNOME/재부팅 수용은 수행하지 않았다.
+
 ## 2026-11-09 RC32 모니터 준비 전 안내 구현
 
 - 사용자 요청에 따라 초기 안내 준비가 진행 중이면 Chrome 설치·활성 그래픽 세션을 확인한 뒤 독립 일반 사용자 서비스와 프로필로 로컬 설정 이미지를 먼저 표시하도록 구현했다. 확장이나 모니터 좌표를 기다리지 않으며 Docker/GPU 등 후속 단계도 계속 진행한다. 확정 출력별 안내 문서의 실제 로드를 확인한 뒤 임시 안내를 종료한다.
