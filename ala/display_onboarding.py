@@ -67,12 +67,21 @@ def _fence(paths, value, *, pending, host=None):
     RuntimeStore(paths, host)._write(_fence_path(paths), {
         'schema_version': 1, 'request_id': value['request_id'], 'user': config.user,
         'pending': pending,
+        'preview_pending': bool(value.get('preview_active') and value.get('state') == 'pending'),
         'expected_revision': _revision(value['expected_config']),
         'candidate_revision': _revision(value['candidate']) if value.get('candidate') else None,
     })
 
 
 def pending_for_user(config, paths=None):
+    return _fenced_for_user(config, paths, 'pending')
+
+
+def preview_for_user(config, paths=None):
+    return _fenced_for_user(config, paths, 'preview_pending')
+
+
+def _fenced_for_user(config, paths, field):
     """Fail closed on a malformed root-owned fence; reading never creates it."""
     paths = paths or Paths()
     path = _fence_path(paths)
@@ -80,7 +89,8 @@ def pending_for_user(config, paths=None):
         return False
     value = RuntimeStore(paths)._read(path)
     if (not isinstance(value, dict) or type(value.get('schema_version')) is not int or value['schema_version'] != 1
-            or type(value.get('pending')) is not bool or not isinstance(value.get('user'), str)
+            or type(value.get('pending')) is not bool or type(value.get('preview_pending', False)) is not bool
+            or not isinstance(value.get('user'), str)
             or not isinstance(value.get('expected_revision'), str)
             or len(value['expected_revision']) != 64
             or set(value['expected_revision']) - set('0123456789abcdef')
@@ -88,7 +98,7 @@ def pending_for_user(config, paths=None):
                 (not isinstance(value['candidate_revision'], str) or len(value['candidate_revision']) != 64
                  or set(value['candidate_revision']) - set('0123456789abcdef')))):
         raise ValueError('초기 화면 준비의 로그인 보호 상태를 확인할 수 없습니다.')
-    if value['user'] != config.user or not value['pending']:
+    if value['user'] != config.user or not value.get(field, False):
         return False
     # Explicit configuration changes invalidate this request even if the setup
     # worker failed before it could register its retry timer. Read the global
@@ -102,7 +112,7 @@ def _summary(value):
         return {'state': 'not_requested', 'reason': '초기 화면 준비 요청 없음'}
     return {key: value[key] for key in (
         'state', 'phase', 'request_id', 'run_id', 'reason', 'next_action', 'targets',
-        'updated_at', 'start_results', 'schedule_warning', 'display_verified', 'registration_issue') if key in value}
+        'updated_at', 'start_results', 'schedule_warning', 'display_verified', 'registration_issue', 'preview') if key in value}
 
 
 def status(*, paths=None, host=None):
@@ -254,6 +264,40 @@ def _wait(paths, host, value, reason, next_action=None):
     return _summary(value)
 
 
+def _show_preview(paths, host, value):
+    """Best effort only: a preview failure never changes setup's outcome."""
+    from .setup_preview import prepare
+    store = RuntimeStore(paths, host)
+    try:
+        current = Config.from_dict(store._read(paths.config))
+        if current.to_dict() not in (value['expected_config'], value.get('candidate')) or _eligible(current):
+            return
+        release, _ = store.release(value['release'])
+        if not prepare(current, release, paths, host):
+            return
+        value['preview_active'] = True
+        _fence(paths, value, pending=value.get('phase') != 'starting', host=host)
+        # Publish intent before starting the independent user service.
+        _save(paths, value, host)
+        from .display import _user_call
+        result = _user_call(current, host, paths, 'setup-preview-start')
+        value['preview'] = {key: result.get(key) for key in ('state', 'reason', 'exit_code')}
+        _save(paths, value, host)
+    except (OSError, ValueError, RuntimeError, KeyError):
+        value['preview'] = {'state': 'pending', 'reason': '로컬 설정 안내의 준비·시작을 확인하지 못했습니다.'}
+        _save(paths, value, host)
+
+
+def preview_ready(run_id, *, paths=None, host=None):
+    """Setup worker callback after Chrome registration, before later stages."""
+    paths, host = paths or Paths(), host or Host()
+    value = _load(paths, host)
+    if value and value.get('run_id') == run_id and value['state'] == 'pending' and value['phase'] == 'installing':
+        _show_preview(paths, host, value)
+        return value.get('preview')
+    return None
+
+
 def reserve(config, release, *, paths=None, host=None, locked=False, run_id=None):
     """Fence the initial login before the setup worker can install autostart."""
     paths, host = paths or Paths(), host or Host()
@@ -322,6 +366,9 @@ def request(config, release, *, paths=None, host=None, locked=False, run_id=None
                 return _finish(paths, host, existing, 'cancelled', '구성이 변경돼 초기 안내 준비를 취소했습니다.')
             if existing['phase'] == 'installing':
                 existing['phase'] = 'waiting'
+                _save(paths, existing, host)
+            if existing['phase'] == 'waiting' and existing['release'] != str(release):
+                existing['release'] = str(release)
                 _save(paths, existing, host)
             _schedule(paths, host, release)
             return _run(paths, host, existing)
@@ -402,6 +449,7 @@ def _run(paths, host, value):
         if plan['state'] == 'blocked':
             return _finish(paths, host, value, 'blocked', plan['reason'])
         if plan['state'] != 'ready':
+            _show_preview(paths, host, value)
             return _wait(paths, host, value, plan['reason'], plan.get('next_action'))
         issue = _inactive_existing(current, paths, host)
         if issue:
@@ -434,6 +482,7 @@ def _run(paths, host, value):
         pending = [result for result in results if result.state != 'ok'
                    and not result.id.startswith('chrome.url') and result.state != 'not_applicable']
         if pending:
+            _show_preview(paths, host, value)
             priority = {'error': 0, 'blocked': 1, 'unknown': 2, 'change_required': 3, 'pending': 4}
             issue = min(pending, key=lambda result: priority[result.state]).to_dict()
             detail = issue.get('detail') or issue.get('actual')
@@ -472,6 +521,17 @@ def _run(paths, host, value):
             value['start_results'] = starts
             return _wait(paths, host, value, '사용자 화면 환경과 안내 화면 시작을 기다립니다.')
     value['start_results'] = starts
+    if value.get('preview_active'):
+        ready = True
+        for screen in candidate.screen_targets():
+            observed = display._user_call(candidate.for_screen(screen.id), host, paths, 'status')
+            health = observed.get('health') or {}
+            if not (observed.get('process_verified') is True and health.get('state') == 'waiting_configuration' and health.get('local_page_ready') is True):
+                ready = False
+                break
+        if not ready:
+            return _wait(paths, host, value, '설정 중 안내를 유지하며 모니터별 안내 문서의 실제 로드를 기다립니다.',
+                         '화면 계정의 Chrome 상태·로그와 모니터 배치를 확인하세요.')
     value['display_verified'] = False
     return _finish(paths, host, value, 'completed', '초기 안내 화면 시작을 요청했습니다. 실제 모니터 표시를 확인하세요.')
 

@@ -89,3 +89,12 @@ def test_setup_html_escapes_labels_and_config_still_rejects_internal_urls():
     assert "default-src 'none'" in document
     with pytest.raises(ValueError):
         Config(user='user', url=health.setup_page())
+
+
+def test_preparing_image_is_inline_and_offline_with_no_false_monitor_identity():
+    document = unquote(health.setup_page(preparing=True))
+    assert '<svg' in document and '기기 설정 중' in document
+    assert '모니터 연결과 표시 환경을 준비' in document
+    assert '화면 확인 필요' not in document
+    assert '<script' not in document and '<img' not in document
+    assert 'https://' not in document and "default-src 'none'" in document
