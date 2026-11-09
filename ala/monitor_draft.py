@@ -1,7 +1,7 @@
 """Monitor editor state. Pointer movement is never a configuration mutation."""
 from copy import deepcopy
 
-from .monitor_layout import build_plan
+from .monitor_layout import build_plan, logical_dimensions
 
 
 class LayoutDraft:
@@ -45,11 +45,14 @@ class LayoutDraft:
         for value in self.request['outputs']:
             mode = self.mode(value['id'])
             scale = value['scale'] or mode['preferred_scale']
-            width, height = mode['width'], mode['height']
-            if logical[value['id']]['transform'] % 2:
-                width, height = height, width
-            if self.settings['layout_mode'] == 1:
-                width, height = width / scale, height / scale
+            try:
+                width, height = logical_dimensions(mode['width'], mode['height'], scale,
+                                                   logical[value['id']]['transform'], self.settings['layout_mode'])
+            except ValueError:
+                # An invalid draft remains visible while selection is corrected.
+                width, height = mode['width'], mode['height']
+                if logical[value['id']]['transform'] % 2: width, height = height, width
+                if self.settings['layout_mode'] == 1: width, height = width / scale, height / scale
             result.append(dict(value, width=round(width), height=round(height)))
         return result
 

@@ -93,6 +93,17 @@ def test_global_scale_requirement_blocks_independent_scales():
         monitor_layout.build_plan(settings, request)
 
 
+def test_advertised_fractional_scale_uses_mutter_float32_dimensions():
+    raw = current_state(1)
+    scale = 1.3333333730697632
+    raw[1][0][1][0][5].append(scale)
+    settings = monitor_layout.read_settings(raw)
+    request = deepcopy(settings['edit_template'])
+    request['outputs'][0]['scale'] = scale
+    output = monitor_layout.build_plan(settings, request)['outputs'][0]
+    assert (output['width'], output['height']) == (1440, 810)
+
+
 @pytest.mark.parametrize('x,y,reason', [(100, 0, '겹칩니다'), (2000, 0, '빈틈'), (1920, 1080, '빈틈')])
 def test_overlap_gap_and_corner_only_contact_block(x, y, reason):
     settings, request = settings_and_request(2)

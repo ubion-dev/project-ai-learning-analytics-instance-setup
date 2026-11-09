@@ -10,6 +10,7 @@ import hashlib
 import json
 import math
 import re
+import struct
 
 
 def _require(condition):
@@ -23,6 +24,27 @@ def _positive(value, maximum=65536):
 
 def _coordinate(value):
     return type(value) is int and abs(value) <= 65536
+
+
+def logical_dimensions(width, height, scale, transform, layout_mode):
+    """Match Mutter's float32 scale/division before integral-size validation."""
+    if transform % 2:
+        width, height = height, width
+    if layout_mode == 2:
+        if float(scale).is_integer():
+            return width, height
+        raise ValueError('물리 좌표 방식에서는 정수 화면 배율을 선택하세요.')
+    try:
+        scale32 = struct.unpack('f', struct.pack('f', scale))[0]
+        if scale32 <= 0:
+            raise ValueError()
+        width = struct.unpack('f', struct.pack('f', width / scale32))[0]
+        height = struct.unpack('f', struct.pack('f', height / scale32))[0]
+        if not width.is_integer() or not height.is_integer() or min(width, height) < 1:
+            raise ValueError()
+        return int(width), int(height)
+    except (OverflowError, struct.error, ValueError) as exc:
+        raise ValueError('선택한 배율의 논리 크기를 정수 좌표로 확인하지 못했습니다.') from exc
 
 
 def _spec(value):
@@ -154,13 +176,8 @@ def build_plan(settings, request):
             raise ValueError('선택한 모니터에서 지원하는 해상도·주사율을 다시 선택하세요.')
         if not _positive(entry['scale'], 16) or entry['scale'] not in mode['supported_scales']:
             raise ValueError('선택한 모드에서 지원하는 화면 배율을 다시 선택하세요.')
-        width, height = mode['width'], mode['height']
-        if current[connector]['transform'] % 2:
-            width, height = height, width
-        if settings['layout_mode'] == 1:
-            width, height = width / entry['scale'], height / entry['scale']
-        if not float(width).is_integer() or not float(height).is_integer():
-            raise ValueError('선택한 배율의 논리 크기를 정수 좌표로 확인하지 못했습니다.')
+        width, height = logical_dimensions(mode['width'], mode['height'], entry['scale'],
+                                           current[connector]['transform'], settings['layout_mode'])
         planned.append(deepcopy(entry) | {'width': int(width), 'height': int(height),
                                          'transform': current[connector]['transform'],
                                          'primary': current[connector]['primary'],
