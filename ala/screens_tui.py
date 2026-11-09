@@ -193,7 +193,7 @@ class TargetEditor(ModalScreen[dict | None]):
                              prompt='출력 선택' if self.outputs else '활성 출력 확인 대기', id='target-output')
                 yield Label('창 배치')
                 yield Select([('전체화면', 'fullscreen'), ('테스트 · 왼쪽 절반', 'left'), ('테스트 · 오른쪽 절반', 'right')], value=value.get('layout', 'fullscreen'), allow_blank=False, id='target-layout')
-                yield Label('로그인 후 자동 시작')
+                yield Label('로그인 후 DID 자동 시작 · 끄면 대기 안내')
                 yield Switch(value=value.get('autostart', True), id='target-autostart')
                 yield Label('프론트 배포 감지')
                 yield Switch(value=frontend.get('enabled', False), id='target-frontend')

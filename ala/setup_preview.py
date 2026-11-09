@@ -75,6 +75,8 @@ def prepare(config, release, paths, host):
 def ensure(config, home, host, paths):
     """Run as the display user; no sudo, no global config changes, no restarts."""
     from . import display
+    from .screen_coverage import enabled, ensure as ensure_coverage
+    if enabled(config, paths): return ensure_coverage(config, home, host, paths)
     if not authorized(config, paths, host):
         return {'state': 'not_applicable', 'exit_code': 0, 'reason': '설정 중 안내 실행 요청이 없습니다.'}
     if host.run(['test', '-x', '/usr/bin/google-chrome-stable']).returncode:

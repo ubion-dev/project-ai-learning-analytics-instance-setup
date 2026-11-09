@@ -134,7 +134,7 @@ def test_state_query_only_advertises_capability_without_showing_labels(version):
     run_extension("""
 const extension=new AlaDisplay();extension.enable();
 const result=await invoke(extension,'GetState');
-assert.deepEqual(result.capabilities,['identify-outputs','workspace-placement','monitor-layout-trial']);
+assert.deepEqual(result.capabilities,['identify-outputs','workspace-placement','monitor-layout-trial','output-waiting-windows']);
 assert.equal(result.protocol,1);assertClean();
 """, version)
 

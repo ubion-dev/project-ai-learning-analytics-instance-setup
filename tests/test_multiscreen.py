@@ -235,14 +235,22 @@ def test_named_runtime_passes_target_revision_and_placement_to_own_supervisor(tm
     assert (tmp_path/'.config/ala/chrome-displays/right/.ala-display-profile').exists()
 
 
-def test_named_runtime_without_output_does_not_create_browser_or_profile(tmp_path,monkeypatch):
+def test_named_runtime_without_output_launches_local_recovery_and_defers_placement(tmp_path,monkeypatch):
     from ala import monitors
     monkeypatch.setattr(display,'_wait_for_graphical_ready',lambda *a,**kw:{'WAYLAND_DISPLAY':'wayland-0'})
     monkeypatch.setattr(monitors,'topology',lambda **kw:{'state':'ok','logical_outputs':[]})
-    def forbidden(*a,**kw):pytest.fail('unresolved output must not spawn Chrome')
+    seen=[]
+    class Supervisor:
+        def __init__(self,config,home,args,**options):
+            from ala.display_health import RECOVERY_URL
+            assert args[-1]==RECOVERY_URL
+            assert callable(options['placement_callback'])
+            seen.append(config.target_id)
+        def run(self):return 0
     assert display.run_chrome(target='right',config=fleet().for_screen('right'),home=tmp_path,paths=Paths(tmp_path),
-                              supervisor_factory=forbidden)==78
-    assert not list(tmp_path.iterdir())
+                              supervisor_factory=Supervisor)==0
+    assert seen==['right']
+    assert (tmp_path/'.config/ala/chrome-displays/right/.ala-display-profile').is_file()
 
 
 def test_placement_saved_connector_prevents_primary_guess_after_hotplug(monkeypatch):

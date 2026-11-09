@@ -64,10 +64,11 @@ def _save(paths, value, host=None):
 
 def _fence(paths, value, *, pending, host=None):
     config = Config.from_dict(value['expected_config'])
+    from .screen_coverage import enabled
     RuntimeStore(paths, host)._write(_fence_path(paths), {
         'schema_version': 1, 'request_id': value['request_id'], 'user': config.user,
         'pending': pending,
-        'preview_pending': bool(value.get('preview_active') and value.get('state') == 'pending'),
+        'preview_pending': bool(value.get('preview_active') and value.get('state') == 'pending' and not enabled(config, paths)),
         'expected_revision': _revision(value['expected_config']),
         'candidate_revision': _revision(value['candidate']) if value.get('candidate') else None,
     })
