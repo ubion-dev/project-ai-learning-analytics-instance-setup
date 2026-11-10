@@ -1,5 +1,13 @@
 # ala 공개판 진행 기록
 
+## 2026-11-10 RC36 기본 텍스트 CLI 전환
+
+- 사용자가 HIWARE 제공 PuTTY 환경에서 전체적인 지연을 줄이고 드래그앤드롭 대신 CLI로 운영하기를 요청했다. 기관의 실제 장비·접속 경로는 조작하지 않았다. Python 엔진 전체 재작성 대신 기본 UI의 화면 갱신·이벤트·자동 조회를 제거한다.
+- 기본 `ala`·console·chrome·config edit를 줄 단위 숫자 메뉴로 전환했다. `ala screen`, `ala display edit`로 바로 접근한다. 시작과 입력 대기에는 장비 RPC·네트워크 조회가 없고 Rich/Textual을 불러오지 않는다. 조회 소요 시간을 요청 후 출력하며 장비 상태는 명시적으로 다시 조회한다. 해상도 선택은 12개씩 나누고 초안 편집은 추가 RPC 없이 처리한다.
+- 모니터 위치 교환·상대 위치·좌표·지원 모드/배율·검토·서버 적용·실제 화면 확인과 기한 복원을 연결했다. 사이트 설정·저장·적용·운영·로그·두 사이트 교환·코드 전환·배포 재시도, 설치·상태·업데이트·기본 구성·실행 기록·네트워크·OS 준비·초기화/복구·자동 운영·미사용 Podman 검토를 텍스트로 연결한다. 기존 전체 화면은 명시적인 `ala tui`에서 유지한다.
+- 기본 구성 저장에 검토한 구성의 일치 확인을 추가했고 기존 root 변경 잠금 안에서 다시 대조한다. 사이트 적용은 저장 응답의 정확한 구성을 고정한다. 모니터 제출 후 다른 작업 ID를 확인하면 유지 결정을 보내지 않는다. 입력 종료·취소·확인 시간 만료와 제어 문자 출력도 검증한다.
+- 실제 PTY 입출력을 포함한 관련 합성 검사 86개를 통과했다. 신규 동시 변경 검사 두 건의 fixture 디렉터리 재생성 오류를 고친 뒤 전부 통과했으며 제품 코드를 그 실패 해결용으로 완화하지 않았다. 로컬 다섯 번 중앙값의 텍스트 진입·종료 약 0.056초와 기존 TUI 모듈 import만 약 0.142초를 확인했다. 실제 HIWARE 입력 지연이나 운영 장비 개선율은 아니다. 최종 전체 CI·일반 사용자 Linux Chrome·배포 파일·새 RC36 서명 게시와 공개 검증을 이어간다.
+
 ## 2026-11-10 RC35 서명 배포 완료
 
 - [PR #29](https://github.com/ubion-dev/project-ai-learning-analytics-instance-setup/pull/29)를 두 최종 CI 통과 후 main의 `39fc105`로 병합하고 새 불변 태그 `v0.1.0-rc.35`를 게시했다. [서명 릴리스 실행](https://github.com/ubion-dev/project-ai-learning-analytics-instance-setup/actions/runs/42743323694)과 [RC35 시험판](https://github.com/ubion-dev/project-ai-learning-analytics-instance-setup/releases/tag/v0.1.0-rc.35)의 게시 성공을 확인했다.

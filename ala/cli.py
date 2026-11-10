@@ -20,8 +20,9 @@ def parser():
     p = Parser(prog='ala', description='AI 학습 분석실 DID 인스턴스 환경 관리')
     p.add_argument('--version', action='version', version=__version__)
     sub = p.add_subparsers(dest='command')
-    sub.add_parser('tui', help='간편 설정·상태 확인·화면 관리')
-    sub.add_parser('console', help='텍스트 콘솔 (선택)')
+    sub.add_parser('tui', help='기존 전체 화면 TUI (선택)')
+    sub.add_parser('console', help='텍스트 메뉴 (기본)')
+    sub.add_parser('screen', help='사이트·Chrome 텍스트 메뉴')
     config = sub.add_parser('config', help='기대 구성').add_subparsers(dest='action', required=True)
     config.add_parser('edit')
     config.add_parser('show').add_argument('--json', action='store_true')
@@ -58,7 +59,7 @@ def parser():
     chrome.add_argument('--target', help='표시 대상 ID (생략하면 기존 기본 대상)')
     chrome.add_argument('--json', action='store_true')
     display = sub.add_parser('display', help='연결된 출력·관리 창·사이트 상태')
-    display.add_argument('action', nargs='?', choices=['list', 'status', 'modes', 'plan', 'trial', 'apply',
+    display.add_argument('action', nargs='?', choices=['edit', 'list', 'status', 'modes', 'plan', 'trial', 'apply',
                          'trial-status', 'confirm', 'revert', 'recover'], default='status')
     display.add_argument('file', nargs='?', type=Path, help='plan/trial의 배치 JSON 파일')
     display.add_argument('--operation-id', help='confirm/revert/recover의 배치 시험 작업 ID')
@@ -269,6 +270,8 @@ def main(argv=None, *, service=None):
     p = parser()
     args = p.parse_args(argv)
     if args.command == 'display':
+        if args.action == 'edit' and args.json:
+            p.error('display edit는 대화형 메뉴입니다. JSON 조회는 display modes --json을 사용하세요.')
         if (args.action in {'plan', 'trial', 'apply'}) != (args.file is not None):
             p.error('display plan/trial에는 배치 파일 하나가 필요합니다. 다른 명령에는 파일을 사용하지 않습니다.')
         if (args.action in {'confirm', 'revert', 'recover'}) != (args.operation_id is not None):
@@ -289,25 +292,24 @@ def main(argv=None, *, service=None):
             p.error('--status에는 시험판 채널 선택이 필요하지 않습니다.')
     svc = service or Service()
     try:
-        if args.command is None or args.command in {'tui', 'console'} or (args.command == 'chrome' and not args.action) or (args.command == 'config' and args.action == 'edit'):
+        interactive = (args.command is None or args.command in {'tui', 'console', 'screen'}
+                       or (args.command == 'chrome' and not args.action)
+                       or (args.command == 'config' and args.action == 'edit')
+                       or (args.command == 'display' and args.action == 'edit'))
+        if interactive:
             if not sys.stdin.isatty() or not sys.stdout.isatty():
                 p.error('메뉴는 SSH 터미널에서 실행하세요. 비대화형 환경에는 하위 명령을 지정하세요.')
             if service is None:
                 svc.enter_admin(argv)
-            if args.command == 'console':
-                from .console import run_console
-                return run_console(svc)
-            if args.command is None or args.command == 'tui' or args.command == 'chrome':
+            if args.command == 'tui':
                 from .simple_tui import SimpleApp
-                if args.command == 'chrome':
-                    SimpleApp(service=svc, initial_section='screens').run()
-                else:
-                    SimpleApp(service=svc).run()
+                SimpleApp(service=svc).run()
                 return 0
-            from .tui import AlaApp
-            section = 'config' if args.command == 'config' else 'chrome' if args.command == 'chrome' else 'home'
-            AlaApp(service=svc, initial_section=section).run()
-            return 0
+            from .terminal import run_terminal
+            initial = ('screens' if args.command in {'screen', 'chrome'} else
+                       'monitors' if args.command == 'display' else
+                       'config' if args.command == 'config' else 'home')
+            return run_terminal(svc, initial=initial)
         if service is None and not (args.command == 'update' and args.check):
             svc.enter_admin(argv)
         if args.command == 'update':
