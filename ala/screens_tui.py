@@ -111,17 +111,17 @@ class TargetEditor(ModalScreen[dict | None]):
         self.target_id = target['id'] if target else None
         self._status_pending = False
         self._status_labels = {}
+        self._output_options = None
         self.expected_config = deepcopy(panel.owner._config) if panel else None
 
     def compose(self) -> ComposeResult:
         value = self.target or {'id': '', 'autostart': True, 'output': self.output_id}
         frontend = value.get('frontend') or {}
         current = value.get('output')
-        options = [(safe_text(output), output) for output in self.outputs]
-        if value['id'] == 'default':
-            options.insert(0, ('자동 · 활성 논리 출력 하나', _AUTO_OUTPUT))
-        if current and current not in self.outputs:
-            options.append((safe_text(current) + ' · 기존 지정', current))
+        options = self.output_choices(value.get('layout', 'fullscreen'))
+        initial = current or (_AUTO_OUTPUT if value['id'] == 'default' else Select.NULL)
+        if initial not in {option[1] for option in options}: initial = Select.NULL
+        self._output_options = tuple(options)
         with Vertical(id='target-editor'):
             yield Static('화면 설정 · '+safe_text(self.target_id or self.output_id or '새 화면'), id='target-title', markup=False)
             yield Static('', id='target-result', markup=False)
@@ -144,9 +144,10 @@ class TargetEditor(ModalScreen[dict | None]):
                 yield Label('표시 사이트')
                 yield Input(value.get('url') or '', id='target-url', placeholder='https://example.com/display')
                 yield Label('출력 · GNOME이 확인한 활성 논리 화면')
-                yield Select(options, value=current or (_AUTO_OUTPUT if value['id'] == 'default' else Select.NULL),
-                             allow_blank=value['id'] != 'default',
+                yield Select(options, value=initial,
+                             allow_blank=True,
                              prompt='출력 선택' if self.outputs else '활성 출력 확인 대기', id='target-output')
+                yield Label('다른 화면이 사용 중인 출력은 목록에서 제외합니다.')
                 yield Label('창 배치')
                 yield Select([('전체화면', 'fullscreen'), ('테스트 · 왼쪽 절반', 'left'), ('테스트 · 오른쪽 절반', 'right')], value=value.get('layout', 'fullscreen'), allow_blank=False, id='target-layout')
                 yield Label('로그인 후 DID 자동 시작 · 끄면 대기 안내')
@@ -164,6 +165,29 @@ class TargetEditor(ModalScreen[dict | None]):
                 cancel = Button('닫기', id='target-cancel')
                 cancel.tooltip = '이번 편집을 취소합니다.'
                 yield cancel
+
+    def output_choices(self, layout):
+        value = self.target or {'id': '', 'output': self.output_id}
+        options = [(safe_text(output), output) for output in self.outputs
+                   if not self.panel or not self.panel.output_conflict(output, layout, value['id'])]
+        if value['id'] == 'default' and (not self.panel or not self.panel.output_conflict(None, layout, value['id'])):
+            options.insert(0, ('자동 · 활성 논리 출력 하나', _AUTO_OUTPUT))
+        current = value.get('output')
+        if current and current not in self.outputs and (not self.panel or not self.panel.output_conflict(current, layout, value['id'])):
+            options.append((safe_text(current) + ' · 기존 지정', current))
+        return options
+
+    def sync_output_choices(self):
+        layout = self.query_one('#target-layout', Select).value
+        options = tuple(self.output_choices(layout))
+        if self._output_options != options:
+            widget = self.query_one('#target-output', Select)
+            selected = widget.value
+            with self.prevent(Select.Changed):
+                widget.set_options(options)
+                widget.value = selected if selected in {option[1] for option in options} else Select.NULL
+            self._output_options = options
+        self.query_one('#target-output', Select).tooltip = '다른 화면이 사용 중인 출력은 제외합니다. 좌우 분할은 겹치지 않는 조합만 허용합니다.'
 
     def on_mount(self):
         self.refresh_status()
@@ -209,6 +233,7 @@ class TargetEditor(ModalScreen[dict | None]):
         self._status_pending = False
         if not self.is_mounted:
             return
+        self.sync_output_choices()
         primary = self.query_one('#target-primary', Button)
         if not self.panel or not self.target_id:
             primary.display = False
@@ -265,8 +290,8 @@ class TargetEditor(ModalScreen[dict | None]):
         elif event.button.id == 'target-save':
             from .config import ScreenConfig
             output = self.query_one('#target-output', Select).value
-            if output is Select.NULL and self.target is None:
-                self.query_one('#target-error', Static).update('GNOME 활성 출력이 감지되면 출력 목록에서 선택하세요.')
+            if output is Select.NULL:
+                self.query_one('#target-error', Static).update('사용 가능한 출력을 선택하세요. 다른 화면이 사용 중인 포트는 제외됩니다.')
                 return
             value = {'id': self.query_one('#target-id', Input).value,
                      'url': self.query_one('#target-url', Input).value or None,
@@ -276,6 +301,8 @@ class TargetEditor(ModalScreen[dict | None]):
                      'frontend': {'enabled': self.query_one('#target-frontend', Switch).value,
                                   'manifest_url': self.query_one('#target-manifest', Input).value or None}}
             try:
+                if self.panel and self.panel.output_conflict(value['output'], value['layout'], value['id']):
+                    raise ValueError('다른 화면이 사용 중인 출력입니다. 빈 출력 또는 겹치지 않는 분할을 선택하세요.')
                 ScreenConfig.from_dict(value)
             except (ValueError, TypeError) as exc:
                 self.query_one('#target-error', Static).update(safe_text(str(exc)))
@@ -392,6 +419,8 @@ class ScreenPanel(Vertical):
     #screens-map-scroll { height: 1fr; min-height: 3; }
     #screens-map { padding: 0 1; background: #211f29; border: none; }
     #screens-map:focus { background: #2a2634; }
+    #screens-monitor-host { height: auto; }
+    #screens-layout-preview { height: auto; color: #f1d5a3; }
     #screens-actions { height: 3; }
     #screens-actions Button { width: 1fr; margin-right: 1; min-width: 12; padding: 0; }
     #screens-unassigned { height: auto; padding: 0; }
@@ -420,6 +449,8 @@ class ScreenPanel(Vertical):
         self._reset_config_seen = None
         self.editor = None
         self._unassigned_rows = None
+        self.monitor_controls = None
+        self._monitor_open_lock = asyncio.Lock()
 
     def compose(self):
         yield Static('표시 대상 확인 중', id='screens-result', markup=False)
@@ -427,6 +458,8 @@ class ScreenPanel(Vertical):
         yield Static('화면 관리를 열면 연결된 출력과 창을 조회합니다.', id='screens-summary', markup=False)
         with VerticalScroll(id='screens-map-scroll'):
             yield ScreenMap(id='screens-map')
+            yield Static('', id='screens-layout-preview', markup=False)
+            yield Vertical(id='screens-monitor-host')
             with Collapsible(title='관리 도구',id='screens-tools',collapsed=True):
                 yield Button('DID 전체 초기화',id='screens-reset')
                 yield Button('초기화 작업 복구',id='screens-reset-recover',disabled=True)
@@ -434,7 +467,7 @@ class ScreenPanel(Vertical):
         with Collapsible(title='화면 추가·연결되지 않은 화면', id='screens-unassigned', collapsed=True):
             yield OptionList(id='screens-unassigned-list')
             yield Button('화면 추가', id='screens-add')
-        yield Static('사이트 설정은 클릭·Enter · OS 배치는 모니터 설정에서 상하좌우 선택 · 배치도는 조회용', id='screens-help', markup=False)
+        yield Static('모니터 설정을 펼쳐 리모컨·해상도·배율 편집 · 사이트는 설정 안의 사이트 버튼', id='screens-help', markup=False)
         with Horizontal(id='screens-actions'):
             yield Button('모니터 배치·해상도', id='screens-monitor-layout')
             yield Button('모니터 식별', id='screens-identify')
@@ -506,7 +539,7 @@ class ScreenPanel(Vertical):
         return next((v for v in self.report.get('targets', []) if v.get('id') == target_id), None)
 
     def render_help(self):
-        self.query_one('#screens-help', Static).update('사이트 설정은 클릭·Enter · OS 배치는 모니터 설정에서 상하좌우 선택 · 배치도는 조회용')
+        self.query_one('#screens-help', Static).update('모니터 설정을 펼쳐 리모컨·해상도·배율 편집 · 사이트는 설정 안의 사이트 버튼')
 
     def on_descendant_focus(self, event: events.DescendantFocus):
         self.render_help()
@@ -539,8 +572,24 @@ class ScreenPanel(Vertical):
             + f' · 관리 대상 {len(targets)}개 · 확인된 창 {confirmed_label}'
             if self.loaded else '출력·창 조회 확인 필요 · '+str(self.report.get('reason', '조회 중'))))
         map_view = self.query_one('#screens-map', ScreenMap)
-        map_view.update_report(self.report, self.selected)
-        map_view.tooltip = '배치도는 조회용입니다. 클릭·Enter로 사이트 설정을 열고 OS 배치는 모니터 설정의 상하좌우 버튼을 사용하세요.'
+        preview = self.monitor_controls
+        draft = preview.draft if preview and preview.display else None
+        map_report = self.report
+        if draft and draft.dirty and not preview.operation:
+            map_report = deepcopy(self.report)
+            rects = {item['id']: item for item in draft.rects()}
+            for output in map_report.get('logical_outputs', []):
+                if output['id'] in rects:
+                    item = rects[output['id']]
+                    output.update(scale=item['scale'])
+                    output.setdefault('geometry', {}).update({key: item[key] for key in ('x', 'y', 'width', 'height')})
+            for output in map_report.get('outputs', []):
+                if output.get('connector') in rects:
+                    mode = draft.mode(output['connector'])
+                    output.update(width=mode['width'], height=mode['height'])
+        self.query_one('#screens-layout-preview', Static).update('배치 초안 · 아직 적용하지 않았습니다. 변경 검토 후 적용하세요.' if map_report is not self.report else '')
+        map_view.update_report(map_report, self.selected)
+        map_view.tooltip = '설정을 펼친 동안 클릭·Enter는 편집할 모니터를 선택합니다. 사이트는 이 모니터의 사이트 버튼을 사용하세요.'
         assigned = {target['id'] for output in self.report.get('logical_outputs') or []
                     for target in self.targets_on_output(output['id'])}
         unassigned = [target for target in targets if target['id'] not in assigned]
@@ -832,6 +881,8 @@ class ScreenPanel(Vertical):
     @on(ScreenMap.OutputFocused)
     def output_focused(self, event):
         event.stop()
+        if self.monitor_controls and self.monitor_controls.display:
+            self.run_worker(self.monitor_controls.choose_output(event.output_id), group='monitor-select', exclusive=True, exit_on_error=False)
         targets = self.targets_on_output(event.output_id)
         if len(targets) == 1:
             self.selected = targets[0]['id']
@@ -840,6 +891,9 @@ class ScreenPanel(Vertical):
     @on(ScreenMap.OutputActivated)
     def output_activated(self, event):
         event.stop()
+        if self.monitor_controls and self.monitor_controls.display:
+            self.run_worker(self.monitor_controls.choose_output(event.output_id), group='monitor-select', exclusive=True, exit_on_error=False)
+            return
         targets = self.targets_on_output(event.output_id)
         if not targets:
             if self.report.get('output_state') == 'ok' and any(
@@ -862,8 +916,7 @@ class ScreenPanel(Vertical):
     def pressed(self, event):
         key = (event.button.id or '').removeprefix('screens-')
         if key == 'monitor-layout' and not event.button.disabled:
-            from .monitor_tui import MonitorEditor
-            self.owner.push_screen(MonitorEditor(self))
+            self.run_worker(self.open_monitor_controls(), group='monitor-open', exit_on_error=False)
         elif key == 'reset' and not event.button.disabled:
             self.owner.run_worker(self.review_reset(),group='reset-control',exclusive=True,exit_on_error=False)
         elif key == 'reset-recover' and not event.button.disabled:
@@ -874,6 +927,33 @@ class ScreenPanel(Vertical):
             self.activate()
         elif key == 'identify' and not event.button.disabled:
             self.owner.run_worker(self.session_action(key), group='screen-session-control', exclusive=True, exit_on_error=False)
+
+    async def open_monitor_controls(self):
+        if self._monitor_open_lock.locked():
+            return
+        async with self._monitor_open_lock:
+            from .monitor_tui import MonitorControls
+            if self.monitor_controls is None:
+                self.monitor_controls = MonitorControls(self)
+                await self.query_one('#screens-monitor-host').mount(self.monitor_controls)
+            else:
+                self.monitor_controls.display = True
+            self.monitor_controls.query_one('#monitor-port', Select).focus(scroll_visible=False)
+            self.query_one('#screens-map-scroll', VerticalScroll).scroll_to(y=0, animate=False)
+            self.render_report()
+
+    def output_conflict(self, output_id, layout, target_id):
+        inventory = {'state': self.report.get('output_state'), 'logical_outputs': self.report.get('logical_outputs') or []}
+        candidate = resolve_output(inventory, output_id, auto=target_id == 'default')
+        resolved_id = (candidate.get('output') or {}).get('id', output_id)
+        for target in self.report.get('targets', []):
+            if target.get('id') == target_id:
+                continue
+            occupied = resolve_output(inventory, target.get('output'), auto=target.get('id') == 'default')
+            other_id = (occupied.get('output') or {}).get('id', target.get('output'))
+            if resolved_id and resolved_id == other_id and (layout == 'fullscreen' or target.get('layout', 'fullscreen') in {'fullscreen', layout}):
+                return target['id']
+        return None
 
     async def review_reset(self):
         if self.mutating or not self.action_state('add',None)[0]:

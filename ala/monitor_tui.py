@@ -3,7 +3,8 @@ from copy import deepcopy
 
 from rich.text import Text
 from textual import on
-from textual.containers import Horizontal, Vertical, VerticalScroll
+from textual.message_pump import MessagePump
+from textual.containers import Grid, Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen
 from textual.widgets import Button, Collapsible, Label, Select, Static, Switch, TextArea
 
@@ -48,7 +49,8 @@ class LayoutReview(ModalScreen[bool]):
         event.stop(); self.dismiss(event.button.id == 'layout-review-apply')
 
 
-class MonitorEditor(ModalScreen):
+class MonitorSettings(MessagePump):
+    inline = False
     BINDINGS = [('escape', 'close_editor', '닫기')]
     CSS = '''
     MonitorEditor { align: center middle; background: #17161d; }
@@ -78,7 +80,7 @@ class MonitorEditor(ModalScreen):
 
     def compose(self):
         with Vertical(id='monitor-editor'):
-            yield Static('모니터 설정 · 배치도는 화면 관리 탭에서 확인', id='monitor-title')
+            yield Static('모니터 설정 · 변경은 검토 후 적용', id='monitor-title')
             yield Static('지원 모드를 조회하고 있습니다.', id='monitor-message', markup=False)
             yield Static('', id='monitor-selected', markup=False)
             with VerticalScroll(id='monitor-settings'):
@@ -89,14 +91,27 @@ class MonitorEditor(ModalScreen):
                 with Horizontal(id='monitor-anchor-row'):
                     yield Label('기준 모니터')
                     yield Select([], prompt='다른 모니터 선택', id='monitor-anchor')
-                with Horizontal(id='monitor-directions'):
-                    for relation, label in [('left', '← 왼쪽'), ('right', '오른쪽 →'), ('above', '↑ 위'), ('below', '아래 ↓')]:
-                        yield Button(label, id='monitor-' + relation, disabled=True)
+                if self.inline:
+                    with Grid(id='monitor-remote'):
+                        yield Static('')
+                        yield Button('↑ 위', id='monitor-above', disabled=True, compact=True)
+                        yield Static('')
+                        yield Button('← 왼쪽', id='monitor-left', disabled=True, compact=True)
+                        yield Static('기준 대비', id='monitor-remote-center')
+                        yield Button('오른쪽 →', id='monitor-right', disabled=True, compact=True)
+                        yield Static('')
+                        yield Button('아래 ↓', id='monitor-below', disabled=True, compact=True)
+                        yield Static('')
+                else:
+                    with Horizontal(id='monitor-directions'):
+                        for relation, label in [('left', '← 왼쪽'), ('right', '오른쪽 →'), ('above', '↑ 위'), ('below', '아래 ↓')]:
+                            yield Button(label, id='monitor-' + relation, disabled=True)
                 with Horizontal(id='monitor-options'):
                     yield Label('다음 로그인에도 유지')
                     yield Switch(True, id='monitor-persist')
                     yield Button('이 모니터의 사이트', id='monitor-site')
                     yield Button('모니터 식별', id='monitor-identify')
+                yield Button('모니터 전체 기본값 초안', id='monitor-reset')
                 with Collapsible(title='로그인 배치 복원', id='monitor-profile', collapsed=True):
                     yield Button('저장 배치 로그인 복원 끄기', id='monitor-profile-disable')
                     yield Button('저장 배치 복원 재시도', id='monitor-profile-retry')
@@ -108,7 +123,7 @@ class MonitorEditor(ModalScreen):
                 yield Button('다시 조회', id='monitor-refresh')
                 yield Button('편집 취소', id='monitor-undo')
                 yield Button('변경 검토', id='monitor-review', variant='primary')
-                yield Button('닫기', id='monitor-close')
+                yield Button('접기' if self.inline else '닫기', id='monitor-close')
 
     async def on_mount(self):
         self.query_one('#monitor-confirm-buttons').display = False
@@ -184,7 +199,7 @@ class MonitorEditor(ModalScreen):
             return
         editable = bool(self.draft) and not self.busy and not self.operation
         for key in ('monitor-port', 'monitor-mode', 'monitor-scale', 'monitor-persist', 'monitor-anchor', 'monitor-site', 'monitor-identify', 'monitor-review', 'monitor-undo', 'monitor-refresh', 'monitor-extension',
-                    'monitor-profile-disable', 'monitor-profile-retry'):
+                    'monitor-profile-disable', 'monitor-profile-retry', 'monitor-reset'):
             self.query_one('#' + key).disabled = not editable if key not in {'monitor-refresh', 'monitor-extension'} else bool(self.busy or self.operation)
         anchor = self.query_one('#monitor-anchor', Select).value
         valid_anchor = (self.draft is not None and isinstance(anchor, str) and anchor != self.draft.selected
@@ -204,6 +219,7 @@ class MonitorEditor(ModalScreen):
         self.query_one('#monitor-keep', Button).disabled = not waiting or self.busy
         self.query_one('#monitor-revert', Button).disabled = self.busy
         self.query_one('#monitor-revert', Button).label = '복구 재시도' if self.operation_state == 'recovery_required' else '원래 배치로 복원'
+        if self.inline: self.panel.render_report()
 
     @on(Select.Changed)
     def selected(self, event):
@@ -295,6 +311,12 @@ class MonitorEditor(ModalScreen):
             elif key == 'monitor-undo':
                 self.draft = LayoutDraft(self.draft.settings)
                 self.sync_fields()
+            elif key == 'monitor-reset':
+                try:
+                    self.draft.reset_defaults()
+                    self.sync_fields()
+                    self.message('전체 기본값 초안: 권장 해상도·100% 배율·가로 정렬. 사이트는 보존하며 검토 후 적용합니다.')
+                except ValueError as exc: self.message(str(exc))
             elif key in {'monitor-left', 'monitor-right', 'monitor-above', 'monitor-below'}:
                 relation = key.removeprefix('monitor-')
                 anchor = self.query_one('#monitor-anchor', Select).value
@@ -327,4 +349,36 @@ class MonitorEditor(ModalScreen):
         if self.operation and self.operation_state == 'awaiting_confirmation':
             try: await self.service.call('monitor-layout-revert', {'operation_id': self.operation})
             except Exception: pass  # The detached worker still owns its deadline.
-        self.dismiss()
+        if self.inline:
+            self.display = False
+            self.panel.query_one('#screens-monitor-layout', Button).focus()
+            self.panel.render_report()
+        else:
+            self.dismiss()
+
+
+class MonitorEditor(MonitorSettings, ModalScreen):
+    BINDINGS = MonitorSettings.BINDINGS
+    CSS = MonitorSettings.CSS
+
+
+class MonitorControls(MonitorSettings, Vertical):
+    """Lazy inline editor sharing the reviewed monitor trial lifecycle."""
+    inline = True
+    BINDINGS = MonitorSettings.BINDINGS
+    DEFAULT_CSS = MonitorSettings.CSS + '''
+    MonitorControls { height: auto; }
+    MonitorControls #monitor-editor { width: 100%; height: auto; padding: 0 1; }
+    MonitorControls #monitor-settings { height: auto; }
+    MonitorControls #monitor-remote { height: 3; layout: grid; grid-size: 3 3; grid-rows: 1 1 1; }
+    MonitorControls #monitor-remote Button { width: 1fr; height: 1; min-height: 1; min-width: 10; padding: 0; border: none; }
+    MonitorControls #monitor-remote-center { content-align: center middle; height: 1; }
+    MonitorControls #monitor-reset { width: 100%; height: 3; }
+    '''
+
+    async def choose_output(self, output_id):
+        if not self.draft and not self.busy and not self.operation:
+            await self.load()
+        if self.draft and output_id in {o['id'] for o in self.draft.request['outputs']}:
+            self.draft.selected = output_id
+            self.sync_fields()

@@ -27,13 +27,13 @@ ssh user@서버IP
 
 ## 4. ala 설치
 
-SSH로 접속한 **Rocky에서** 실행합니다. 아래는 공개 시험판 RC39의 설치 명령입니다. [Mac에서 받아 SCP로 전달](docs/INSTALL.md#mac에서-받아-scp로-전달)
+SSH로 접속한 **Rocky에서** 실행합니다. 아래는 공개 시험판 RC40의 설치 명령입니다. [Mac에서 받아 SCP로 전달](docs/INSTALL.md#mac에서-받아-scp로-전달)
 
 ```bash
 (
   set -e
-  version='0.1.0rc39'
-  tag='v0.1.0-rc.39'
+  version='0.1.0rc40'
+  tag='v0.1.0-rc.40'
   archive="ala-${version}.tar.gz"
   url="https://github.com/ubion-dev/project-ai-learning-analytics-instance-setup/releases/download/${tag}"
   mkdir -p "$HOME/ala-downloads/$version"
@@ -54,9 +54,11 @@ SSH로 접속한 **Rocky에서** 실행합니다. 아래는 공개 시험판 RC3
 DID 전용 계정을 쓸 경우 `ala config edit`에서 기존 일반 사용자를 먼저 지정합니다.
 간편 설정을 실행한 뒤 화면 관리에서 모니터를 선택해 사이트를 저장하고 설정을 적용합니다.
 
-`ala screen` / `ala chrome`은 화면 관리 TUI, `ala display edit`는 모니터 배치·해상도 편집 TUI를 바로 엽니다.
-배치도는 **화면 관리 탭에서만 조회**합니다. 드래그는 사용하지 않습니다.
-모니터 설정에서는 대상·기준 모니터를 고르고 **왼쪽·오른쪽·위·아래** 버튼으로 초안을 편집합니다.
+`ala screen` / `ala chrome`은 화면 관리 TUI를 엽니다. **모니터 배치·해상도**를 누르면 같은 탭에서 설정을 펼칩니다.
+`ala display edit`는 이 설정을 펼쳐 바로 엽니다. 대상·기준 모니터를 고르고 **십자형 리모컨**과 모니터별 해상도·화면 배율을 편집합니다.
+배치도에는 미적용 초안임을 표시하며 드래그는 사용하지 않습니다.
+**모니터 전체 기본값 초안**은 사이트를 보존하고 기본 해상도·100% 배율·가로 정렬을 제안합니다.
+사이트 설정에서는 다른 화면이 사용하는 출력 포트를 제외합니다.
 지원 해상도·화면 배율을 편집하고 검토·적용 뒤 30초 안에 실제 화면을 확인해 유지합니다.
 확인하지 않으면 기존 서버 복원 절차가 동작합니다. 기존 사이트·프로필·코드 선택은 보존합니다.
 

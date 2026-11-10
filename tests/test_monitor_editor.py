@@ -8,7 +8,7 @@ from textual.widgets import Button, Select
 
 from ala.monitor_draft import LayoutDraft
 from ala.monitor_layout import read_settings
-from ala.monitor_tui import MonitorEditor, LayoutReview
+from ala.monitor_tui import MonitorControls, MonitorEditor, LayoutReview
 from test_monitor_layout import current_state
 
 
@@ -151,12 +151,14 @@ def test_existing_screen_panel_opens_editor_and_monitor_site_settings():
         async with app.run_test(size=(80, 24)) as pilot:
             await pilot.pause()
             await pilot.click('#screens-monitor-layout'); await pilot.pause()
-            assert isinstance(app.screen, MonitorEditor)
-            await pilot.click('#monitor-site'); await pilot.pause()
+            assert len(app.screen_stack) == 1
+            controls = app.query_one(MonitorControls)
+            controls.query_one('#monitor-site', Button).focus()
+            await pilot.press('enter'); await pilot.pause()
             assert isinstance(app.screen, TargetEditor)
             assert app.screen.query_one('#target-url', Input).value == 'https://example.com/default'
             await pilot.click('#target-cancel'); await pilot.pause()
-            assert isinstance(app.screen, MonitorEditor)
+            assert len(app.screen_stack) == 1 and app.query_one(MonitorControls).display
     asyncio.run(scenario())
 
 
@@ -208,10 +210,11 @@ def test_direct_tui_monitor_entry_opens_editor_read_only():
         app = SimpleApp(service=service, initial_section='screens', initial_monitor_editor=True)
         async with app.run_test(size=(80, 24)) as pilot:
             await pilot.pause()
-            assert isinstance(app.screen, MonitorEditor) and app.screen.draft
+            controls = app.query_one(MonitorControls)
+            assert len(app.screen_stack) == 1 and controls.draft
             assert service.monitors.calls == [('monitor-layout-status', None), ('monitor-layout-state', None)]
             await pilot.press('escape'); await pilot.pause()
-            assert not isinstance(app.screen, MonitorEditor)
+            assert not controls.display
     asyncio.run(scenario())
 
 
