@@ -1,5 +1,15 @@
 # 업데이트와 최초 이전
 
+## RC37 기본 TUI 복원
+
+`ala update --prerelease` 후 실행 중인 ala를 닫고 다시 실행해 `0.1.0rc37`을 사용한다.
+기본 `ala`·`ala tui`는 상태 카드·표·모니터 화면이 있는 TUI다. `ala screen` / `ala chrome`은
+화면 관리, `ala display edit`는 모니터 편집, `ala config edit`는 구성 편집 TUI를 연다.
+RC36에서도 즉시 TUI가 필요하면 `ala tui`를 사용한다. 텍스트 메뉴는 `ala console`로만
+명시 선택한다. 같은 업데이트 안내·대상 상태 문구를 반복해서 다시 그리지 않으며 실제 변화는
+계속 표시한다. 가시성과 기존 설정·보존·확인/복원 계약을 유지한다. 실제 HIWARE 지연 개선은
+별도 확인 대상이다. 이번 변경만을 위한 재부팅·GNOME 재로그인·설정 초기화는 필요 없다.
+
 ## RC36 기본 텍스트 메뉴
 
 `ala update --prerelease` 후 실행 중인 ala를 종료하고 다시 실행해 `0.1.0rc36`을 사용한다.

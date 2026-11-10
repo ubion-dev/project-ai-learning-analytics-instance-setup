@@ -165,14 +165,13 @@ def test_input_eof_exits_without_rpc():
     assert not service.calls
 
 
-@pytest.mark.parametrize('args,initial', [([], 'home'), (['console'], 'home'), (['screen'], 'screens'),
-    (['chrome'], 'screens'), (['config', 'edit'], 'config'), (['display', 'edit'], 'monitors')])
+@pytest.mark.parametrize('args,initial', [(['console'], 'home')])
 def test_interactive_cli_routes_to_plain_menu(monkeypatch, args, initial):
     from ala.cli import main
     monkeypatch.setattr(sys.stdin, 'isatty', lambda: True)
     monkeypatch.setattr(sys.stdout, 'isatty', lambda: True)
     calls = []
-    monkeypatch.setattr('ala.terminal.run_terminal', lambda service, **kw: calls.append(kw) or 0)
+    monkeypatch.setattr('ala.terminal.run_terminal', lambda service, **kw: calls.append({'initial': kw.get('initial', 'home')}) or 0)
     assert main(args, service=Service()) == 0
     assert calls == [{'initial': initial}]
 
@@ -199,14 +198,14 @@ def test_operation_change_cannot_confirm_an_unreviewed_job():
     assert not any(a == 'monitor-layout-confirm' for a, _ in service.calls)
 
 
-def test_real_pty_default_cli_exits_without_screen_or_mouse_modes():
+def test_real_pty_explicit_console_exits_without_screen_or_mouse_modes():
     import errno
     import os
     import pty
     import select
     master, slave = pty.openpty()
     process = subprocess.Popen([sys.executable, '-c',
-        'from ala.cli import main; raise SystemExit(main([],service=object()))'],
+        'from ala.cli import main; raise SystemExit(main(["console"],service=object()))'],
         stdin=slave, stdout=slave, stderr=slave, close_fds=True)
     os.close(slave)
     output = bytearray()

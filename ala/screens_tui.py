@@ -158,6 +158,7 @@ class TargetEditor(ModalScreen[dict | None]):
         self.output_id = output_id
         self.target_id = target['id'] if target else None
         self._status_pending = False
+        self._status_labels = {}
         self.expected_config = deepcopy(panel.owner._config) if panel else None
 
     def compose(self) -> ComposeResult:
@@ -257,14 +258,14 @@ class TargetEditor(ModalScreen[dict | None]):
         if not self.is_mounted:
             return
         primary = self.query_one('#target-primary', Button)
-        primary.display = False
         if not self.panel or not self.target_id:
+            primary.display = False
             return
         value = self.panel.find_target(self.target_id)
         headline, next_action, action, tone = self.panel.priority(value)
         message = self.panel.messages.get(self.target_id, '').split('\n', 1)[0]
-        self.query_one('#target-result', Static).update(Text('\n'.join(filter(None, (headline, message))), style=tone))
-        self.query_one('#target-next', Static).update('다음 · '+next_action)
+        self.status_label('target-result', '\n'.join(filter(None, (headline, message))), tone)
+        self.status_label('target-next', '다음 · ' + ('아래에서 사이트 주소를 저장한 뒤 설정 적용을 선택하세요.' if action == 'edit' else next_action))
         dirty = self.dirty()
         for key in ('start', 'stop', 'restart', 'reload', 'logs', 'retry', 'apply', 'swap-recover'):
             button = self.query_one('#screens-'+key, Button)
@@ -281,18 +282,23 @@ class TargetEditor(ModalScreen[dict | None]):
         editable, reason = self.panel.action_state('edit', value)
         self.query_one('#target-save', Button).disabled = not editable
         self.query_one('#target-save', Button).tooltip = reason if not editable else '설정 내용을 저장합니다. 화면 전환은 설정 적용으로 진행합니다.'
+        primary_visible = False
         if action in {'start', 'logs', 'retry', 'apply'}:
             source = self.query_one('#screens-'+action, Button)
-            primary.display = not source.disabled
+            primary_visible = not source.disabled
             primary.label = ACTIONS[action][0]
             primary.tooltip = source.tooltip
-        if action == 'edit':
-            self.query_one('#target-next', Static).update('다음 · 아래에서 사이트 주소를 저장한 뒤 설정 적용을 선택하세요.')
+        primary.display = primary_visible
         if not self.query_one('#target-details', Collapsible).collapsed and self.query('#screens-detail'):
             detail = self.query_one('#screens-detail', TextArea)
             content = self.panel.details(self.target_id)
             if detail.text != content:
                 detail.load_text(content)
+
+    def status_label(self, key, content, style=''):
+        if self._status_labels.get(key) != (content, style):
+            self.query_one('#' + key, Static).update(Text(content, style=style))
+            self._status_labels[key] = (content, style)
 
     def on_descendant_focus(self, event: events.DescendantFocus):
         widget = event.widget

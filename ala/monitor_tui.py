@@ -4,6 +4,7 @@ from itertools import groupby
 
 from rich.text import Text
 from textual import on
+from textual.actions import SkipAction
 from textual.containers import Horizontal, Vertical
 from textual.message import Message
 from textual.screen import ModalScreen
@@ -116,8 +117,9 @@ class MonitorCanvas(Static, can_focus=True):
         self.refresh(); event.stop()
 
     def action_stop_drag(self):
-        if self.drag:
-            self.drag = None; self.release_mouse(); self.refresh()
+        if not self.drag:
+            raise SkipAction()
+        self.drag = None; self.release_mouse(); self.refresh()
 
     def action_move(self, dx, dy):
         if not self.editable or not self.draft:

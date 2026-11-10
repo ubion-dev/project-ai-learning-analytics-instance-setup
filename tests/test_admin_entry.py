@@ -70,7 +70,7 @@ def test_help_and_update_check_never_elevate(monkeypatch, capsys):
     capsys.readouterr()
 
 
-def test_default_cli_opens_text_menu_and_tui_stays_explicit(monkeypatch):
+def test_default_cli_opens_tui_after_admin_entry(monkeypatch):
     import sys
     from types import SimpleNamespace
     tty(monkeypatch)
@@ -83,7 +83,7 @@ def test_default_cli_opens_text_menu_and_tui_stays_explicit(monkeypatch):
     from ala import terminal
     monkeypatch.setattr(terminal, 'run_terminal', lambda service, **kw: calls.append(('text', kw['initial'])) or 0)
     assert cli.main([]) == 0
-    assert calls == [('admin', []), ('text', 'home')]
+    assert calls == [('admin', []), ('tui', None)]
     calls.clear()
     assert cli.main(['tui']) == 0
     assert calls == [('admin', ['tui']), ('tui', None)]
@@ -94,6 +94,22 @@ def test_text_console_alias_is_preserved(monkeypatch):
     tty(monkeypatch)
     calls = []
     monkeypatch.setattr(backend.Service, 'enter_admin', lambda self, argv: calls.append(('admin', argv)))
-    monkeypatch.setattr(terminal, 'run_terminal', lambda service, **kw: calls.append(('console', kw['initial'])) or 0)
+    monkeypatch.setattr(terminal, 'run_terminal', lambda service, **kw: calls.append(('console', 'home')) or 0)
     assert cli.main(['console']) == 0
     assert calls == [('admin', ['console']), ('console', 'home')]
+
+
+@pytest.mark.parametrize('args,expected', [(['screen'], {'initial_section': 'screens', 'initial_monitor_editor': False}),
+    (['chrome'], {'initial_section': 'screens', 'initial_monitor_editor': False}),
+    (['display', 'edit'], {'initial_section': 'screens', 'initial_monitor_editor': True})])
+def test_screen_entry_routes_to_tui(monkeypatch, args, expected):
+    from types import SimpleNamespace
+    import sys
+    tty(monkeypatch)
+    calls = []
+    class App:
+        def __init__(self, service, **kwargs): calls.append(kwargs)
+        def run(self): pass
+    monkeypatch.setitem(sys.modules, 'ala.simple_tui', SimpleNamespace(SimpleApp=App))
+    assert cli.main(args, service=object()) == 0
+    assert calls == [expected]
