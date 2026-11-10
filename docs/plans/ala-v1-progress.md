@@ -1,5 +1,13 @@
 # ala 공개판 진행 기록
 
+## 2026-11-10 RC37 기본 TUI 복원 서명 배포 완료
+
+- [PR #33](https://github.com/ubion-dev/project-ai-learning-analytics-instance-setup/pull/33)을 두 최종 CI 통과 후 main의 `72b253a`로 병합하고 새 불변 태그 `v0.1.0-rc.37`을 게시했다. [서명 릴리스 실행](https://github.com/ubion-dev/project-ai-learning-analytics-instance-setup/actions/runs/42768624903)과 [RC37 시험판](https://github.com/ubion-dev/project-ai-learning-analytics-instance-setup/releases/tag/v0.1.0-rc.37)의 게시 성공을 확인했다.
+- 두 최종 CI에서 각각 회귀 2,009개·하위 검사 56개·샌드박스 Linux Chrome 7개를 통과했다. 로컬 관련 최종 73개와 80×24/120×36 합성 화면 렌더링을 확인했고, 작은 화면의 상태 카드·모니터·사이트 편집 저장/닫기 노출을 직접 검토했다. 모니터 바로 진입의 최초 검사에서 Esc가 캔버스에 가로막히는 동작을 확인해 드래그가 없을 때 상위 닫기 바인딩으로 전달하도록 고쳤고 최종 검증을 통과했다. 최종 태그의 서명 워크플로에서도 회귀 2,009개·하위 검사 56개·Linux Chrome 7개를 통과했다.
+- 로컬·Linux CI 배포 묶음은 SHA-256 `3b3a5c8a040c2c24fa1eb0ac15857a51f86348966cb38b4829c737419d9b544d`로 동일하다. 파일 3개를 일반 공개 URL에서 인증 없이 내려받아 동일 바이트·SHA-256·전체 manifest·격리 진입점·정확한 태그 신원의 Sigstore 서명을 검증했다. RC36 신원은 거부됐고 격리 RC36 설치의 업데이트 조회가 RC37을 제안했다.
+- `ala update --prerelease` → `ala --version`(`0.1.0rc37`) → 기존 ala 종료·재실행으로 기본 TUI를 사용한다. RC36에서도 `ala tui`는 즉시 사용할 수 있다. 텍스트 메뉴는 `ala console`로 명시 선택한다. 이번 복원만을 위한 GNOME 재로그인·재부팅·간편 설정 재실행·설정 초기화는 필요 없다.
+- 실제 Rocky/HIWARE/PuTTY 지연·GNOME·패널 수용은 별도다. 실제 장비·사이트·실행 중 Chrome을 변경하지 않았고 실제 환경의 속도 개선율을 확정하지 않는다. UI 문구 중복 갱신 축소를 백엔드 상태 관측 캐시나 안전 검사 생략으로 확장하지 않는다.
+
 ## 2026-11-10 RC37 기본 TUI 복원
 
 - 사용자가 RC36 텍스트 메뉴의 가시성과 시인성이 크게 떨어진다고 보고했다. 성능을 위해 기본 인터페이스를 바꾼 판단을 수정하고 상태 카드·표·모니터 그림이 있는 기본 TUI로 복원한다. RC36에서 즉시 `ala tui`로 같은 화면을 열 수 있음을 안내했다.
