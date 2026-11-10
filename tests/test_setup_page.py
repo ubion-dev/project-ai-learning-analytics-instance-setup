@@ -22,6 +22,33 @@ def complete_local(supervisor):
     event(supervisor, 'Page.lifecycleEvent', frameId='main', loaderId=supervisor.loader, name='load')
 
 
+def test_delayed_verified_launch_document_does_not_fail_new_setup_or_claim_it_loaded(fixture):
+    from test_display_health import Browser
+    supervisor, http, clock, paths = setup_supervisor(fixture)
+    class InitialBrowser(Browser):
+        def call(self, method, params=None, **kwargs):
+            if method == 'Page.getFrameTree':
+                return {'frameTree': {'frame': {'id': 'main', 'loaderId': 'bootstrap', 'url': health.RECOVERY_URL}}}
+            return super().call(method, params, **kwargs)
+    supervisor.transport_factory = InitialBrowser
+    supervisor.start()
+    event(supervisor, 'Page.frameNavigated', frame={'id': 'main', 'loaderId': 'bootstrap', 'url': health.RECOVERY_URL})
+    assert supervisor.value['local_page_ready'] is False and not supervisor.document_ok
+    complete_local(supervisor)
+    assert supervisor.value['local_page_ready'] is True
+    with pytest.raises(health.CDPError):
+        event(supervisor, 'Page.frameNavigated', frame={'id': 'main', 'loaderId': 'bootstrap', 'url': health.RECOVERY_URL})
+
+
+@pytest.mark.parametrize('change', [{'loaderId': 'other'}, {'url': 'https://example.com/other'}])
+def test_unverified_old_document_is_still_rejected_before_setup_load(fixture, change):
+    supervisor, http, clock, paths = setup_supervisor(fixture)
+    supervisor.start()
+    supervisor._bootstrap_loader = 'bootstrap'; supervisor._bootstrap_pending = True
+    with pytest.raises(health.CDPError):
+        event(supervisor, 'Page.frameNavigated', frame={'id': 'main', 'loaderId': 'bootstrap', 'url': health.RECOVERY_URL} | change)
+
+
 def test_setup_uses_owned_tab_and_never_probes_network_or_claims_site_health(fixture):
     supervisor, http, clock, paths = setup_supervisor(fixture)
     supervisor.start()
