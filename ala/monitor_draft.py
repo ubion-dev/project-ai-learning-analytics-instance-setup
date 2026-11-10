@@ -1,4 +1,4 @@
-"""Monitor editor state. Pointer movement is never a configuration mutation."""
+"""Local monitor layout drafts; device changes require a reviewed request."""
 from copy import deepcopy
 
 from .monitor_layout import build_plan, logical_dimensions
@@ -60,7 +60,7 @@ class LayoutDraft:
         return build_plan(self.settings, self.request)
 
     def drop(self, source_id, x, y, target_id=None, *, snap=120):
-        """Commit once on release; reject a collision without moving a third output."""
+        """Change a local draft; reject a collision without moving a third output."""
         if type(x) is not int or type(y) is not int or not -65536 <= x <= 65536 or not -65536 <= y <= 65536:
             raise ValueError('모니터 좌표 범위를 확인하세요.')
         before = deepcopy(self.request)
@@ -120,39 +120,3 @@ class LayoutDraft:
             'below': (anchor['x'], anchor['y'] + anchor['height']),
         }[relation]
         self.drop(source_id, x, y, snap=0)
-
-    def nudge(self, dx, dy):
-        a = next(o for o in self.rects() if o['id'] == self.selected)
-        candidates = []
-        for b in self.rects():
-            if a['id'] == b['id']:
-                continue
-            cx, cy = b['x'] - a['x'], b['y'] - a['y']
-            if (dx and cx * dx > 0) or (dy and cy * dy > 0):
-                candidates.append((abs(cx) + abs(cy), b['id']))
-        if candidates:
-            self.drop(a['id'], a['x'], a['y'], min(candidates)[1])
-        else:
-            self.drop(a['id'], a['x'] + dx * a['width'], a['y'] + dy * a['height'])
-
-
-class Projection:
-    """Fit physical proportions to terminal cells (roughly twice as tall as wide)."""
-    def __init__(self, rects, width, height):
-        self.width, self.height = max(8, width), max(4, height)
-        self.min_x = min(r['x'] for r in rects) - 400
-        self.min_y = min(r['y'] for r in rects) - 300
-        world_w = max(r['x'] + r['width'] for r in rects) - self.min_x + 400
-        world_h = max(r['y'] + r['height'] for r in rects) - self.min_y + 300
-        self.factor = min((self.width - 2) / world_w, (self.height - 2) * 2 / world_h)
-        self.regions = {r['id']: (round((r['x'] - self.min_x) * self.factor),
-                                    round((r['y'] - self.min_y) * self.factor / 2),
-                                    max(3, round(r['width'] * self.factor)),
-                                    max(3, round(r['height'] * self.factor / 2))) for r in rects}
-
-    def hit(self, x, y, *, exclude=None):
-        return next((key for key, (left, top, w, h) in self.regions.items()
-                     if key != exclude and left <= x < left + w and top <= y < top + h), None)
-
-    def world(self, x, y):
-        return round(x / self.factor + self.min_x), round(y * 2 / self.factor + self.min_y)

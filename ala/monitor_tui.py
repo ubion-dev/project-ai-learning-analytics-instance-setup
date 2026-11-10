@@ -1,205 +1,14 @@
-"""Spatial monitor editor; site editing reuses the existing DID settings flow."""
+"""Directional monitor settings; the observed layout is shown on the main tab."""
 from copy import deepcopy
-from itertools import groupby
 
 from rich.text import Text
 from textual import on
-from textual.actions import SkipAction
 from textual.containers import Horizontal, Vertical, VerticalScroll
-from textual.message import Message
 from textual.screen import ModalScreen
-from textual.widgets import Button, Collapsible, Input, Label, Select, Static, Switch, TextArea
+from textual.widgets import Button, Collapsible, Label, Select, Static, Switch, TextArea
 
 from .chrome_tui import safe_text
-from .monitor_draft import LayoutDraft, Projection
-
-
-class MonitorCanvas(Static, can_focus=True):
-    DEFAULT_CSS = 'MonitorCanvas { height: 1fr; min-height: 7; background: #181722; padding: 0; } MonitorCanvas:focus { background: #242032; }'
-    BINDINGS = [('left', 'move(-1,0)', '왼쪽'), ('right', 'move(1,0)', '오른쪽'),
-                ('up', 'move(0,-1)', '위'), ('down', 'move(0,1)', '아래'), ('escape', 'stop_drag', '드래그 취소')]
-
-    class Selected(Message): pass
-    class Changed(Message):
-        def __init__(self, reason=''):
-            super().__init__(); self.reason = reason
-
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-        self.draft = None
-        self.editable = True
-        self.projection = None
-        self.drag = None
-
-    def set_draft(self, draft):
-        self.draft = draft
-        self.drag = None
-        self.refresh()
-
-    def on_resize(self): self.refresh()
-
-    def render(self):
-        if not self.draft:
-            return Text('모니터 정보를 조회하고 있습니다.')
-        width, height = max(8, self.content_size.width), max(4, self.content_size.height)
-        if not self.drag:
-            self.projection = Projection(self.draft.rects(), width, height)
-        p = self.projection
-        grid = [[(' ', '') for _ in range(width)] for _ in range(height)]
-        numbers = {key: i + 1 for i, key in enumerate(sorted(p.regions))}
-        for key, box in p.regions.items():
-            x, y, w, h = box
-            style = '#b5e9d9' if key == self.draft.selected else '#aabdd0'
-            if self.drag and self.drag.get('moving'):
-                if key == self.drag['source']:
-                    x, y = self.drag['left'], self.drag['top']
-                    style = 'bold #cbc2ef'
-                elif key == self.drag.get('target'):
-                    style = 'bold #f1d5a3'
-            lines = ['┌' + '─' * (w - 2) + '┐']
-            lines += ['│' + ' ' * (w - 2) + '│' for _ in range(h - 2)]
-            lines += ['└' + '─' * (w - 2) + '┘']
-            label = f'#{numbers[key]} {key}'
-            lines[1] = '│' + label[:w - 2].center(w - 2) + '│'
-            for row, line in enumerate(lines):
-                for col, char in enumerate(line):
-                    if 0 <= x + col < width and 0 <= y + row < height:
-                        grid[y + row][x + col] = (char, style)
-        text = Text()
-        for row, line in enumerate(grid):
-            for style, cells in groupby(line, key=lambda cell: cell[1]):
-                text.append(''.join(char for char, _ in cells), style)
-            if row < height - 1: text.append('\n')
-        return text
-
-    def point(self, event):
-        return event.screen_x - self.content_region.x, event.screen_y - self.content_region.y
-
-    def on_mouse_down(self, event):
-        if event.button != 1 or not self.editable or not self.draft or not self.projection:
-            return
-        x, y = self.point(event)
-        source = self.projection.hit(x, y)
-        if source:
-            self.focus(); self.draft.selected = source
-            left, top, _, _ = self.projection.regions[source]
-            self.drag = {'source': source, 'x': x, 'y': y, 'left': left, 'top': top,
-                         'dx': x - left, 'dy': y - top, 'moving': False, 'target': None}
-            self.capture_mouse(); self.post_message(self.Selected()); self.refresh(); event.stop()
-
-    def on_mouse_move(self, event):
-        if not self.drag:
-            return
-        x, y = self.point(event)
-        d = self.drag
-        if abs(x - d['x']) + abs(y - d['y']) >= 2:
-            d['moving'] = True
-        if d['moving']:
-            d.update(left=x - d['dx'], top=y - d['dy'], target=self.projection.hit(x, y, exclude=d['source']))
-            self.refresh()
-        event.stop()
-
-    def on_mouse_up(self, event):
-        if not self.drag:
-            return
-        x, y = self.point(event)
-        d, p = self.drag, self.projection
-        self.drag = None; self.release_mouse()
-        reason = ''
-        if d['moving'] and 0 <= x < self.content_size.width and 0 <= y < self.content_size.height:
-            original = self.draft.output(d['source'])
-            wx = original['x'] + round((x - d['x']) / p.factor)
-            wy = original['y'] + round((y - d['y']) * 2 / p.factor)
-            try:
-                self.draft.drop(d['source'], wx, wy, p.hit(x, y, exclude=d['source']), snap=max(120, round(1.5 / p.factor)))
-            except ValueError as exc: reason = str(exc)
-            self.post_message(self.Changed(reason))
-        self.refresh(); event.stop()
-
-    def action_stop_drag(self):
-        if not self.drag:
-            raise SkipAction()
-        self.drag = None; self.release_mouse(); self.refresh()
-
-    def action_move(self, dx, dy):
-        if not self.editable or not self.draft:
-            return
-        reason = ''
-        try: self.draft.nudge(dx, dy)
-        except ValueError as exc: reason = str(exc)
-        self.post_message(self.Changed(reason)); self.refresh()
-
-
-class PositionEditor(ModalScreen[dict | None]):
-    """Edit a copied draft. Closing this dialog cannot change the OS or parent."""
-    BINDINGS = [('escape', 'cancel', '취소')]
-    CSS = '''
-    PositionEditor { align: center middle; background: #17161d; }
-    #position-editor { width: 70; max-width: 96%; height: auto; max-height: 96%; padding: 0 1; background: #211f29; border: round #cbc2ef; }
-    #position-fields { height: auto; max-height: 16; }
-    #position-editor Label, #position-summary { height: 1; }
-    #position-kind, #position-anchor, #position-coordinates { height: 3; }
-    #position-coordinates Input { width: 1fr; }
-    #position-message { height: auto; max-height: 2; color: #f1d5a3; }
-    #position-buttons { height: 3; }
-    #position-buttons Button { width: 1fr; }
-    '''
-
-    def __init__(self, draft):
-        super().__init__()
-        self.draft = deepcopy(draft)
-
-    def compose(self):
-        source = self.draft.output()
-        others = [(key, key) for key in sorted(o['id'] for o in self.draft.request['outputs']) if key != source['id']]
-        with Vertical(id='position-editor'):
-            yield Static('위치 변경 · ' + safe_text(source['id']), id='position-summary', markup=False)
-            with VerticalScroll(id='position-fields'):
-                yield Label('변경 방법 · 이 PC에 연결된 모니터만 선택')
-                yield Select([('다른 모니터와 위치 교환', 'swap'), ('기준 모니터의 왼쪽', 'left'),
-                    ('기준 모니터의 오른쪽', 'right'), ('기준 모니터의 위', 'above'),
-                    ('기준 모니터의 아래', 'below'), ('정확한 좌표 입력', 'coordinates')],
-                    value='swap' if others else 'coordinates', allow_blank=False, id='position-kind')
-                yield Label('기준 모니터')
-                yield Select(others, value=others[0][1] if others else Select.NULL,
-                             prompt='다른 출력 없음', id='position-anchor')
-                yield Label('좌표 · 가로 X / 세로 Y')
-                with Horizontal(id='position-coordinates'):
-                    yield Input(str(source['x']), id='position-x', placeholder='가로 X')
-                    yield Input(str(source['y']), id='position-y', placeholder='세로 Y')
-            yield Static('초안만 변경합니다. OS 변경은 별도의 변경 검토·배치 적용에서 실행합니다.', id='position-message', markup=False)
-            with Horizontal(id='position-buttons'):
-                yield Button('취소', id='position-cancel')
-                yield Button('초안에 반영', id='position-save', variant='primary')
-
-    def on_mount(self):
-        self.update_fields()
-        self.query_one('#position-kind', Select).focus()
-
-    @on(Select.Changed, '#position-kind')
-    def update_fields(self):
-        coordinates = self.query_one('#position-kind', Select).value == 'coordinates'
-        self.query_one('#position-anchor', Select).disabled = coordinates
-        self.query_one('#position-x', Input).disabled = not coordinates
-        self.query_one('#position-y', Input).disabled = not coordinates
-
-    def action_cancel(self): self.dismiss(None)
-
-    @on(Button.Pressed)
-    def pressed(self, event):
-        event.stop()
-        if event.button.id == 'position-cancel':
-            self.action_cancel()
-        elif event.button.id == 'position-save':
-            try:
-                model = deepcopy(self.draft)
-                relation = self.query_one('#position-kind', Select).value
-                values = ({'x': int(self.query_one('#position-x', Input).value),
-                           'y': int(self.query_one('#position-y', Input).value)} if relation == 'coordinates' else {})
-                model.place(model.selected, relation, self.query_one('#position-anchor', Select).value, **values)
-                self.dismiss(deepcopy(model.request))
-            except ValueError as exc:
-                self.query_one('#position-message', Static).update(str(exc))
+from .monitor_draft import LayoutDraft
 
 
 class LayoutReview(ModalScreen[bool]):
@@ -240,24 +49,24 @@ class LayoutReview(ModalScreen[bool]):
 
 
 class MonitorEditor(ModalScreen):
-    BINDINGS = [('escape', 'close_editor', '닫기'), ('p', 'position', '위치 변경')]
+    BINDINGS = [('escape', 'close_editor', '닫기')]
     CSS = '''
     MonitorEditor { align: center middle; background: #17161d; }
     #monitor-editor { width: 96%; height: 96%; padding: 0 1; background: #211f29; border: round #cbc2ef; }
     #monitor-title, #monitor-selected { height: 1; }
     #monitor-message { height: auto; max-height: 3; color: #f1d5a3; }
-    #monitor-guide { height: 1; color: #aabdd0; text-wrap: nowrap; text-overflow: ellipsis; }
-    #monitor-fields, #monitor-buttons, #monitor-confirm-buttons, #monitor-options, #monitor-coordinate-row { height: 3; }
+    #monitor-settings { height: 1fr; }
+    #monitor-fields, #monitor-anchor-row, #monitor-directions, #monitor-buttons, #monitor-confirm-buttons, #monitor-options { height: 3; }
     #monitor-port { width: 22; }
     #monitor-mode { width: 1fr; }
     #monitor-scale { width: 15; }
+    #monitor-anchor-row Label { width: 16; height: 3; content-align: left middle; }
+    #monitor-anchor { width: 1fr; }
     #monitor-options Label { width: 23; height: 3; content-align: left middle; }
     #monitor-options Switch { width: 8; }
-    #monitor-options Button { width: 1fr; padding: 0; min-width: 10; }
+    #monitor-options Button, #monitor-directions Button { width: 1fr; padding: 0; min-width: 10; }
     #monitor-buttons Button, #monitor-confirm-buttons Button { width: 1fr; min-width: 10; padding: 0; }
-    #monitor-coordinates { height: auto; padding: 0; }
-    #monitor-coordinate-row Input { width: 1fr; }
-    #monitor-coordinate-row Button { width: 18; }
+    #monitor-profile { height: auto; padding: 0; }
     '''
 
     def __init__(self, panel):
@@ -269,28 +78,28 @@ class MonitorEditor(ModalScreen):
 
     def compose(self):
         with Vertical(id='monitor-editor'):
-            yield Static('모니터 배치·해상도·화면 배율', id='monitor-title')
+            yield Static('모니터 설정 · 배치도는 화면 관리 탭에서 확인', id='monitor-title')
             yield Static('지원 모드를 조회하고 있습니다.', id='monitor-message', markup=False)
-            yield MonitorCanvas(id='monitor-canvas')
-            yield Static('위치 변경: P 또는 버튼 · 기준 모니터의 좌우·상하 선택 · 적용 전까지 초안', id='monitor-guide')
             yield Static('', id='monitor-selected', markup=False)
-            with Horizontal(id='monitor-fields'):
-                yield Select([], prompt='모니터', id='monitor-port')
-                yield Select([], prompt='해상도·주사율', id='monitor-mode')
-                yield Select([], prompt='화면 배율', id='monitor-scale')
-            with Collapsible(title='정확한 좌표 입력', id='monitor-coordinates', collapsed=True):
-                with Horizontal(id='monitor-coordinate-row'):
-                    yield Input('0', id='monitor-x', placeholder='가로 X')
-                    yield Input('0', id='monitor-y', placeholder='세로 Y')
-                    yield Button('좌표 반영', id='monitor-coordinate-apply')
-                yield Button('저장 배치 로그인 복원 끄기', id='monitor-profile-disable')
-                yield Button('저장 배치 복원 재시도', id='monitor-profile-retry')
-            with Horizontal(id='monitor-options'):
-                yield Label('다음 로그인에도 유지')
-                yield Switch(True, id='monitor-persist')
-                yield Button('위치 변경', id='monitor-position')
-                yield Button('이 모니터의 사이트', id='monitor-site')
-                yield Button('모니터 식별', id='monitor-identify')
+            with VerticalScroll(id='monitor-settings'):
+                with Horizontal(id='monitor-fields'):
+                    yield Select([], prompt='모니터', id='monitor-port')
+                    yield Select([], prompt='해상도·주사율', id='monitor-mode')
+                    yield Select([], prompt='화면 배율', id='monitor-scale')
+                with Horizontal(id='monitor-anchor-row'):
+                    yield Label('기준 모니터')
+                    yield Select([], prompt='다른 모니터 선택', id='monitor-anchor')
+                with Horizontal(id='monitor-directions'):
+                    for relation, label in [('left', '← 왼쪽'), ('right', '오른쪽 →'), ('above', '↑ 위'), ('below', '아래 ↓')]:
+                        yield Button(label, id='monitor-' + relation, disabled=True)
+                with Horizontal(id='monitor-options'):
+                    yield Label('다음 로그인에도 유지')
+                    yield Switch(True, id='monitor-persist')
+                    yield Button('이 모니터의 사이트', id='monitor-site')
+                    yield Button('모니터 식별', id='monitor-identify')
+                with Collapsible(title='로그인 배치 복원', id='monitor-profile', collapsed=True):
+                    yield Button('저장 배치 로그인 복원 끄기', id='monitor-profile-disable')
+                    yield Button('저장 배치 복원 재시도', id='monitor-profile-retry')
             with Horizontal(id='monitor-confirm-buttons'):
                 yield Button('이 배치 유지', id='monitor-keep', variant='primary')
                 yield Button('원래 배치로 복원', id='monitor-revert')
@@ -305,6 +114,7 @@ class MonitorEditor(ModalScreen):
         self.query_one('#monitor-confirm-buttons').display = False
         self.set_interval(1, self.poll)
         await self.load()
+        self.call_after_refresh(self.update_controls)
 
     def message(self, value): self.query_one('#monitor-message', Static).update(safe_text(value))
 
@@ -320,9 +130,8 @@ class MonitorEditor(ModalScreen):
             settings = await self.service.call('monitor-layout-state')
             self.trial_supported = bool(settings.get('trial_supported'))
             self.draft = LayoutDraft(settings)
-            self.query_one('#monitor-canvas', MonitorCanvas).set_draft(self.draft)
             self.query_one('#monitor-extension', Button).display = not settings.get('trial_supported')
-            self.message('모니터를 선택하고 위치 변경(P)에서 좌우·상하·교환을 정하세요.' if settings.get('trial_supported')
+            self.message('대상과 기준 모니터를 선택하고 상하좌우 버튼으로 초안을 변경하세요.' if settings.get('trial_supported')
                          else '배치 적용 기능이 있는 확장으로 갱신하세요. 사이트 설정은 유지합니다.')
             self.sync_fields()
         except Exception as exc: self.message(str(exc))
@@ -330,7 +139,7 @@ class MonitorEditor(ModalScreen):
             self.busy = False; self.update_controls()
 
     def sync_fields(self):
-        with self.prevent(Select.Changed, Input.Changed):
+        with self.prevent(Select.Changed):
             self._sync_fields()
 
     def _sync_fields(self):
@@ -349,14 +158,15 @@ class MonitorEditor(ModalScreen):
             scale = Select.NULL if output['scale'] is None else str(next(s for s in mode['supported_scales'] if s == output['scale']))
             self.sync_select('monitor-scale',
                 [(f'{s * 100:g}%', str(s)) for s in mode['supported_scales']], scale)
-            self.query_one('#monitor-x', Input).value = str(output['x'])
-            self.query_one('#monitor-y', Input).value = str(output['y'])
+            anchors = [key for key in sorted(o['id'] for o in self.draft.request['outputs']) if key != self.draft.selected]
+            current_anchor = self.query_one('#monitor-anchor', Select).value
+            self.sync_select('monitor-anchor', [(key, key) for key in anchors],
+                             current_anchor if current_anchor in anchors else anchors[0] if anchors else Select.NULL)
             targets = self.panel.targets_on_output(self.draft.selected)
             sites = ', '.join(t['id'] for t in targets) or '사이트 미설정'
             self.query_one('#monitor-selected', Static).update(safe_text(self.draft.selected + ' · ' + sites))
         finally:
             self.syncing = False
-        self.query_one('#monitor-canvas', MonitorCanvas).refresh()
         self.update_controls()
 
     def sync_select(self, key, options, value):
@@ -373,11 +183,14 @@ class MonitorEditor(ModalScreen):
         if not self.is_mounted:
             return
         editable = bool(self.draft) and not self.busy and not self.operation
-        for key in ('monitor-port', 'monitor-mode', 'monitor-scale', 'monitor-persist', 'monitor-coordinate-apply',
-                    'monitor-position', 'monitor-site', 'monitor-identify', 'monitor-review', 'monitor-undo', 'monitor-refresh', 'monitor-extension',
+        for key in ('monitor-port', 'monitor-mode', 'monitor-scale', 'monitor-persist', 'monitor-anchor', 'monitor-site', 'monitor-identify', 'monitor-review', 'monitor-undo', 'monitor-refresh', 'monitor-extension',
                     'monitor-profile-disable', 'monitor-profile-retry'):
             self.query_one('#' + key).disabled = not editable if key not in {'monitor-refresh', 'monitor-extension'} else bool(self.busy or self.operation)
-        canvas = self.query_one('#monitor-canvas', MonitorCanvas); canvas.editable = editable
+        anchor = self.query_one('#monitor-anchor', Select).value
+        valid_anchor = (self.draft is not None and isinstance(anchor, str) and anchor != self.draft.selected
+                        and anchor in {o['id'] for o in self.draft.request['outputs']})
+        for relation in ('left', 'right', 'above', 'below'):
+            self.query_one('#monitor-' + relation, Button).disabled = not editable or not valid_anchor
         if self.draft:
             try:
                 self.draft.validate()
@@ -394,6 +207,9 @@ class MonitorEditor(ModalScreen):
 
     @on(Select.Changed)
     def selected(self, event):
+        if event.select.id == 'monitor-anchor':
+            self.update_controls()
+            return
         if self.syncing or self.busy or self.operation or not self.draft or event.value is Select.NULL:
             return
         if event.select.id == 'monitor-port':
@@ -406,30 +222,6 @@ class MonitorEditor(ModalScreen):
             if float(event.value) == self.draft.output()['scale']: return
             self.draft.set_scale(float(event.value))
         self.sync_fields()
-
-    @on(MonitorCanvas.Selected)
-    def canvas_selected(self): self.sync_fields()
-
-    @on(MonitorCanvas.Changed)
-    def canvas_changed(self, event):
-        self.message(event.reason or '편집값만 변경했습니다. 변경 검토 후 적용하세요.')
-        self.sync_fields()
-
-    def action_position(self):
-        if not self.draft or self.busy or self.operation:
-            return
-        draft = self.draft
-        before = deepcopy(draft.request)
-        def accepted(request):
-            if request is None or not self.is_mounted:
-                return
-            if self.busy or self.operation or self.draft is not draft or draft.request != before:
-                self.message('편집 상태가 바뀌었습니다. 위치를 다시 확인하세요.')
-                return
-            draft.request = request
-            self.sync_fields()
-            self.message('위치 초안만 변경했습니다. 변경 검토 후 배치를 적용하세요.')
-        self.app.push_screen(PositionEditor(draft), accepted)
 
     async def poll(self):
         if not self.operation or self.polling or self.busy:
@@ -502,13 +294,16 @@ class MonitorEditor(ModalScreen):
                 finally: self.busy = False; self.update_controls()
             elif key == 'monitor-undo':
                 self.draft = LayoutDraft(self.draft.settings)
-                self.query_one('#monitor-canvas', MonitorCanvas).set_draft(self.draft); self.sync_fields()
-            elif key == 'monitor-coordinate-apply':
+                self.sync_fields()
+            elif key in {'monitor-left', 'monitor-right', 'monitor-above', 'monitor-below'}:
+                relation = key.removeprefix('monitor-')
+                anchor = self.query_one('#monitor-anchor', Select).value
                 try:
-                    self.draft.drop(self.draft.selected, int(self.query_one('#monitor-x', Input).value), int(self.query_one('#monitor-y', Input).value), snap=0)
+                    self.draft.place(self.draft.selected, relation, anchor)
                     self.sync_fields()
+                    words = {'left': '왼쪽', 'right': '오른쪽', 'above': '위', 'below': '아래'}
+                    self.message(f'{self.draft.selected}를 {anchor}의 {words[relation]}에 배치하는 초안입니다. 변경 검토 후 적용하세요.')
                 except ValueError as exc: self.message(str(exc))
-            elif key == 'monitor-position': self.action_position()
             elif key == 'monitor-identify': await self.panel.session_action('identify')
             elif key == 'monitor-site':
                 targets = self.panel.targets_on_output(self.draft.selected)

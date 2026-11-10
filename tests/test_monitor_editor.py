@@ -8,7 +8,7 @@ from textual.widgets import Button, Select
 
 from ala.monitor_draft import LayoutDraft
 from ala.monitor_layout import read_settings
-from ala.monitor_tui import MonitorCanvas, MonitorEditor, LayoutReview
+from ala.monitor_tui import MonitorEditor, LayoutReview
 from test_monitor_layout import current_state
 
 
@@ -71,9 +71,6 @@ class EditorApp(App):
     def on_mount(self): self.push_screen(MonitorEditor(self.panel))
 
 
-def point(canvas, key):
-    left, top, w, h = canvas.projection.regions[key]
-    return canvas.content_region.x + left + w // 2, canvas.content_region.y + top + h // 2
 
 
 @pytest.mark.parametrize('size', [(80, 24), (120, 40)])
@@ -94,23 +91,6 @@ def test_opening_is_read_only_and_sites_use_existing_monitor_identity(size):
     asyncio.run(scenario())
 
 
-def test_drag_does_not_move_target_or_draft_until_mouse_release():
-    async def scenario():
-        service = Service(); app = EditorApp(service)
-        async with app.run_test(size=(120, 40)) as pilot:
-            await pilot.pause()
-            editor = app.screen; canvas = editor.query_one(MonitorCanvas)
-            original = deepcopy(editor.draft.request)
-            target = point(canvas, 'DP-3')
-            await pilot.mouse_down(offset=point(canvas, 'DP-1'))
-            await pilot.hover(offset=target); await pilot.pause()
-            assert canvas.drag['target'] == 'DP-3'
-            assert editor.draft.request == original
-            assert canvas.projection.regions['DP-3'][0] > canvas.projection.regions['DP-2'][0]
-            await pilot.mouse_up(offset=target); await pilot.pause()
-            assert [o['x'] for o in editor.draft.request['outputs']] == [3840, 1920, 0]
-            assert not any(a == 'monitor-layout-submit' for a, _ in service.calls)
-    asyncio.run(scenario())
 
 
 def test_review_is_explicit_and_confirmation_keeps_output_site_identity():
@@ -119,7 +99,7 @@ def test_review_is_explicit_and_confirmation_keeps_output_site_identity():
         async with app.run_test(size=(100, 36)) as pilot:
             await pilot.pause()
             editor = app.screen
-            editor.draft.drop('DP-1', 0, 0, 'DP-2'); editor.sync_fields()
+            editor.draft.place('DP-1', 'below', 'DP-2'); editor.sync_fields()
             await pilot.click('#monitor-review'); await pilot.pause()
             assert isinstance(app.screen, LayoutReview)
             assert not any(a == 'monitor-layout-submit' for a, _ in service.calls)
@@ -133,17 +113,6 @@ def test_review_is_explicit_and_confirmation_keeps_output_site_identity():
     asyncio.run(scenario())
 
 
-def test_escape_during_drag_cancels_edit_without_apply():
-    async def scenario():
-        service = Service(); app = EditorApp(service)
-        async with app.run_test(size=(100, 36)) as pilot:
-            await pilot.pause(); editor = app.screen; canvas = editor.query_one(MonitorCanvas)
-            before = deepcopy(editor.draft.request)
-            await pilot.mouse_down(offset=point(canvas, 'DP-1')); await pilot.hover(offset=point(canvas, 'DP-3'))
-            await pilot.press('escape'); await pilot.pause()
-            assert canvas.drag is None and editor.draft.request == before
-            assert isinstance(app.screen, MonitorEditor)
-    asyncio.run(scenario())
 
 
 def test_mode_change_keeps_unsupported_scale_unselected_in_actual_form():
@@ -191,22 +160,23 @@ def test_existing_screen_panel_opens_editor_and_monitor_site_settings():
     asyncio.run(scenario())
 
 
-def test_selection_and_coordinates_reuse_choices_but_mode_change_updates_scales(monkeypatch):
+def test_selection_and_direction_reuse_choices_but_mode_change_updates_scales(monkeypatch):
     async def scenario():
         app = EditorApp(Service(2))
         async with app.run_test(size=(120, 40)) as pilot:
             await pilot.pause()
             editor = app.screen
-            canvas = editor.query_one(MonitorCanvas)
             calls = []
             original = Select.set_options
             def record(widget, options):
                 calls.append(widget.id)
                 return original(widget, options)
             monkeypatch.setattr(Select, 'set_options', record)
-            await pilot.click(offset=point(canvas, 'DP-2'))
+            editor.query_one('#monitor-port', Select).value = 'DP-2'
             await pilot.pause()
-            editor.draft.nudge(0, 1)
+            assert calls == ['monitor-anchor']
+            calls.clear()
+            editor.draft.place('DP-2', 'below', 'DP-1')
             editor.sync_fields()
             await pilot.pause()
             assert calls == []
@@ -220,7 +190,7 @@ def test_selection_and_coordinates_reuse_choices_but_mode_change_updates_scales(
             editor.query_one('#monitor-scale', Select).value = '1.0'
             await pilot.pause()
             assert editor.draft.output()['scale'] == 1
-            assert len(canvas.render().spans) < 100
+            assert not editor.query('#monitor-canvas')
     asyncio.run(scenario())
 
 
@@ -279,93 +249,95 @@ def test_relative_placement_rejects_overlap_without_changing_any_output():
     assert model.request == original
 
 
-@pytest.mark.parametrize('size', [(80, 24), (120, 40)])
-def test_keyboard_position_dialog_changes_only_draft_and_stays_visible(size):
-    from ala.monitor_tui import PositionEditor
+
+
+
+
+
+
+
+
+@pytest.mark.parametrize('size', [(80, 24), (120, 36)])
+@pytest.mark.parametrize('relation,expected', [('left', (-1920, 0)), ('right', (1920, 0)),
+    ('above', (0, -1080)), ('below', (0, 1080))])
+def test_four_direction_buttons_edit_only_local_draft_without_canvas(size, relation, expected):
     async def scenario():
         service = Service(2); app = EditorApp(service)
+        observed = deepcopy(service.settings)
         async with app.run_test(size=size) as pilot:
             await pilot.pause(); editor = app.screen
-            editor.query_one('#monitor-port', Select).value = 'DP-2'
-            await pilot.pause()
-            before = deepcopy(editor.draft.request)
-            await pilot.press('p'); await pilot.pause()
-            assert isinstance(app.screen, PositionEditor)
-            button = app.screen.query_one('#position-save', Button)
+            assert not editor.query('#monitor-canvas') and not editor.query('#monitor-x')
+            assert not editor.query('#monitor-position')
+            editor.query_one('#monitor-port', Select).focus()
+            await pilot.press('enter', 'end', 'enter'); await pilot.pause()
+            assert editor.draft.selected == 'DP-2'
+            assert editor.query_one('#monitor-anchor', Select).value == 'DP-1'
+            button = editor.query_one('#monitor-' + relation, Button)
             assert button.region.bottom <= size[1]
-            app.screen.query_one('#position-kind', Select).value = 'below'
-            await pilot.pause()
-            assert editor.draft.request == before
             button.focus(); await pilot.press('enter'); await pilot.pause()
-            assert app.screen is editor
-            assert editor.draft.output()['y'] == 1080
+            assert (editor.draft.output()['x'], editor.draft.output()['y']) == expected
             assert editor.draft.validate()['site_assignments'] == 'preserved'
+            assert service.settings == observed
             assert service.calls == [('monitor-layout-status', None), ('monitor-layout-state', None)]
-    asyncio.run(scenario())
-
-
-def test_position_cancel_overlap_and_stale_parent_do_not_change_draft():
-    from ala.monitor_tui import PositionEditor
-    from textual.widgets import Input, Static
-    async def scenario():
-        service = Service(3); app = EditorApp(service)
-        async with app.run_test(size=(100, 36)) as pilot:
-            await pilot.pause(); editor = app.screen
-            original = deepcopy(editor.draft.request)
-            await pilot.click('#monitor-position'); await pilot.pause()
-            assert isinstance(app.screen, PositionEditor)
-            app.screen.query_one('#position-anchor', Select).value = 'DP-2'
-            app.screen.query_one('#position-kind', Select).value = 'right'
-            await pilot.pause(); await pilot.click('#position-save'); await pilot.pause()
-            assert isinstance(app.screen, PositionEditor)
-            assert '겹칩니다' in str(app.screen.query_one('#position-message', Static).render())
-            assert editor.draft.request == original
             await pilot.press('escape'); await pilot.pause()
-            assert app.screen is editor and editor.draft.request == original
-            await pilot.press('p'); await pilot.pause()
-            app.screen.query_one('#position-kind', Select).value = 'coordinates'
-            await pilot.pause()
-            app.screen.query_one('#position-x', Input).value = '-1920'
-            editor.draft = LayoutDraft(editor.draft.settings)
-            await pilot.click('#position-save'); await pilot.pause()
-            assert app.screen is editor and editor.draft.request == original
-            assert '편집 상태가 바뀌었습니다' in str(editor.query_one('#monitor-message', Static).render())
-            assert service.calls == [('monitor-layout-status', None), ('monitor-layout-state', None)]
+            assert app.screen is not editor
     asyncio.run(scenario())
 
 
-def test_single_output_position_dialog_uses_coordinates_without_phantom_monitors():
-    from ala.monitor_tui import PositionEditor
-    async def scenario():
-        service = Service(1); app = EditorApp(service)
+def test_direction_overlap_keeps_all_outputs_and_single_output_disables_directions():
+    from textual.widgets import Static
+    async def scenario(count):
+        service = Service(count); app = EditorApp(service)
         async with app.run_test(size=(80, 24)) as pilot:
             await pilot.pause(); editor = app.screen
-            await pilot.press('p'); await pilot.pause()
-            assert isinstance(app.screen, PositionEditor)
-            assert app.screen.query_one('#position-kind', Select).value == 'coordinates'
-            assert app.screen.query_one('#position-anchor', Select).disabled
-            await pilot.press('escape'); await pilot.pause()
-            assert app.screen is editor
-    asyncio.run(scenario())
+            before = deepcopy(editor.draft.request)
+            if count == 1:
+                assert editor.query_one('#monitor-anchor', Select).value is Select.NULL
+                for direction in ('left', 'right', 'above', 'below'):
+                    assert editor.query_one('#monitor-' + direction, Button).disabled
+            else:
+                await pilot.click('#monitor-right'); await pilot.pause()
+                assert '겹칩니다' in str(editor.query_one('#monitor-message', Static).render())
+                assert editor.draft.request == before
+            assert service.calls == [('monitor-layout-status', None), ('monitor-layout-state', None)]
+    asyncio.run(scenario(3)); asyncio.run(scenario(1))
 
 
-def test_keyboard_position_flows_through_existing_review_apply_and_confirmation():
-    from ala.monitor_tui import PositionEditor
+def test_direction_change_requires_review_apply_and_explicit_confirmation():
     async def scenario():
         service = Service(2); app = EditorApp(service)
-        async with app.run_test(size=(120, 40)) as pilot:
+        async with app.run_test(size=(100, 36)) as pilot:
             await pilot.pause(); editor = app.screen
-            original = deepcopy(editor.draft.request)
-            await pilot.press('p'); await pilot.pause()
-            assert isinstance(app.screen, PositionEditor)
-            await pilot.click('#position-save'); await pilot.pause()
-            assert editor.draft.request != original
+            editor.query_one('#monitor-port', Select).value = 'DP-2'
+            await pilot.pause(); await pilot.click('#monitor-below'); await pilot.pause()
             assert not any(a == 'monitor-layout-submit' for a, _ in service.calls)
+            assert editor.draft.output()['y'] == 1080
             await pilot.click('#monitor-review'); await pilot.pause()
             assert isinstance(app.screen, LayoutReview)
             await pilot.click('#layout-review-apply'); await pilot.pause()
-            assert [payload for action, payload in service.calls if action == 'monitor-layout-submit'] == [
+            assert [p for a, p in service.calls if a == 'monitor-layout-submit'] == [
                 {'layout': editor.draft.request, 'persistent': True}]
             await pilot.click('#monitor-keep'); await pilot.pause()
             assert ('monitor-layout-confirm', {'operation_id': 'a' * 32}) in service.calls
     asyncio.run(scenario())
+
+
+def test_clearing_anchor_disables_direction_buttons_and_initial_trial_is_visible():
+    async def scenario(active):
+        service = Service(2)
+        if active: service.operation = {'state': 'awaiting_confirmation', 'operation_id': 'a' * 32}
+        app = EditorApp(service)
+        async with app.run_test(size=(80, 24)) as pilot:
+            await pilot.pause(); editor = app.screen
+            if active:
+                assert editor.query_one('#monitor-confirm-buttons').display
+                assert not editor.query_one('#monitor-keep', Button).disabled
+                assert editor.query_one('#monitor-anchor', Select).disabled
+                assert service.calls == [('monitor-layout-status', None)]
+            else:
+                assert not editor.query_one('#monitor-left', Button).disabled
+                editor.query_one('#monitor-anchor', Select).value = Select.NULL
+                await pilot.pause()
+            for direction in ('left', 'right', 'above', 'below'):
+                assert editor.query_one('#monitor-' + direction, Button).disabled
+    asyncio.run(scenario(False)); asyncio.run(scenario(True))

@@ -149,7 +149,6 @@ def test_running_identify_keeps_did_status_and_blocks_duplicate_operations():
                 assert panel.priority(panel.target())[0] == 'Chrome 실행 실패'
                 assert not panel.action_state('add', None)[0]
                 assert not panel.action_state('edit', panel.target())[0]
-                assert panel.move_allowed(panel.target(), 'DP-1')
                 await panel.session_action('identify')
                 assert await panel.save_target(service.screens['targets'][0], service.config) is None
                 panel.open_target('default')
@@ -192,12 +191,10 @@ def test_current_backend_relogin_advice_is_complete_in_80_columns_without_setup_
     asyncio.run(scenario())
 
 
-@pytest.mark.parametrize('operation', ['perform', 'save', 'move', 'recover'])
+@pytest.mark.parametrize('operation', ['perform', 'save', 'recover'])
 def test_explicit_target_work_clears_session_notice_and_keeps_target_result_visible(operation):
     async def scenario():
         service = IdentifyService()
-        if operation == 'move':
-            service.screens['targets'] = service.screens['targets'][:1]
         if operation == 'recover':
             service.screens['targets'][0]['swap'] = {'state': 'recovery_required', 'operation_id': 'f' * 32}
         app = SimpleApp(service=service, initial_section='screens')
@@ -213,9 +210,6 @@ def test_explicit_target_work_clears_session_notice_and_keeps_target_result_visi
                 value = {key: deepcopy(original[key]) for key in ('id', 'url', 'output', 'layout', 'autostart', 'frontend')}
                 value['url'] = 'https://example.com/changed'
                 await panel.save_target(value, deepcopy(service.config))
-            elif operation == 'move':
-                await panel.move_target(original, 'DP-1', deepcopy(service.config),
-                                        topology=deepcopy(service.screens['logical_outputs']))
             else:
                 await panel.session_action('swap-recover', target_id='default')
             assert panel.session_notice is None

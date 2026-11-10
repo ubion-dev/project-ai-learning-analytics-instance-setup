@@ -6,10 +6,10 @@ import pytest
 from textual.widgets import Button, Checkbox, Collapsible, Input, OptionList, Select, Switch, TextArea
 
 from ala.quick_tui import diagnosis
-from ala.screens_tui import MoveConfirmation, ScreenPanel, TargetChooser, TargetEditor
+from ala.screens_tui import ScreenPanel, TargetChooser, TargetEditor
 from ala.screen_map import ScreenMap
 from ala.simple_tui import SimpleApp, DisplayInitializationConfirmation
-from test_screen_drag import drag, point
+from test_screen_drag import point
 from test_screens_tui import Service as ScreenService, open_target
 from test_simple_tui import FakeService
 
@@ -28,41 +28,6 @@ class DisplayService(ScreenService):
         return await super().call(action, payload)
 
 
-@pytest.mark.parametrize('size', [(80, 24), (120, 36)])
-@pytest.mark.parametrize('guide', [False, True])
-@pytest.mark.parametrize('approved', [False, True])
-def test_drag_swaps_one_reviewed_pair_without_sequential_save_apply(size, guide, approved):
-    async def scenario():
-        service = DisplayService()
-        if guide:
-            service.screens['targets'][1]['url'] = None
-            service.screens['targets'][1]['applied_url'] = None
-        before = deepcopy(service.screens['targets'])
-        app = SimpleApp(service=service, initial_section='screens')
-        async with app.run_test(size=size) as pilot:
-            await pilot.pause()
-            await drag(pilot, app.query_one('#screens-map', ScreenMap))
-            assert isinstance(app.screen, MoveConfirmation)
-            assert app.screen.other['id'] == 'display-2'
-            assert app.focused.id == 'move-cancel'
-            assert app.screen.query_one('#move-confirm', Button).region.bottom <= size[1]
-            assert not any(action == 'screens-swap-submit' for action, _ in service.calls)
-            await pilot.press('tab', 'enter') if approved else await pilot.press('escape')
-            await pilot.pause()
-            requests = [(action, payload) for action, payload in service.calls
-                        if action in {'screens-swap-submit', 'screens-save', 'screens-apply', 'screens-action'}]
-            if approved:
-                assert len(requests) == 1 and requests[0][0] == 'screens-swap-submit'
-                assert requests[0][1]['source'] == 'default'
-                assert requests[0][1]['destination'] == 'display-2'
-                assert app.query_one('#screens', ScreenPanel).selected == 'default'
-                for old, new in zip(before, service.screens['targets']):
-                    assert {key: value for key, value in old.items() if key != 'output'} == {
-                        key: value for key, value in new.items() if key != 'output'}
-            else:
-                assert requests == []
-                assert service.screens['targets'] == before
-    asyncio.run(scenario())
 
 
 @pytest.mark.parametrize('size', [(80, 24), (120, 36)])
@@ -340,11 +305,8 @@ def test_swap_request_message_tracks_the_persisted_completion_after_poll():
             await pilot.pause()
             panel = app.query_one('#screens', ScreenPanel)
             panel.launches['display-2'] = ('start', None)
-            await drag(pilot, app.query_one('#screens-map', ScreenMap))
-            await pilot.press('tab', 'enter')
-            await pilot.pause()
-            panel = app.query_one('#screens', ScreenPanel)
-            assert 'display-2' not in panel.launches
+            panel.swap_following['default'] = 'f' * 32
+            panel.messages['default'] = '두 화면 교환 · 접수'
             service.screens['targets'][0]['swap'] = {'operation_id': 'f' * 32, 'state': 'completed',
                                                      'phase': 'completed', 'exit_code': 0, 'reason': '두 화면 배정 검증 완료'}
             await panel.refresh_state()
