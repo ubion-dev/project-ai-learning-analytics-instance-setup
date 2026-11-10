@@ -189,3 +189,36 @@ def test_existing_screen_panel_opens_editor_and_monitor_site_settings():
             await pilot.click('#target-cancel'); await pilot.pause()
             assert isinstance(app.screen, MonitorEditor)
     asyncio.run(scenario())
+
+
+def test_selection_and_coordinates_reuse_choices_but_mode_change_updates_scales(monkeypatch):
+    async def scenario():
+        app = EditorApp(Service(2))
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            editor = app.screen
+            canvas = editor.query_one(MonitorCanvas)
+            calls = []
+            original = Select.set_options
+            def record(widget, options):
+                calls.append(widget.id)
+                return original(widget, options)
+            monkeypatch.setattr(Select, 'set_options', record)
+            await pilot.click(offset=point(canvas, 'DP-2'))
+            await pilot.pause()
+            editor.draft.nudge(0, 1)
+            editor.sync_fields()
+            await pilot.pause()
+            assert calls == []
+            editor.draft.set_scale(1.5)
+            editor.draft.set_mode('small')
+            editor.sync_fields()
+            await pilot.pause()
+            assert calls == ['monitor-scale']
+            assert editor.query_one('#monitor-scale', Select).value is Select.NULL
+            assert editor.query_one('#monitor-review', Button).disabled
+            editor.query_one('#monitor-scale', Select).value = '1.0'
+            await pilot.pause()
+            assert editor.draft.output()['scale'] == 1
+            assert len(canvas.render().spans) < 100
+    asyncio.run(scenario())

@@ -1,5 +1,6 @@
 """Spatial monitor editor; site editing reuses the existing DID settings flow."""
 from copy import deepcopy
+from itertools import groupby
 
 from rich.text import Text
 from textual import on
@@ -65,7 +66,8 @@ class MonitorCanvas(Static, can_focus=True):
                         grid[y + row][x + col] = (char, style)
         text = Text()
         for row, line in enumerate(grid):
-            for char, style in line: text.append(char, style)
+            for style, cells in groupby(line, key=lambda cell: cell[1]):
+                text.append(''.join(char for char, _ in cells), style)
             if row < height - 1: text.append('\n')
         return text
 
@@ -166,7 +168,7 @@ class LayoutReview(ModalScreen[bool]):
 class MonitorEditor(ModalScreen):
     BINDINGS = [('escape', 'close_editor', '닫기')]
     CSS = '''
-    MonitorEditor { align: center middle; background: #000000 65%; }
+    MonitorEditor { align: center middle; background: #17161d; }
     #monitor-editor { width: 96%; height: 96%; padding: 0 1; background: #211f29; border: round #cbc2ef; }
     #monitor-title, #monitor-selected { height: 1; }
     #monitor-message { height: auto; max-height: 3; color: #f1d5a3; }
@@ -189,6 +191,7 @@ class MonitorEditor(ModalScreen):
         self.draft = None; self.syncing = False; self.busy = False; self.operation = None
         self.operation_state = None; self.polling = False; self.persistent = True
         self.trial_supported = False
+        self._select_options = {}
 
     def compose(self):
         with Vertical(id='monitor-editor'):
@@ -261,18 +264,16 @@ class MonitorEditor(ModalScreen):
         self.syncing = True
         try:
             output = self.draft.output(); modes = self.draft.modes(); mode = self.draft.mode()
-            port = self.query_one('#monitor-port', Select)
-            port.set_options([(f'#{i + 1} {key}', key) for i, key in enumerate(sorted(o['id'] for o in self.draft.request['outputs']))])
-            port.value = self.draft.selected
-            widget = self.query_one('#monitor-mode', Select)
-            widget.set_options([(f"{m['width']}×{m['height']} · {m['refresh_hz']:g} Hz" + (' · 권장' if m['preferred'] else ''), m['id']) for m in modes])
-            widget.value = output['mode_id']
-            scales = self.query_one('#monitor-scale', Select)
-            scales.set_options([(f'{s * 100:g}%', str(s)) for s in mode['supported_scales']])
-            scales.value = Select.NULL
+            self.sync_select('monitor-port',
+                [(f'#{i + 1} {key}', key) for i, key in enumerate(sorted(o['id'] for o in self.draft.request['outputs']))],
+                self.draft.selected)
+            self.sync_select('monitor-mode',
+                [(f"{m['width']}×{m['height']} · {m['refresh_hz']:g} Hz" + (' · 권장' if m['preferred'] else ''), m['id']) for m in modes],
+                output['mode_id'])
             # JSON may carry 1 where Mutter advertises 1.0.
-            if output['scale'] is not None:
-                scales.value = str(next(s for s in mode['supported_scales'] if s == output['scale']))
+            scale = Select.NULL if output['scale'] is None else str(next(s for s in mode['supported_scales'] if s == output['scale']))
+            self.sync_select('monitor-scale',
+                [(f'{s * 100:g}%', str(s)) for s in mode['supported_scales']], scale)
             self.query_one('#monitor-x', Input).value = str(output['x'])
             self.query_one('#monitor-y', Input).value = str(output['y'])
             targets = self.panel.targets_on_output(self.draft.selected)
@@ -282,6 +283,16 @@ class MonitorEditor(ModalScreen):
             self.syncing = False
         self.query_one('#monitor-canvas', MonitorCanvas).refresh()
         self.update_controls()
+
+    def sync_select(self, key, options, value):
+        """Reuse mounted choices when only selection or coordinates changed."""
+        widget = self.query_one('#' + key, Select)
+        options = tuple(options)
+        if self._select_options.get(key) != options:
+            widget.set_options(options)
+            self._select_options[key] = options
+        if widget.value != value:
+            widget.value = value
 
     def update_controls(self):
         if not self.is_mounted:

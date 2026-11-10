@@ -128,7 +128,7 @@ class MoveConfirmation(ModalScreen[bool]):
 class TargetEditor(ModalScreen[dict | None]):
     BINDINGS = [('escape', 'cancel', '취소')]
     CSS = """
-    TargetEditor { align: center middle; background: #000000 65%; }
+    TargetEditor { align: center middle; background: #17161d; }
     #target-editor { width: 76; max-width: 96%; height: 34; max-height: 96%; padding: 0 1; background: #211f29; border: round #b5e9d9; }
     #target-title { height: 1; color: #cbc2ef; text-style: bold; }
     #target-result, #target-next { height: auto; max-height: 2; }
@@ -145,6 +145,7 @@ class TargetEditor(ModalScreen[dict | None]):
     #target-controls { height: 11; layout: grid; grid-size: 2 3; grid-rows: 3 3 3; grid-gutter: 1; }
     #target-controls Button { width: 1fr; min-width: 10; padding: 0; }
     #screens-apply, #screens-swap-recover { width: 100%; height: 3; }
+    #target-detail-content { height: auto; }
     #screens-detail { height: 12; min-height: 4; }
     #target-operations, #target-details { height: auto; padding: 0; }
     """
@@ -156,6 +157,7 @@ class TargetEditor(ModalScreen[dict | None]):
         self.panel = panel
         self.output_id = output_id
         self.target_id = target['id'] if target else None
+        self._status_pending = False
         self.expected_config = deepcopy(panel.owner._config) if panel else None
 
     def compose(self) -> ComposeResult:
@@ -183,7 +185,7 @@ class TargetEditor(ModalScreen[dict | None]):
                                 yield button
                         yield Button('두 화면 교환 복구 재시도', id='screens-swap-recover')
                     with Collapsible(title='상태 상세·작업 로그', id='target-details', collapsed=True):
-                        yield TextArea('', id='screens-detail', read_only=True, show_cursor=False, highlight_cursor_line=False)
+                        yield Vertical(id='target-detail-content')
                 yield Label('대상 ID')
                 yield Input(value.get('id', ''), id='target-id', disabled=self.target is not None, placeholder='display-1')
                 yield Label('표시 사이트')
@@ -239,9 +241,19 @@ class TargetEditor(ModalScreen[dict | None]):
     @on(Select.Changed)
     @on(Switch.Changed)
     def fields_changed(self):
+        if not self._status_pending:
+            self._status_pending = True
+            self.call_later(self.refresh_status)
+
+    @on(Collapsible.Expanded, '#target-details')
+    async def details_expanded(self):
+        if not self.query('#screens-detail'):
+            await self.query_one('#target-detail-content').mount(
+                TextArea('', id='screens-detail', read_only=True, show_cursor=False, highlight_cursor_line=False))
         self.refresh_status()
 
     def refresh_status(self):
+        self._status_pending = False
         if not self.is_mounted:
             return
         primary = self.query_one('#target-primary', Button)
@@ -249,7 +261,6 @@ class TargetEditor(ModalScreen[dict | None]):
         if not self.panel or not self.target_id:
             return
         value = self.panel.find_target(self.target_id)
-        content = self.panel.details(self.target_id)
         headline, next_action, action, tone = self.panel.priority(value)
         message = self.panel.messages.get(self.target_id, '').split('\n', 1)[0]
         self.query_one('#target-result', Static).update(Text('\n'.join(filter(None, (headline, message))), style=tone))
@@ -277,9 +288,11 @@ class TargetEditor(ModalScreen[dict | None]):
             primary.tooltip = source.tooltip
         if action == 'edit':
             self.query_one('#target-next', Static).update('다음 · 아래에서 사이트 주소를 저장한 뒤 설정 적용을 선택하세요.')
-        detail = self.query_one('#screens-detail', TextArea)
-        if detail.text != content:
-            detail.load_text(content)
+        if not self.query_one('#target-details', Collapsible).collapsed and self.query('#screens-detail'):
+            detail = self.query_one('#screens-detail', TextArea)
+            content = self.panel.details(self.target_id)
+            if detail.text != content:
+                detail.load_text(content)
 
     def on_descendant_focus(self, event: events.DescendantFocus):
         widget = event.widget
