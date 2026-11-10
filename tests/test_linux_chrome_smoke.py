@@ -83,6 +83,7 @@ def test_real_linux_three_independent_chrome_waiting_windows_survive_one_handoff
     from ala.config import Config
     from ala.screen_coverage import identifier
     supervisors = []
+    event_flags = None
     try:
         for output in ('DP-1', 'DP-2', 'DP-3'):
             target = identifier(output)
@@ -100,7 +101,15 @@ def test_real_linux_three_independent_chrome_waiting_windows_survive_one_handoff
         while not all(s.value.get('local_page_ready') for s in supervisors) and time.monotonic() < deadline:
             for supervisor in supervisors:
                 event = supervisor.browser.next_event(timeout=0.1)
-                if event is not None: supervisor.event(event)
+                if event is not None:
+                    if event.get('method') == 'Page.frameNavigated':
+                        frame = event.get('params', {}).get('frame', {})
+                        event_flags = {'frame_matches': frame.get('id') == supervisor.frame,
+                            'url_is_setup': frame.get('url') == supervisor._setup_url,
+                            'url_is_launch': frame.get('url') == health.RECOVERY_URL,
+                            'loader_matches': frame.get('loaderId') == supervisor.loader,
+                            'launch_pending': supervisor._bootstrap_pending}
+                    supervisor.event(event)
         require(all(s.value.get('local_page_ready') is True for s in supervisors), 'Every independent waiting document must load.')
         require(len({s.browser.pid for s in supervisors}) == 3, 'Each output must have an independent Chrome process.')
         supervisors[0].browser.close()
@@ -110,7 +119,7 @@ def test_real_linux_three_independent_chrome_waiting_windows_survive_one_handoff
             found = supervisor.browser.call('DOM.querySelector', {'nodeId': tree['root']['nodeId'], 'selector': 'svg.setup-image'}, session_id=supervisor.session)
             require(bool(found.get('nodeId')), 'Other output waiting images must remain loaded after handoff.')
     except Exception:
-        pytest.fail('Independent sandboxed waiting-window lifecycle verification failed.', pytrace=False)
+        pytest.fail('Independent sandboxed waiting-window lifecycle verification failed; sanitized event flags: ' + str(event_flags), pytrace=False)
     finally:
         for supervisor in supervisors:
             if supervisor.browser is not None: supervisor.browser.close()

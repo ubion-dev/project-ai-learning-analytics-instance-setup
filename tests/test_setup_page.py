@@ -40,13 +40,38 @@ def test_delayed_verified_launch_document_does_not_fail_new_setup_or_claim_it_lo
         event(supervisor, 'Page.frameNavigated', frame={'id': 'main', 'loaderId': 'bootstrap', 'url': health.RECOVERY_URL})
 
 
-@pytest.mark.parametrize('change', [{'loaderId': 'other'}, {'url': 'https://example.com/other'}])
+@pytest.mark.parametrize('change', [{'url': 'https://example.com/other'}, {'loaderId': 'other', 'url': 'data:text/plain,other'}])
 def test_unverified_old_document_is_still_rejected_before_setup_load(fixture, change):
     supervisor, http, clock, paths = setup_supervisor(fixture)
     supervisor.start()
     supervisor._bootstrap_loader = 'bootstrap'; supervisor._bootstrap_pending = True
     with pytest.raises(health.CDPError):
         event(supervisor, 'Page.frameNavigated', frame={'id': 'main', 'loaderId': 'bootstrap', 'url': health.RECOVERY_URL} | change)
+
+
+def test_launch_document_with_unobserved_loader_is_only_pending_not_ready(fixture):
+    supervisor, _, _, _ = setup_supervisor(fixture)
+    supervisor.start()
+    event(supervisor, 'Page.frameNavigated', frame={'id': 'main', 'loaderId': 'late-launch', 'url': health.RECOVERY_URL})
+    assert not supervisor.document_ok and supervisor.value['local_page_ready'] is False
+    complete_local(supervisor)
+    assert supervisor.value['local_page_ready'] is True
+
+
+def test_stale_frame_event_is_ignored_only_if_fresh_owned_frame_proves_expected_document(fixture):
+    supervisor, _, _, _ = setup_supervisor(fixture)
+    supervisor.start()
+    browser = supervisor.browser
+    original = browser.call
+    def current(method, params=None, **kwargs):
+        if method == 'Page.getFrameTree':
+            return {'frameTree': {'frame': {'id': supervisor.frame, 'loaderId': supervisor.loader, 'url': supervisor._setup_url}}}
+        return original(method, params, **kwargs)
+    browser.call = current
+    event(supervisor, 'Page.frameNavigated', frame={'id': 'main', 'loaderId': 'older', 'url': 'data:text/plain,old'})
+    assert supervisor.value['local_page_ready'] is False
+    complete_local(supervisor)
+    assert supervisor.value['local_page_ready'] is True
 
 
 def test_setup_uses_owned_tab_and_never_probes_network_or_claims_site_health(fixture):

@@ -369,6 +369,7 @@ class Supervisor:
         self._save()
 
         if self.config.url is None:
+            self._bootstrap_pending = True
             self.setup_tick()
 
     def _navigate(self, url, *, ensure_document=False):
@@ -636,7 +637,7 @@ class Supervisor:
                 if frame.get('id') == self.frame and not frame.get('parentId'):
                     if (self._bootstrap_pending and self.navigating and not self.document_ok and
                             frame.get('url') == RECOVERY_URL and
-                            frame.get('loaderId') == self._bootstrap_loader and self.loader != self._bootstrap_loader):
+                            frame.get('loaderId') != self.loader):
                         # Page.enable can queue the verified launch document's
                         # commit before our setup navigation. It is not evidence
                         # that the new setup document loaded or failed.
@@ -645,6 +646,13 @@ class Supervisor:
                             and isinstance(frame.get('loaderId'), str) and frame['loaderId']):
                         self.loader = frame['loaderId']
                     if frame.get('url') != self._setup_url or frame.get('loaderId') != self.loader:
+                        # A queued commit may describe a document which has
+                        # already been replaced. Re-read the owned main frame;
+                        # never infer setup readiness from that stale event.
+                        current = self._call('Page.getFrameTree').get('frameTree', {}).get('frame', {})
+                        if (current.get('id') == self.frame and not current.get('parentId') and
+                                current.get('url') == self._setup_url and self.loader and current.get('loaderId') == self.loader):
+                            return
                         raise CDPError('설정 안내 문서의 실제 표시를 확인하지 못했습니다.')
                     self.document_ok = True
                     self._bootstrap_pending = False
