@@ -106,6 +106,16 @@ def test_failed_batch_never_replays_old_success_or_launches_a_series_of_fallback
     assert calls==[]
 
 
+def test_missing_user_runtime_keeps_hardware_and_target_diagnostics(model,monkeypatch):
+    config,host,paths,calls,state=model
+    def failed(*a,**kw):raise ValueError('synthetic missing account')
+    monkeypatch.setattr(display,'_user_call',failed)
+    result=screens.inspect_screens(config,host,paths,batch=True)
+    assert result['state']=='unknown' and 'hardware_output_state' in result
+    assert [t['id'] for t in result['targets']]==['default','other']
+    assert all(t['state']=='unknown' for t in result['targets'])
+
+
 def test_batch_rejects_a_selected_snapshot_for_another_user(model,monkeypatch):
     from dataclasses import replace
     config,host,paths,calls,state=model

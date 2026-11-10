@@ -135,9 +135,12 @@ def inspect_screens(config:Config,host=None,paths=None, *, local=False, batch=Fa
     cache survives this request or authorizes a later change.
     """
     host,paths=host or Host(),paths or Paths()
-    hardware=hardware_topology(paths)
+    hardware={} if local else hardware_topology(paths)
     if batch and config.display:
-        value=display._user_call(replace(config,runtime_pin=None),host,paths,'screen-observe')
+        try:
+            value=display._user_call(replace(config,runtime_pin=None),host,paths,'screen-observe')
+        except (OSError,ValueError,RuntimeError):
+            value={'state':'unknown','reason':'화면 계정·사용자 runtime의 묶음 조회를 완료하지 못했습니다.'}
         if (isinstance(value.get('targets'),list) and
                 all(isinstance(t,dict) for t in value['targets']) and
                 [t.get('id') for t in value['targets']]==[s.id for s in config.screen_targets()]):
