@@ -1,5 +1,13 @@
 # ala 공개판 진행 기록
 
+## 2026-11-10 RC38 명시적 모니터 위치 변경 서명 배포 완료
+
+- [PR #35](https://github.com/ubion-dev/project-ai-learning-analytics-instance-setup/pull/35)을 두 최종 CI 통과 후 main의 `a56d0c8`로 병합하고 새 불변 태그 `v0.1.0-rc.38`을 게시했다. [서명 릴리스 실행](https://github.com/ubion-dev/project-ai-learning-analytics-instance-setup/actions/runs/42774215846)과 [RC38 시험판](https://github.com/ubion-dev/project-ai-learning-analytics-instance-setup/releases/tag/v0.1.0-rc.38)의 게시 성공을 확인했다.
+- 최종 두 CI에서 각각 회귀 2,023개·하위 검사 56개·샌드박스 Linux Chrome 7개를 통과했다. 앞선 두 CI는 정상 active 상태 polling 뒤에도 마지막 RPC가 반드시 submit이라고 가정한 신규 검사 한 건이 실패했고, 제품 코드 변경 없이 submit 횟수와 정확한 payload를 검증하도록 수정했다. 수정 후 모니터 24개와 최종 전체 CI가 통과했다. 초기 관련 98개·최종 관련 145개 및 합성 80×24/120×36 렌더링과 작은 화면의 필드·취소/반영 노출도 확인했다. 서명 워크플로에서도 회귀 2,023개·하위 검사 56개·Linux Chrome 7개를 통과했다.
+- 로컬·Linux CI 배포 묶음은 SHA-256 `5c8a5b57d9e8c8a195305a35852577aac5b8384daba4efa9fb7636a092ec1fba`로 동일하다. manifest 100개·새 위치 편집기 포함·격리 버전 진입점을 확인했다. 파일 3개를 일반 공개 URL에서 인증 없이 내려받아 동일 바이트·SHA-256·전체 manifest·격리 진입점·정확한 태그 신원의 Sigstore 서명을 검증했다. RC37 신원은 거부됐고 격리 RC37 설치의 업데이트 조회가 RC38을 제안했다.
+- `ala update --prerelease` → `ala --version`(`0.1.0rc38`) → `ala display edit`에서 모니터 선택 후 **위치 변경(P)**을 사용한다. 기준 모니터의 좌우·상하·교환·좌표를 초안에 반영하고 별도의 검토·적용·30초 확인을 거친다. 사이트는 기존 출력에 유지하며 콘텐츠 변경은 각 PC의 사이트 설정 저장/적용으로 처리한다. PC 간 통합 제어·원자적 교환·비디오월 분할/배선 변경은 제공하지 않는다.
+- 실제 Rocky/HIWARE/비디오월 수용은 미수행이며 장비·고객 구성·실행 중 Chrome을 변경하지 않았다. 새 UI만을 위한 GNOME 재로그인·재부팅·설정 초기화는 필요하지 않다. 기존 배치 기능 미지원 확장의 갱신/재로그인 요구는 유지한다.
+
 ## 2026-11-10 RC38 드래그 없는 TUI 모니터 위치 변경
 
 - 사용자가 같은 PC의 좌우·상하 배치와 출력별 사이트/콘텐츠 배정 둘 다 필요하다고 확인했다. PC 성능에 출력 역할을 고정하지 않으며, 여러 패널이 하나의 논리 출력으로 인식되는 경우는 기존 출력당 Chrome 하나를 사용한다. 서로 다른 PC는 각각 접속해 사이트를 저장/적용하는 범위이며 통합 제어를 구현한 것으로 안내하지 않는다.
