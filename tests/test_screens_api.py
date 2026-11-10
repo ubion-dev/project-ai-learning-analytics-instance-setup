@@ -331,3 +331,32 @@ def test_quick_login_log_reads_current_boot_and_keeps_only_categories(operations
     assert calls[1][:4] == ['journalctl', '-b', '-u', 'gdm.service']
     assert '로그인·세션 시작 오류 단서' in value['log']
     assert 'private metadata' not in value['log']
+
+
+@pytest.mark.parametrize('race', ['before', 'inside'])
+def test_reviewed_config_save_rejects_stale_snapshot_before_any_write(runtime_operations, monkeypatch, race):
+    operations, store, (old, _) = runtime_operations
+    before = Config(user='user', url='https://example.com/previous')
+    after = Config(user='user', url='https://example.com/current')
+    save_initial_config(operations, before)
+    store.bootstrap('default', old, before)
+    newer = Config(user='user', url='https://example.com/concurrent')
+    if race == 'before': atomic_json(operations.paths.config, newer.to_dict(), 0o644)
+    else:
+        monkeypatch.setattr(operations, '_enroll_before_change', lambda config: atomic_json(operations.paths.config, newer.to_dict(), 0o644))
+    with pytest.raises(RuntimeError, match='구성이 변경'):
+        operations.dispatch('config-save-reviewed', {'config': after.to_dict(), 'expected_config': before.to_dict()})
+    assert operations.config() == newer
+    assert not operations.host.calls
+
+
+def test_reviewed_config_save_preserves_committed_runtime(runtime_operations):
+    operations, store, (old, _) = runtime_operations
+    before = Config(user='user', url='https://example.com/previous')
+    after = Config(user='user', timezone='UTC', url=before.url)
+    save_initial_config(operations, before)
+    original = store.bootstrap('default', old, before)['committed']
+    assert operations.dispatch('config-save-reviewed', {'config': after.to_dict(), 'expected_config': before.to_dict()})['saved']
+    assert operations.config() == after
+    assert store.load('default')['committed'] == original
+    assert not operations.host.calls

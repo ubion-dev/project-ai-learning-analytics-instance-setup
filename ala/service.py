@@ -377,13 +377,16 @@ class Operations:
             from .display_onboarding import status
             return {'config': self.config().to_dict(), 'exists': self.paths.config.exists(),
                     'display_initialization': status(paths=self.paths, host=self.host)}
-        if action == 'config-save':
-            config = Config.from_dict(payload)
+        if action in {'config-save', 'config-save-reviewed'}:
+            reviewed = action == 'config-save-reviewed'
+            config = Config.from_dict(payload.get('config') if reviewed else payload)
             if config.user:
                 record = pwd.getpwnam(config.user)
                 if record.pw_uid == 0 or not Path(record.pw_dir).is_dir():
                     raise ValueError('존재하는 일반 사용자와 홈이 필요합니다.')
             before = self.config()
+            if reviewed and payload.get('expected_config') != before.to_dict():
+                raise RuntimeError('검토 후 구성이 변경됐습니다. 다시 읽은 뒤 저장하세요.')
             self._enroll_before_change(before)
             with change_lock(self.paths):
                 from .screen_swap import guard

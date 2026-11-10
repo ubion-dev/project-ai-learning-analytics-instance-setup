@@ -70,7 +70,7 @@ def test_help_and_update_check_never_elevate(monkeypatch, capsys):
     capsys.readouterr()
 
 
-def test_default_cli_opens_simple_tui_after_admin_entry(monkeypatch):
+def test_default_cli_opens_text_menu_and_tui_stays_explicit(monkeypatch):
     import sys
     from types import SimpleNamespace
     tty(monkeypatch)
@@ -80,18 +80,20 @@ def test_default_cli_opens_simple_tui_after_admin_entry(monkeypatch):
         def __init__(self, service): pass
         def run(self): calls.append(('tui', None))
     monkeypatch.setitem(sys.modules, 'ala.simple_tui', SimpleNamespace(SimpleApp=SimpleApp))
+    from ala import terminal
+    monkeypatch.setattr(terminal, 'run_terminal', lambda service, **kw: calls.append(('text', kw['initial'])) or 0)
     assert cli.main([]) == 0
-    assert calls == [('admin', []), ('tui', None)]
+    assert calls == [('admin', []), ('text', 'home')]
     calls.clear()
     assert cli.main(['tui']) == 0
     assert calls == [('admin', ['tui']), ('tui', None)]
 
 
-def test_text_console_is_explicit_option(monkeypatch):
-    from ala import console
+def test_text_console_alias_is_preserved(monkeypatch):
+    from ala import terminal
     tty(monkeypatch)
     calls = []
     monkeypatch.setattr(backend.Service, 'enter_admin', lambda self, argv: calls.append(('admin', argv)))
-    monkeypatch.setattr(console, 'run_console', lambda service: calls.append(('console', None)) or 0)
+    monkeypatch.setattr(terminal, 'run_terminal', lambda service, **kw: calls.append(('console', kw['initial'])) or 0)
     assert cli.main(['console']) == 0
-    assert calls == [('admin', ['console']), ('console', None)]
+    assert calls == [('admin', ['console']), ('console', 'home')]

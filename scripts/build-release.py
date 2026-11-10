@@ -22,7 +22,7 @@ ROOT = Path(__file__).resolve().parents[1]
 REQUIRED_DISPLAY_FILES = (
     'assets/gnome-extension/ala-display@example.com/extension.js',
     'assets/gnome-extension/ala-display@example.com/metadata.json',
-    'docs/frontend-contract.md', 'docs/DISPLAY.md', 'docs/UPDATES.md',
+    'docs/frontend-contract.md', 'docs/DISPLAY.md', 'docs/UPDATES.md', 'docs/TERMINAL.md',
     'examples/screens.json', 'examples/frontend/deployment.json', 'examples/frontend/index.html',
 )
 
