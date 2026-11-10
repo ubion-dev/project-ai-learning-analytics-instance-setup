@@ -16,19 +16,9 @@ def describe(model, item):
 
 
 def position(t, model):
-    t.write('1 좌표 입력 · 2 다른 모니터와 위치 교환 · 3 다른 모니터 오른쪽 · 4 왼쪽 · 5 아래 · 6 위 · b 취소')
-    choice = t.ask('배치 방법')
-    a = next(o for o in model.rects() if o['id'] == model.selected)
-    if choice == '1':
-        model.drop(model.selected, int(t.ask('가로 X', default=str(a['x']))),
-                   int(t.ask('세로 Y', default=str(a['y']))), snap=0)
-    elif choice in {'2', '3', '4', '5', '6'}:
-        b = t.pick('기준 모니터', [o for o in model.rects() if o['id'] != model.selected], lambda o: o['id'])
-        if choice == '2': model.drop(model.selected, a['x'], a['y'], b['id'])
-        else:
-            x, y = {'3': (b['x'] + b['width'], b['y']), '4': (b['x'] - a['width'], b['y']),
-                    '5': (b['x'], b['y'] + b['height']), '6': (b['x'], b['y'] - a['height'])}[choice]
-            model.drop(model.selected, x, y, snap=0)
+    relation = t.pick('방향', [('left', '왼쪽'), ('right', '오른쪽'), ('above', '위'), ('below', '아래')], lambda item: item[1])[0]
+    anchor = t.pick('기준 모니터', [o for o in model.rects() if o['id'] != model.selected], lambda o: o['id'])
+    model.place(model.selected, relation, anchor['id'])
 
 
 def edit(t, model, output_id):

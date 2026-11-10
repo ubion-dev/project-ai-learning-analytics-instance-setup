@@ -71,3 +71,23 @@ def test_leaving_while_quick_manage_waits_does_not_open_a_late_editor():
             assert len(app.screen_stack) == 1
             assert not any(action in {'screens-save', 'screens-apply', 'screens-action'} for action, _ in service.calls)
     asyncio.run(scenario())
+
+
+def test_vertical_observed_layout_scrolls_on_main_tab_and_opens_selected_site():
+    from ala.screen_map import ScreenMap
+    async def scenario():
+        service = Service()
+        service.screens['logical_outputs'][1].update(x=0, y=1080)
+        app = SimpleApp(service=service, initial_section='screens')
+        async with app.run_test(size=(80, 24)) as pilot:
+            await pilot.pause(); view = app.query_one(ScreenMap)
+            regions = view.output_regions
+            assert regions['HDMI-1'].x == regions['DP-1'].x
+            assert regions['HDMI-1'].y < regions['DP-1'].y
+            view.focus(); await pilot.press('down'); await pilot.pause()
+            assert app.query_one(ScreenPanel).selected == 'display-2'
+            assert app.query_one('#screens-map-scroll').scroll_y > 0
+            await pilot.press('enter'); await pilot.pause()
+            assert isinstance(app.screen, TargetEditor) and app.screen.target_id == 'display-2'
+            assert not any(a in {'screens-save','screens-apply','screens-swap-submit','screens-action'} for a, _ in service.calls)
+    asyncio.run(scenario())

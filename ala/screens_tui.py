@@ -77,54 +77,6 @@ def hardware_text(report):
                               for port in ordered)
 
 
-class MoveConfirmation(ModalScreen[bool]):
-    BINDINGS = [('escape', 'cancel', '취소')]
-    CSS = """
-    MoveConfirmation { align: center middle; background: #000000 65%; }
-    #move-dialog { width: 74; max-width: 96%; height: auto; max-height: 90%; padding: 1 2; background: #211f29; border: round #cbc2ef; }
-    #move-summary { height: auto; margin-bottom: 1; }
-    #move-buttons { height: 3; }
-    #move-buttons Button { width: 1fr; margin-right: 1; padding: 0; }
-    """
-
-    def __init__(self, target, output, other=None):
-        super().__init__()
-        self.target = target
-        self.output = output
-        self.other = other
-
-    def compose(self):
-        with Vertical(id='move-dialog'):
-            text = ('DID 출력 이동 확인\n' + safe_text(self.target['id']) +
-                    '\n사이트 · ' + site_label(self.target.get('url')) +
-                    '\n출력 · ' + safe_text(self.target.get('output') or '자동') +
-                    ' → ' + safe_text(self.output) +
-                    '\n\n실행 중인 DID는 적용 중 잠깐 재시작될 수 있습니다.' +
-                    '\n중지된 DID는 배정만 적용됩니다. 시작은 화면 관리에서 선택하세요.')
-            if self.other is not None:
-                text = ('두 화면 교환 확인\n' + safe_text(self.target['id']) + ' · ' + site_label(self.target.get('url')) +
-                        '\n' + safe_text(self.target.get('output')) + ' → ' + safe_text(self.output) +
-                        '\n\n' + safe_text(self.other['id']) + ' · ' + site_label(self.other.get('url')) +
-                        '\n' + safe_text(self.other.get('output')) + ' → ' + safe_text(self.target.get('output')) +
-                        '\n\n두 화면이 잠깐 끊길 수 있습니다. 실패하면 이전 배정을 복구합니다.' +
-                        '\n중지된 DID는 중지 상태를 유지합니다.')
-            yield Static(text, markup=False, id='move-summary')
-            with Horizontal(id='move-buttons'):
-                yield Button('취소', id='move-cancel')
-                yield Button('두 화면 교환 적용' if self.other else '이동 적용', id='move-confirm', variant='primary')
-
-    def on_mount(self):
-        self.query_one('#move-cancel', Button).focus()
-
-    @on(Button.Pressed, '#move-cancel')
-    def action_cancel(self):
-        self.dismiss(False)
-
-    @on(Button.Pressed, '#move-confirm')
-    def confirm(self):
-        self.dismiss(True)
-
-
 class TargetEditor(ModalScreen[dict | None]):
     BINDINGS = [('escape', 'cancel', '취소')]
     CSS = """
@@ -482,7 +434,7 @@ class ScreenPanel(Vertical):
         with Collapsible(title='화면 추가·연결되지 않은 화면', id='screens-unassigned', collapsed=True):
             yield OptionList(id='screens-unassigned-list')
             yield Button('화면 추가', id='screens-add')
-        yield Static('사이트 설정은 클릭·Enter · OS 배치는 모니터 배치·해상도 · 사이트 드래그는 DID 배정', id='screens-help', markup=False)
+        yield Static('사이트 설정은 클릭·Enter · OS 배치는 모니터 설정에서 상하좌우 선택 · 배치도는 조회용', id='screens-help', markup=False)
         with Horizontal(id='screens-actions'):
             yield Button('모니터 배치·해상도', id='screens-monitor-layout')
             yield Button('모니터 식별', id='screens-identify')
@@ -554,7 +506,7 @@ class ScreenPanel(Vertical):
         return next((v for v in self.report.get('targets', []) if v.get('id') == target_id), None)
 
     def render_help(self):
-        self.query_one('#screens-help', Static).update('사이트 설정은 클릭·Enter · OS 배치는 모니터 배치·해상도 · 사이트 드래그는 DID 배정')
+        self.query_one('#screens-help', Static).update('사이트 설정은 클릭·Enter · OS 배치는 모니터 설정에서 상하좌우 선택 · 배치도는 조회용')
 
     def on_descendant_focus(self, event: events.DescendantFocus):
         self.render_help()
@@ -587,9 +539,8 @@ class ScreenPanel(Vertical):
             + f' · 관리 대상 {len(targets)}개 · 확인된 창 {confirmed_label}'
             if self.loaded else '출력·창 조회 확인 필요 · '+str(self.report.get('reason', '조회 중'))))
         map_view = self.query_one('#screens-map', ScreenMap)
-        map_view.update_report(self.report, self.selected, self.owner._config,
-                               enabled=not self.mutating and not self.identifying and not self.owner._active_job)
-        map_view.tooltip = '모니터를 클릭하거나 Enter로 설정합니다. 드래그하면 이동·교환을 검토합니다.'
+        map_view.update_report(self.report, self.selected)
+        map_view.tooltip = '배치도는 조회용입니다. 클릭·Enter로 사이트 설정을 열고 OS 배치는 모니터 설정의 상하좌우 버튼을 사용하세요.'
         assigned = {target['id'] for output in self.report.get('logical_outputs') or []
                     for target in self.targets_on_output(output['id'])}
         unassigned = [target for target in targets if target['id'] not in assigned]
@@ -877,128 +828,6 @@ class ScreenPanel(Vertical):
         next_line = self.query_one('#screens-next', Static)
         next_line.update('다음 · '+action)
         next_line.tooltip = full_action
-
-    def move_allowed(self, target, output):
-        if (not target or self.mutating or self.identifying or self.owner._active_job or self.owner._chrome_mutating
-                or (self.owner._update_status or {}).get('state') in {'queued', 'running'}):
-            return '다른 작업이 끝난 뒤 이동하세요.'
-        if target.get('layout') != 'fullscreen':
-            return '전체화면 DID만 드래그로 이동하거나 교환할 수 있습니다.'
-        settings = target.get('settings') or {}
-        if settings.get('pending') or settings.get('state') in {'queued', 'running'}:
-            return '이 DID의 기존 설정 적용을 마친 뒤 이동하세요.'
-        runtime = target.get('runtime') or {}
-        if runtime.get('operation'):
-            return '이 DID의 화면 작업이 끝난 뒤 이동하세요.'
-        outputs = self.report.get('logical_outputs') or []
-        if self.report.get('output_state') != 'ok' or not any(
-                item.get('confirmed') and item['id'] == output for item in outputs):
-            return '대상 모니터 연결을 확인하고 다시 조회하세요.'
-        inventory = {'state': self.report.get('output_state'), 'logical_outputs': outputs}
-        source = resolve_output(inventory, target.get('output'), auto=target['id'] == 'default')
-        if source.get('state') != 'ok':
-            return '현재 모니터 연결과 출력 배정을 먼저 확인하세요.'
-        occupants = []
-        for other in self.report.get('targets', []):
-            if (other.get('settings') or {}).get('pending'):
-                return '다른 DID의 설정 적용을 마친 뒤 모니터 배정을 다시 확인하세요.'
-            if ((other.get('runtime') or {}).get('operation')
-                    or ((other.get('swap') or {}).get('state') in {'queued', 'running', 'recovery_required', 'unknown'})):
-                return '다른 화면 작업이 끝난 뒤 이동하세요.'
-            if other['id'] == target['id']:
-                continue
-            resolved = resolve_output(inventory, other.get('output'), auto=other['id'] == 'default')
-            if resolved.get('state') != 'ok':
-                continue
-            if resolved['output']['id'] == source['output']['id']:
-                return '현재 모니터에 여러 DID가 배정돼 있습니다. 배정을 먼저 확인하세요.'
-            if resolved['output']['id'] == output:
-                occupants.append(other)
-        if len(occupants) > 1 or any(other.get('layout') != 'fullscreen' for other in occupants):
-            return '전체화면 DID 하나가 배정된 모니터와만 교환할 수 있습니다.'
-        return ''
-
-    def destination_target(self, target_id, output):
-        inventory = {'state': self.report.get('output_state'), 'logical_outputs': self.report.get('logical_outputs') or []}
-        for value in self.report.get('targets', []):
-            resolved = resolve_output(inventory, value.get('output'), auto=value['id'] == 'default')
-            if value['id'] != target_id and resolved.get('state') == 'ok' and resolved['output']['id'] == output:
-                return value
-        return None
-
-    @on(ScreenMap.MoveRequested)
-    def move_requested(self, event):
-        event.stop()
-        target = next((t for t in self.report.get('targets', []) if t['id'] == event.target_id), None)
-        reason = self.move_allowed(target, event.output_id)
-        if event.expected_config != self.owner._config:
-            reason = '구성이 변경됐습니다. 다시 조회하고 이동하세요.'
-        topology = event.expected_topology if event.expected_topology is not None else self.report.get('logical_outputs', [])
-        if topology != self.report.get('logical_outputs', []):
-            reason = '모니터 연결이 변경됐습니다. 다시 조회하고 이동하세요.'
-        if reason:
-            self.selected = event.target_id
-            self.session_notice = None
-            self.messages[event.target_id] = 'DID 이동 · 확인 필요 · ' + reason
-            self.render_report()
-            return
-        other = deepcopy(self.destination_target(event.target_id, event.output_id))
-        def confirmed(approved):
-            if approved:
-                self.owner.run_worker(
-                    self.move_target(event.target_snapshot, event.output_id, event.expected_config, other=other, topology=topology),
-                    group='screen-move', exit_on_error=False)
-        self.owner.push_screen(MoveConfirmation(event.target_snapshot, event.output_id, other=other), confirmed)
-
-    async def move_target(self, original, output, expected, *, other=None, topology=None):
-        await self.refresh_state(wait=True)
-        current = next((t for t in self.report.get('targets', []) if t['id'] == original['id']), None)
-        reason = self.move_allowed(current, output)
-        keys = ('id', 'url', 'output', 'layout', 'autostart', 'frontend')
-        if current is None or any(current.get(key) != original.get(key) for key in keys):
-            reason = '이 DID의 설정이 바뀌었습니다. 다시 조회하고 이동하세요.'
-        if expected != self.owner._config:
-            reason = '구성이 변경됐습니다. 다시 조회하고 이동하세요.'
-        if topology is not None and topology != self.report.get('logical_outputs', []):
-            reason = '모니터 연결이 변경됐습니다. 다시 조회하고 이동하세요.'
-        current_other = self.destination_target(original['id'], output)
-        if ((other is None) != (current_other is None) or other is not None and
-                any((current_other or {}).get(key) != other.get(key) for key in keys)):
-            reason = '대상 모니터의 DID가 변경됐습니다. 다시 확인하세요.'
-        if reason:
-            self.selected = original['id']
-            self.session_notice = None
-            self.messages[original['id']] = 'DID 이동 · 확인 필요 · ' + reason
-            self.render_report()
-            return
-        self.session_notice = None
-        if other is not None:
-            self.mutating = self.owner._chrome_mutating = True
-            self.owner.update_button()
-            try:
-                result = await self.owner.service.call('screens-swap-submit', {
-                    'source': original['id'], 'destination': other['id'],
-                    'expected_config': expected, 'expected_topology': topology})
-                for target_id in (original['id'], other['id']):
-                    self.following.pop(target_id, None)
-                    self.launches.pop(target_id, None)
-                    self.messages[target_id] = self.result_message('두 화면 교환', result)
-                    if result.get('operation_id'):
-                        self.swap_following[target_id] = result['operation_id']
-            except Exception as exc:
-                self.messages[original['id']] = '두 화면 교환 · 확인 필요 · ' + safe_text(str(exc))
-            finally:
-                self.mutating = self.owner._chrome_mutating = False
-                self.owner.update_button()
-            self.selected = original['id']
-            await self.refresh_state(wait=True)
-            return
-        value = {key: deepcopy(original.get(key)) for key in keys}
-        value['output'] = output
-        saved = await self.save_target(value, expected)
-        if saved is not None:
-            await self.perform('apply', target_id=original['id'],
-                               expected_config=saved)
 
     @on(ScreenMap.OutputFocused)
     def output_focused(self, event):

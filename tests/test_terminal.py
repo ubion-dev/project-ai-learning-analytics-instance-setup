@@ -77,10 +77,10 @@ def test_large_mode_lists_are_paged_without_rpc():
     assert not service.calls
 
 
-def test_selection_mode_scale_and_swap_are_local_until_review():
+def test_direction_selection_is_local_until_review():
     service = Service()
     before = deepcopy(service.settings)
-    t, out = terminal(service, ['1', '1', '2', '2', 'b', 'b'])
+    t, out = terminal(service, ['1', '1', '4', '1', 'b', 'b'])
     with pytest.raises(Cancelled): monitors(t)
     assert [a for a, _ in service.calls] == ['monitor-layout-status', 'monitor-layout-state']
     assert service.settings == before
@@ -90,14 +90,15 @@ def test_selection_mode_scale_and_swap_are_local_until_review():
 @pytest.mark.parametrize('decision,expected', [('yes', 'monitor-layout-confirm'), ('', 'monitor-layout-revert')])
 def test_apply_checks_plan_and_tracks_only_owned_operation(decision, expected):
     service = Service()
-    # Swap output one with output three. No other output may move.
-    t, _ = terminal(service, ['1', '1', '2', '2', 'b', 'a', '', 'yes', decision])
+    # Put output one below output two. Other outputs must remain unchanged.
+    t, _ = terminal(service, ['1', '1', '4', '1', 'b', 'a', '', 'yes', decision])
     monitors(t)
     actions = [a for a, _ in service.calls]
     assert actions == ['monitor-layout-status', 'monitor-layout-state', 'monitor-layout-plan', 'monitor-layout-submit', expected]
     plan = service.calls[2][1]['layout']; submission = service.calls[3][1]
     assert submission == {'layout': plan, 'persistent': True}
-    assert [o['x'] for o in plan['outputs']] == [3840, 1920, 0]
+    assert [o['x'] for o in plan['outputs']] == [1920, 1920, 3840]
+    assert [o['y'] for o in plan['outputs']] == [1080, 0, 0]
     assert service.calls[4][1] == {'operation_id': 'a' * 32}
 
 

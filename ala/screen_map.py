@@ -1,4 +1,4 @@
-"""Read-only output diagram with a guarded request to move one selected DID."""
+"""Observed output layout. Click and keyboard navigation never move a window."""
 from __future__ import annotations
 
 from copy import deepcopy
@@ -142,41 +142,59 @@ def _card_status(report, output, targets):
             and health.get('target_matches_config') and matches else '실행 중 · 사이트 확인 필요')
 
 
-def _topology(report, width, height=7, *, selected=None):
-    """Fixed-size monitor cards and matching content-relative hit regions.
+def _card(report, output, selected):
+    name = f"#{output['display_number']} {output['id']}"
+    resolution = output_mode_text(report, output)
+    if cell_len(resolution) > 22 and resolution.endswith('배율 미상'):
+        resolution = resolution.removesuffix('배율 미상') + '배율?'
+    targets = _targets_for_output(report, output['id'])
+    labels = [('> ' if target.get('id') == selected else '') + str(target.get('id', '')) for target in targets]
+    values = (name, resolution, ', '.join(labels) or '배정된 DID 없음', _card_status(report, output, targets))
+    return ['┌' + '─' * 24 + '┐', *['│ ' + _fit(value, 22) + ' │' for value in values],
+            '└' + '─' * 11 + '┬' + '─' * 12 + '┘', ' ' * 11 + '─┴─' + ' ' * 12]
 
-    Height never scales a card. Extra rows belong to the parent's scroll area.
+
+def _topology(report, width, height=7, *, selected=None):
+    """Read-only fixed cards positioned by observed coordinate ranks.
+
+    Narrow views use an explicitly labelled coordinate list rather than wrap
+    horizontally arranged outputs into a false vertical arrangement.
     """
-    try:
-        outputs = _outputs(report)
+    try: outputs = _outputs(report)
     except (ValueError, TypeError, AttributeError):
         return '출력 배치를 확인하지 못했습니다. 다시 조회하세요.', []
-    if not outputs:
-        return _empty_text(report), []
+    if not outputs: return _empty_text(report), []
     width = max(CARD_WIDTH, width)
-    columns = max(1, (width + CARD_GAP) // (CARD_WIDTH + CARD_GAP))
-    rows, boxes = [], []
-    for first in range(0, len(outputs), columns):
-        group = outputs[first:first + columns]
-        left = max(0, (width - len(group) * CARD_WIDTH - (len(group) - 1) * CARD_GAP) // 2)
-        cards = []
-        y = len(rows)
-        for column, output in enumerate(group):
-            geometry = output.get('geometry', output)
-            name = f"#{output['display_number']} {output['id']}"
-            resolution = output_mode_text(report, output)
-            if cell_len(resolution) > 22 and resolution.endswith('배율 미상'):
-                resolution = resolution.removesuffix('배율 미상') + '배율?'
+    geometries = [value.get('geometry', value) for value in outputs]
+    valid = all(isinstance(g, dict) and type(g.get('x')) is int and type(g.get('y')) is int for g in geometries)
+    xs = sorted({g['x'] for g in geometries}) if valid else []
+    ys = sorted({g['y'] for g in geometries}) if valid else []
+    unique = valid and len({(g['x'], g['y']) for g in geometries}) == len(outputs)
+    required_width = len(xs) * CARD_WIDTH + max(0, len(xs) - 1) * CARD_GAP
+    if not unique or required_width > width:
+        rows, boxes = ['좌표 목록 · 가로 공간 부족 또는 배치 확인 필요'], []
+        for output, geometry in zip(outputs, geometries):
+            geometry = geometry if isinstance(geometry, dict) else {}
             targets = _targets_for_output(report, output['id'])
-            labels = [('> ' if target.get('id') == selected else '') + str(target.get('id', '')) for target in targets]
-            values = (name, resolution, ', '.join(labels) or '배정된 DID 없음', _card_status(report, output, targets))
-            cards.append(['┌' + '─' * 24 + '┐', *['│ ' + _fit(value, 22) + ' │' for value in values],
-                          '└' + '─' * 11 + '┬' + '─' * 12 + '┘', ' ' * 11 + '─┴─' + ' ' * 12])
-            boxes.append(OutputBox(output['id'], safe_text(name), geometry,
-                                   Region(left + column * (CARD_WIDTH + CARD_GAP), y, CARD_WIDTH, CARD_HEIGHT)))
-        rows += [' ' * left + (' ' * CARD_GAP).join(card[line] for card in cards) for line in range(CARD_HEIGHT)]
-        if first + columns < len(outputs):
-            rows.append('')
+            labels = ', '.join(t['id'] for t in targets) or '배정 없음'
+            y = len(rows)
+            rows += [_fit(f"#{output['display_number']} {output['id']} · ({geometry.get('x', '?')}, {geometry.get('y', '?')})", width),
+                     _fit(labels + ' · ' + _card_status(report, output, targets), width)]
+            boxes.append(OutputBox(output['id'], safe_text(output['id']), geometry, Region(0, y, width, 2)))
+        return '\n'.join(rows), boxes
+    left = max(0, (width - required_width) // 2)
+    cells, boxes = {}, []
+    for output, geometry in zip(outputs, geometries):
+        column, row = xs.index(geometry['x']), ys.index(geometry['y'])
+        cells[row, column] = _card(report, output, selected)
+        boxes.append(OutputBox(output['id'], safe_text(output['id']), geometry,
+            Region(left + column * (CARD_WIDTH + CARD_GAP), row * (CARD_HEIGHT + 1), CARD_WIDTH, CARD_HEIGHT)))
+    rows = []
+    for row in range(len(ys)):
+        for line in range(CARD_HEIGHT):
+            rows.append(' ' * left + (' ' * CARD_GAP).join(
+                cells.get((row, column), [' ' * CARD_WIDTH] * CARD_HEIGHT)[line] for column in range(len(xs))))
+        if row + 1 < len(ys): rows.append(' ' * (left + required_width))
     return '\n'.join(rows), boxes
 
 
@@ -196,7 +214,7 @@ def topology_text(report, width=100, height=7):
 
 
 class ScreenMap(Static, can_focus=True):
-    """Capture a selected DID drag, then leave mutations to the enclosing panel."""
+    """Read-only layout with click/keyboard links to site settings."""
     ALLOW_SELECT = False
     DEFAULT_CSS = 'ScreenMap { height: auto; width: 1fr; }'
 
@@ -210,41 +228,20 @@ class ScreenMap(Static, can_focus=True):
             super().__init__()
             self.output_id = output_id
 
-    class MoveRequested(Message):
-        def __init__(self, target_id, output_id, expected_config, target_snapshot, expected_topology=None):
-            super().__init__()
-            self.target_id = target_id
-            self.output_id = output_id
-            self.expected_config = deepcopy(expected_config)
-            self.target_snapshot = deepcopy(target_snapshot)
-            self.expected_topology = deepcopy(expected_topology)
-
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._report = {}
         self._selected = None
-        self._expected_config = {}
-        self._move_enabled = False
         self._boxes = []
-        self._drag = None
         self._press = None
-        self._hover_output = None
         self._focused_output = None
 
-    def update_report(self, report, selected, expected_config, *, enabled=True):
-        gesture = self._press
-        if gesture is not None and (
-                not enabled or report.get('output_state') != 'ok'
-                or report.get('logical_outputs') != gesture['topology']
-                or selected != gesture['selection']
-                or expected_config != gesture['config']
-                or gesture['target'] is not None and self._assignment(self._target(report, gesture['target']['id'])) != self._assignment(gesture['target'])):
-            self.cancel_drag()
+    def update_report(self, report, selected):
+        if self._report.get('logical_outputs') != report.get('logical_outputs'):
+            self._press = None
         changed_selection = self._selected != selected
         self._report = deepcopy(report)
         self._selected = selected
-        self._expected_config = deepcopy(expected_config)
-        self._move_enabled = enabled
         ids = {value.get('id') for value in report.get('logical_outputs', [])}
         source = self._target_output(self._target(report, selected))
         if changed_selection and source in ids:
@@ -257,17 +254,9 @@ class ScreenMap(Static, can_focus=True):
     def _target(report, selected):
         return next((value for value in report.get('targets', []) if value.get('id') == selected), None)
 
-    @staticmethod
-    def _assignment(target):
-        return {key: (target or {}).get(key) for key in ('id', 'url', 'output', 'layout', 'autostart', 'frontend')}
-
     @property
     def output_regions(self):
         return {box.output_id: box.region for box in self._boxes}
-
-    def _confirmed_ids(self):
-        return {value.get('id') for value in self._report.get('logical_outputs', [])
-                if value.get('confirmed') is True and isinstance(value.get('id'), str)}
 
     def _target_output(self, target):
         if not target:
@@ -291,9 +280,8 @@ class ScreenMap(Static, can_focus=True):
             starts.append(offset)
             offset += len(line) + 1
         for box in self._boxes:
-            style = 'bold #f1d5a3 on #383346' if box.output_id == self._hover_output else (
-                'bold #cbc2ef on #312b40' if self.has_focus and box.output_id == self._focused_output else
-                'bold #b5e9d9' if box.output_id == source else '')
+            style = ('bold #cbc2ef on #312b40' if self.has_focus and box.output_id == self._focused_output else
+                     'bold #b5e9d9' if box.output_id == source else '')
             if style:
                 for row in range(box.region.y, min(box.region.bottom, len(lines))):
                     start = starts[row] + self._cell_index(lines[row], box.region.x)
@@ -319,89 +307,42 @@ class ScreenMap(Static, can_focus=True):
         point = Offset(event.screen_x - self.content_region.x, event.screen_y - self.content_region.y)
         return next((box.output_id for box in self._boxes if box.region.contains(point.x, point.y)), None)
 
-    def _output_at(self, event):
-        output = self._card_at(event)
-        return output if output in self._confirmed_ids() else None
-
     def on_mouse_down(self, event: events.MouseDown):
         if event.button != 1 or self.is_disabled:
             return
         output = self._card_at(event)
-        if output is None:
-            return
-        self.cancel_drag()
-        targets = _targets_for_output(self._report, output)
-        target = targets[0] if len(targets) == 1 else None
-        movable = (self._move_enabled and self._report.get('output_state') == 'ok'
-                   and output in self._confirmed_ids() and target is not None
-                   and target.get('layout') == 'fullscreen')
-        self._press = {'target': deepcopy(target), 'config': deepcopy(self._expected_config),
-                       'topology': deepcopy(self._report.get('logical_outputs')), 'selection': self._selected,
-                       'source': output, 'origin': (event.screen_x, event.screen_y), 'moved': False}
-        self._focused_output = output
-        if movable:
-            self._drag = self._press
-        self.focus(scroll_visible=False)
-        if movable:
-            self.capture_mouse()
-        self._draw()
-        event.stop()
-        event.prevent_default()
+        if output is not None:
+            self._press = (output, event.screen_x, event.screen_y)
+            self._focused_output = output
+            self.focus(scroll_visible=False)
+            self._draw()
+            event.stop()
+            event.prevent_default()
 
     def on_mouse_move(self, event: events.MouseMove):
-        if self._press is None:
-            return
-        x, y = self._press['origin']
-        self._press['moved'] |= max(abs(event.screen_x - x), abs(event.screen_y - y)) >= 2
-        self._hover_output = self._output_at(event) if self._drag and self._press['moved'] else None
-        self._draw()
-        event.stop()
-        event.prevent_default()
+        # Suppress a moved click; no capture, hover painting or move request.
+        if self._press and max(abs(event.screen_x - self._press[1]), abs(event.screen_y - self._press[2])) >= 2:
+            self._press = None
 
     def on_mouse_up(self, event: events.MouseUp):
-        if self._press is None or event.button != 1:
+        pressed, self._press = self._press, None
+        if pressed is None or event.button != 1 or self.is_disabled:
             return
-        gesture = self._press
-        origin_x, origin_y = gesture['origin']
-        gesture['moved'] |= max(abs(event.screen_x - origin_x), abs(event.screen_y - origin_y)) >= 2
-        clicked = not gesture['moved'] and self._card_at(event) == gesture['source']
-        output = self._output_at(event)
-        valid = (self._drag is not None and self._move_enabled and not self.is_disabled and self.is_on_screen
-                 and self._report.get('output_state') == 'ok'
-                 and gesture['moved'] and output and output != gesture['source'])
-        self.cancel_drag()
+        output, x, y = pressed
+        if self._card_at(event) == output and max(abs(event.screen_x - x), abs(event.screen_y - y)) < 2:
+            self.post_message(self.OutputActivated(output))
         event.stop()
         event.prevent_default()
-        if valid:
-            self.post_message(self.MoveRequested(gesture['target']['id'], output, gesture['config'], gesture['target'], gesture['topology']))
-        elif clicked and not self.is_disabled:
-            self.post_message(self.OutputActivated(gesture['source']))
-
-    def cancel_drag(self):
-        if self._press is None:
-            return
-        captured = self._drag is not None
-        self._press = None
-        self._drag = None
-        self._hover_output = None
-        if captured:
-            self.release_mouse()
-        self._draw()
 
     def on_key(self, event: events.Key):
-        if event.key == 'escape' and self._press is not None:
-            self.cancel_drag()
+        if event.key in {'left', 'right', 'up', 'down', 'enter'} and self._boxes and not self.is_disabled:
+            self._press = None
+            if event.key == 'enter': self.post_message(self.OutputActivated(self._focused_output))
+            else: self._navigate(event.key)
             event.stop()
             event.prevent_default()
-        elif event.key in {'left', 'right', 'up', 'down', 'enter'} and self._boxes and not self.is_disabled:
-            if self._press is not None:
-                self.cancel_drag()
-            elif event.key == 'enter':
-                self.post_message(self.OutputActivated(self._focused_output))
-            else:
-                self._navigate(event.key)
-            event.stop()
-            event.prevent_default()
+        elif event.key == 'escape':
+            self._press = None
 
     def _navigate(self, direction):
         current = next((box for box in self._boxes if box.output_id == self._focused_output), self._boxes[0])
@@ -411,7 +352,8 @@ class ScreenMap(Static, can_focus=True):
             dx, dy = box.region.x - x, box.region.y - y
             if ((direction == 'left' and dx < 0) or (direction == 'right' and dx > 0)
                     or (direction == 'up' and dy < 0) or (direction == 'down' and dy > 0)):
-                candidates.append(((abs(dy), abs(dx)), box))
+                distance = (abs(dy), abs(dx)) if direction in {'left', 'right'} else (abs(dx), abs(dy))
+                candidates.append((distance, box))
         if candidates:
             self._focused_output = min(candidates, key=lambda item: item[0])[1].output_id
             self._draw()
@@ -431,28 +373,20 @@ class ScreenMap(Static, can_focus=True):
     def on_focus(self):
         self._draw()
 
-    def on_mouse_leave(self):
-        if self._press is not None and self._drag is None:
-            self.cancel_drag()
+    def on_mouse_leave(self): self._press = None
 
     def on_resize(self):
-        self.cancel_drag()
+        self._press = None
         self._draw()
 
-    def on_hide(self):
-        self.cancel_drag()
+    def on_hide(self): self._press = None
 
     def on_blur(self):
-        self.cancel_drag()
+        self._press = None
         self._draw()
 
-    def on_unmount(self):
-        self.cancel_drag()
-
-    def on_mouse_release(self):
-        self.cancel_drag()
+    def on_unmount(self): self._press = None
 
     def watch_disabled(self, disabled):
         super().watch_disabled(disabled)
-        if disabled:
-            self.cancel_drag()
+        if disabled: self._press = None
