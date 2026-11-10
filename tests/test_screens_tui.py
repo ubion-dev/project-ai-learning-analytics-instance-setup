@@ -505,3 +505,26 @@ def test_target_details_are_deferred_and_follow_reports_after_expansion():
             await pilot.pause()
             assert len(editor.query('#screens-detail')) == 1
     asyncio.run(scenario())
+
+
+def test_unchanged_editor_status_does_not_rewrite_labels_but_changes_remain_visible(monkeypatch):
+    async def scenario():
+        app = SimpleApp(service=Service(), initial_section='screens')
+        async with app.run_test(size=(120, 36)) as pilot:
+            await pilot.pause()
+            editor = await open_target(pilot, app)
+            result = editor.query_one('#target-result', Static)
+            next_line = editor.query_one('#target-next', Static)
+            calls = []
+            original = Static.update
+            def record(widget, value=''):
+                if widget in (result, next_line): calls.append(widget.id)
+                return original(widget, value)
+            monkeypatch.setattr(Static, 'update', record)
+            for _ in range(5): editor.refresh_status()
+            assert calls == []
+            editor.panel.messages['default'] = '합성 변경 상태'
+            editor.refresh_status()
+            assert calls == ['target-result']
+            assert '합성 변경 상태' in str(result.render())
+    asyncio.run(scenario())

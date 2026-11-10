@@ -1,5 +1,12 @@
 # ala 공개판 진행 기록
 
+## 2026-11-10 RC37 기본 TUI 복원
+
+- 사용자가 RC36 텍스트 메뉴의 가시성과 시인성이 크게 떨어진다고 보고했다. 성능을 위해 기본 인터페이스를 바꾼 판단을 수정하고 상태 카드·표·모니터 그림이 있는 기본 TUI로 복원한다. RC36에서 즉시 `ala tui`로 같은 화면을 열 수 있음을 안내했다.
+- 기본 ala·tui와 사이트/Chrome·모니터·구성 편집 진입을 TUI로 연결했다. 텍스트 메뉴는 명시 `ala console`에 유지한다. 모니터 바로 열기는 같은 읽기 전용 조회/검토/확인/복원 편집기를 재사용하며 새 화면 디자인을 추가하지 않는다.
+- 같은 업데이트 안내·대상 상태/다음 행동 문구의 반복 Static.update를 생략하고 추천 버튼의 숨김→표시 반복을 제거했다. 표시 캐시는 UI 문구에 한정하며 장비 상태·권한·백엔드 검증을 캐시하지 않는다. 실제 상태/색/도움말 변화는 계속 반영한다. 이전 모드 선택 재사용과 연속 스타일 그리기 개선은 보존한다.
+- 초기 관련 67개와 최종 관련 73개를 통과했다. 기본/직접 진입·80×24 모니터 편집·동일 문구 갱신 생략과 실제 상태 변화 반영을 검증했다. 모니터 캔버스의 Esc는 드래그가 없으면 화면 닫기로 전달하고 진행 중 드래그는 취소만 하도록 보완했다. 실제 Rocky/HIWARE 장비·Chrome·설정은 변경하지 않았으며 체감 개선은 확정하지 않는다. 최종 CI·새 불변 RC37 서명 게시·익명 공개 검증을 이어간다.
+
 ## 2026-11-10 RC36 텍스트 CLI 서명 배포 완료
 
 - [PR #31](https://github.com/ubion-dev/project-ai-learning-analytics-instance-setup/pull/31)을 두 최종 CI 통과 후 main의 `ca95ac6`로 병합하고 새 불변 태그 `v0.1.0-rc.36`을 게시했다. [서명 릴리스 실행](https://github.com/ubion-dev/project-ai-learning-analytics-instance-setup/actions/runs/42764487670)과 [RC36 시험판](https://github.com/ubion-dev/project-ai-learning-analytics-instance-setup/releases/tag/v0.1.0-rc.36)의 게시 성공을 확인했다.

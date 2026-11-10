@@ -222,3 +222,24 @@ def test_selection_and_coordinates_reuse_choices_but_mode_change_updates_scales(
             assert editor.draft.output()['scale'] == 1
             assert len(canvas.render().spans) < 100
     asyncio.run(scenario())
+
+
+def test_direct_tui_monitor_entry_opens_editor_read_only():
+    from ala.simple_tui import SimpleApp
+    from test_screens_tui import Service as ScreenService
+    class Combined(ScreenService):
+        def __init__(self):
+            super().__init__(); self.monitors = Service(2)
+        async def call(self, action, payload=None):
+            if action.startswith('monitor-'): return await self.monitors.call(action, payload)
+            return await super().call(action, payload)
+    async def scenario():
+        service = Combined()
+        app = SimpleApp(service=service, initial_section='screens', initial_monitor_editor=True)
+        async with app.run_test(size=(80, 24)) as pilot:
+            await pilot.pause()
+            assert isinstance(app.screen, MonitorEditor) and app.screen.draft
+            assert service.monitors.calls == [('monitor-layout-status', None), ('monitor-layout-state', None)]
+            await pilot.press('escape'); await pilot.pause()
+            assert not isinstance(app.screen, MonitorEditor)
+    asyncio.run(scenario())

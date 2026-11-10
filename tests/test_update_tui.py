@@ -236,3 +236,24 @@ def test_recorded_submit_failure_is_shown_immediately_and_explicit_check_reads_l
             assert app._update_run_id == 'new-test'
             assert '설치 버전·실행 재검사' in screen.query_one('#update-detail', TextArea).text
     asyncio.run(scenario())
+
+
+def test_unchanged_update_notice_does_not_redraw_and_new_status_updates(monkeypatch):
+    async def scenario():
+        app = SimpleApp(service=UpdateService())
+        async with app.run_test(size=(100, 32)) as pilot:
+            await pilot.pause()
+            notice = app.query_one('#update-notice', Static)
+            app.render_update_notice()
+            calls = []
+            original = Static.update
+            def record(widget, value=''):
+                if widget is notice: calls.append(value)
+                return original(widget, value)
+            monkeypatch.setattr(Static, 'update', record)
+            for _ in range(5): app.render_update_notice()
+            assert calls == []
+            app._update_status = {'state': 'failed', 'target_version': '2.0.0'}
+            app.render_update_notice()
+            assert len(calls) == 1 and '2.0.0' in str(notice.render())
+    asyncio.run(scenario())

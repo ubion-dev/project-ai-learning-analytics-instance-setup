@@ -20,9 +20,9 @@ def parser():
     p = Parser(prog='ala', description='AI 학습 분석실 DID 인스턴스 환경 관리')
     p.add_argument('--version', action='version', version=__version__)
     sub = p.add_subparsers(dest='command')
-    sub.add_parser('tui', help='기존 전체 화면 TUI (선택)')
-    sub.add_parser('console', help='텍스트 메뉴 (기본)')
-    sub.add_parser('screen', help='사이트·Chrome 텍스트 메뉴')
+    sub.add_parser('tui', help='기본 관리 TUI')
+    sub.add_parser('console', help='텍스트 메뉴 (선택)')
+    sub.add_parser('screen', help='사이트·Chrome 관리 TUI')
     config = sub.add_parser('config', help='기대 구성').add_subparsers(dest='action', required=True)
     config.add_parser('edit')
     config.add_parser('show').add_argument('--json', action='store_true')
@@ -301,15 +301,20 @@ def main(argv=None, *, service=None):
                 p.error('메뉴는 SSH 터미널에서 실행하세요. 비대화형 환경에는 하위 명령을 지정하세요.')
             if service is None:
                 svc.enter_admin(argv)
-            if args.command == 'tui':
-                from .simple_tui import SimpleApp
-                SimpleApp(service=svc).run()
+            if args.command == 'console':
+                from .terminal import run_terminal
+                return run_terminal(svc)
+            if args.command == 'config':
+                from .tui import AlaApp
+                AlaApp(service=svc, initial_section='config').run()
                 return 0
-            from .terminal import run_terminal
-            initial = ('screens' if args.command in {'screen', 'chrome'} else
-                       'monitors' if args.command == 'display' else
-                       'config' if args.command == 'config' else 'home')
-            return run_terminal(svc, initial=initial)
+            from .simple_tui import SimpleApp
+            if args.command in {'screen', 'chrome', 'display'}:
+                SimpleApp(service=svc, initial_section='screens',
+                          initial_monitor_editor=args.command == 'display').run()
+            else:
+                SimpleApp(service=svc).run()
+            return 0
         if service is None and not (args.command == 'update' and args.check):
             svc.enter_admin(argv)
         if args.command == 'update':

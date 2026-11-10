@@ -261,10 +261,12 @@ class SimpleApp(App[None]):
     Screen.compact #quick-logs { width: 21; }
     """
 
-    def __init__(self, *, service, initial_section='setup', **kwargs):
+    def __init__(self, *, service, initial_section='setup', initial_monitor_editor=False, **kwargs):
         super().__init__(**kwargs)
         self.service = service
         self.initial_section = initial_section
+        self.initial_monitor_editor = initial_monitor_editor
+        self._rendered_update_notice = None
         self._config = None
         self._active_job = None
         self._submitting = False
@@ -352,8 +354,15 @@ class SimpleApp(App[None]):
         self.run_worker(self.load_state(), group='load', exclusive=True, exit_on_error=False)
         if self.initial_section == 'screens':
             self.query_one('#tabs', Tabs).active = 'screens-tab'
+        if self.initial_monitor_editor:
+            self.call_after_refresh(self.open_initial_monitor_editor)
         if not self.is_headless:
             self.run_worker(self.check_update(), group='updates', exit_on_error=False)
+
+    def open_initial_monitor_editor(self):
+        if self.is_running:
+            from .monitor_tui import MonitorEditor
+            self.push_screen(MonitorEditor(self.query_one('#screens', ScreenPanel)))
 
     def on_resize(self, event: events.Resize):
         if self.is_mounted:
@@ -1042,5 +1051,8 @@ class SimpleApp(App[None]):
         if message:
             message += ' · u 업데이트 관리'
         notice = self.query_one('#update-notice', Static)
-        notice.update(Text(message, style='#f1d5a3' if state in {'failed', 'interrupted', 'unknown'} else ''))
+        style = '#f1d5a3' if state in {'failed', 'interrupted', 'unknown'} else ''
+        if self._rendered_update_notice != (message, style):
+            notice.update(Text(message, style=style))
+            self._rendered_update_notice = (message, style)
         notice.display = bool(message)
