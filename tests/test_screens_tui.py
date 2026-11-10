@@ -482,3 +482,26 @@ def test_repeated_refresh_keeps_inflight_query_and_reports_elapsed_time():
             assert '조회 ' in str(panel.query_one('#screens-summary',Static).render())
             assert panel.query_seconds>=0
     asyncio.run(scenario())
+
+
+def test_target_details_are_deferred_and_follow_reports_after_expansion():
+    async def scenario():
+        service = Service()
+        app = SimpleApp(service=service, initial_section='screens')
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            editor = await open_target(pilot, app)
+            assert not editor.query('#screens-detail')
+            editor.query_one('#target-details', Collapsible).collapsed = False
+            await pilot.pause()
+            detail = editor.query_one('#screens-detail', TextArea)
+            assert detail.text == editor.panel.details('default')
+            editor.panel.messages['default'] = '합성 상태 변경'
+            editor.refresh_status()
+            assert detail.text == editor.panel.details('default')
+            editor.query_one('#target-details', Collapsible).collapsed = True
+            await pilot.pause()
+            editor.query_one('#target-details', Collapsible).collapsed = False
+            await pilot.pause()
+            assert len(editor.query('#screens-detail')) == 1
+    asyncio.run(scenario())
