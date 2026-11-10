@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+from time import monotonic
 from copy import deepcopy
 from urllib.parse import urlsplit, urlunsplit
 
@@ -480,6 +481,8 @@ class ScreenPanel(Vertical):
         return self.is_mounted and self.owner.is_running and self.owner.query_one('#pages').current == 'screens'
 
     def activate(self):
+        if self.reading:
+            return
         if not self.identifying:
             self.session_notice = None
             self.render_report()
@@ -499,6 +502,8 @@ class ScreenPanel(Vertical):
         if self.reading or not self.is_mounted:
             return
         self.reading = True
+        started = monotonic()
+        self.query_one('#screens-summary', Static).update('모니터·화면 상태 조회 중…')
         try:
             value = await self.owner.service.call('screens-inspect')
             if not isinstance(value, dict) or not isinstance(value.get('targets'), list):
@@ -518,6 +523,7 @@ class ScreenPanel(Vertical):
         except Exception as exc:
             self.report = {'targets': [], 'reason': safe_text(str(exc)), 'state': 'unknown'}
         finally:
+            self.query_seconds = monotonic()-started
             self.reading = False
         if self.is_mounted:
             self.render_report()
@@ -557,7 +563,9 @@ class ScreenPanel(Vertical):
         output_label = f'출력 {physical}개 · 논리 화면 {logical}개' if self.report.get('output_state', 'ok') == 'ok' else '출력 조회 대기·확인 필요'
         confirmed_label = str(confirmed)+'개' if type(confirmed) is int else '확인 불가'
         self.query_one('#screens-summary', Static).update(Text(
-            f'{output_label} · 관리 대상 {len(targets)}개 · 확인된 창 {confirmed_label}'
+            f'{output_label}'
+            + (f' · 조회 {self.query_seconds:.1f}초' if hasattr(self,'query_seconds') else '')
+            + f' · 관리 대상 {len(targets)}개 · 확인된 창 {confirmed_label}'
             if self.loaded else '출력·창 조회 확인 필요 · '+str(self.report.get('reason', '조회 중'))))
         map_view = self.query_one('#screens-map', ScreenMap)
         map_view.update_report(self.report, self.selected, self.owner._config,

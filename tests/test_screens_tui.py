@@ -458,3 +458,27 @@ def test_quick_check_keeps_gnome_log_button_visible_in_compact_terminal():
             assert '로그인·세션 시작 오류 단서' in app.query_one('#quick-detail', TextArea).text
 
     asyncio.run(scenario())
+
+
+def test_repeated_refresh_keeps_inflight_query_and_reports_elapsed_time():
+    async def scenario():
+        service=Service();service.gate=asyncio.Event()
+        app=SimpleApp(service=service)
+        async with app.run_test(size=(100,32)) as pilot:
+            await pilot.pause()
+            app.query_one('#tabs',Tabs).active='screens-tab'
+            await pilot.pause()
+            panel=app.query_one('#screens',ScreenPanel)
+            assert panel.reading
+            first=sum(a=='screens-inspect' for a,p in service.calls)
+            assert first==1
+            for _ in range(3):panel.activate()
+            await pilot.pause()
+            assert sum(a=='screens-inspect' for a,p in service.calls)==first
+            assert '조회 중' in str(panel.query_one('#screens-summary',Static).render())
+            service.gate.set()
+            await pilot.pause()
+            assert panel.loaded and not panel.reading
+            assert '조회 ' in str(panel.query_one('#screens-summary',Static).render())
+            assert panel.query_seconds>=0
+    asyncio.run(scenario())
