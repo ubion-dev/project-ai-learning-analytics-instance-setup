@@ -27,13 +27,13 @@ ssh user@서버IP
 
 ## 4. ala 설치
 
-SSH로 접속한 **Rocky에서** 실행합니다. 아래는 공개 시험판 RC37의 설치 명령입니다. [Mac에서 받아 SCP로 전달](docs/INSTALL.md#mac에서-받아-scp로-전달)
+SSH로 접속한 **Rocky에서** 실행합니다. 아래는 공개 시험판 RC38의 설치 명령입니다. [Mac에서 받아 SCP로 전달](docs/INSTALL.md#mac에서-받아-scp로-전달)
 
 ```bash
 (
   set -e
-  version='0.1.0rc37'
-  tag='v0.1.0-rc.37'
+  version='0.1.0rc38'
+  tag='v0.1.0-rc.38'
   archive="ala-${version}.tar.gz"
   url="https://github.com/ubion-dev/project-ai-learning-analytics-instance-setup/releases/download/${tag}"
   mkdir -p "$HOME/ala-downloads/$version"
@@ -55,7 +55,8 @@ DID 전용 계정을 쓸 경우 `ala config edit`에서 기존 일반 사용자�
 간편 설정을 실행한 뒤 화면 관리에서 모니터를 선택해 사이트를 저장하고 설정을 적용합니다.
 
 `ala screen` / `ala chrome`은 화면 관리 TUI, `ala display edit`는 모니터 배치·해상도 편집 TUI를 바로 엽니다.
-지원 해상도·화면 배율과 좌표·위치를 편집하고 검토·적용 뒤 30초 안에 실제 화면을 확인해 유지합니다.
+모니터를 선택하고 **위치 변경(P)**에서 기준 모니터의 좌우·상하·위치 교환 또는 정확한 좌표를 선택합니다.
+지원 해상도·화면 배율을 편집하고 검토·적용 뒤 30초 안에 실제 화면을 확인해 유지합니다.
 확인하지 않으면 기존 서버 복원 절차가 동작합니다. 기존 사이트·프로필·코드 선택은 보존합니다.
 
 텍스트 메뉴가 필요한 경우에만 `ala console`을 명시 실행합니다. 이번 기본 TUI 복원 때문에

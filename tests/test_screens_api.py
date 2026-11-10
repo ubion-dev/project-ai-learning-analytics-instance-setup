@@ -360,3 +360,20 @@ def test_reviewed_config_save_preserves_committed_runtime(runtime_operations):
     assert operations.config() == after
     assert store.load('default')['committed'] == original
     assert not operations.host.calls
+
+
+@pytest.mark.parametrize('local_ids', [('wall-a', 'wall-c'), ('wall-b', 'wall-d')])
+def test_two_local_outputs_allow_any_site_pair_without_gpu_role_binding(operations, local_ids):
+    from ala.config import ScreenConfig
+    before = Config(user='user', schema_version=2, screens=[
+        ScreenConfig(id=local_ids[0], output='HDMI-1', url='https://example.com/one'),
+        ScreenConfig(id=local_ids[1], output='DP-1', url='https://example.com/two')])
+    atomic_json(operations.paths.config, before.to_dict(), 0o644)
+    selected = before.screen_targets()[1].to_dict()
+    selected['url'] = 'https://example.com/changed'
+    result = operations.dispatch('screens-save', {'target': selected, 'expected_config': before.to_dict()})
+    saved = Config.from_dict(result['config'])
+    assert saved.screen_targets()[0] == before.screen_targets()[0]
+    assert saved.screen_targets()[1].url == selected['url']
+    assert [s.output for s in saved.screen_targets()] == ['HDMI-1', 'DP-1']
+    assert all(s.layout == 'fullscreen' for s in saved.screen_targets())

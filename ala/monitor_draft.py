@@ -96,6 +96,31 @@ class LayoutDraft:
                     self.request = before
                     raise ValueError('이 위치는 다른 모니터와 겹칩니다. 변경 전 위치를 유지했습니다.')
 
+    def place(self, source_id, relation, anchor_id=None, *, x=None, y=None):
+        """Place a local draft output explicitly without dragging or moving peers."""
+        ids = {item['id'] for item in self.request['outputs']}
+        if source_id not in ids:
+            raise ValueError('현재 PC의 모니터를 선택하세요.')
+        if relation == 'coordinates':
+            self.drop(source_id, x, y, snap=0)
+            return
+        if relation not in {'left', 'right', 'above', 'below', 'swap'}:
+            raise ValueError('지원하는 위치 변경 방법을 선택하세요.')
+        if anchor_id not in ids or anchor_id == source_id:
+            raise ValueError('같은 PC에 연결된 다른 기준 모니터를 선택하세요.')
+        boxes = {item['id']: item for item in self.rects()}
+        source, anchor = boxes[source_id], boxes[anchor_id]
+        if relation == 'swap':
+            self.drop(source_id, source['x'], source['y'], anchor_id)
+            return
+        x, y = {
+            'left': (anchor['x'] - source['width'], anchor['y']),
+            'right': (anchor['x'] + anchor['width'], anchor['y']),
+            'above': (anchor['x'], anchor['y'] - source['height']),
+            'below': (anchor['x'], anchor['y'] + anchor['height']),
+        }[relation]
+        self.drop(source_id, x, y, snap=0)
+
     def nudge(self, dx, dy):
         a = next(o for o in self.rects() if o['id'] == self.selected)
         candidates = []
