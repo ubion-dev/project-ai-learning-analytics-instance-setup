@@ -6,12 +6,13 @@ runtime lease or acquire that lock, including calls from the nightly worker.
 from __future__ import annotations
 
 from dataclasses import replace
+from concurrent.futures import ThreadPoolExecutor
 import os
 
 from .config import Config
-from .system import Host, Paths
+from .system import Host, Paths, InspectionHost
 from . import display
-from .monitors import hardware_topology, resolve_output
+from .monitors import hardware_topology, resolve_output, topology
 
 
 def _context(config,target):
@@ -127,38 +128,80 @@ def inspect_session(config, host):
     return {'no': 'ok', 'yes': 'locked'}.get(locked, 'lock_unknown')
 
 
-def inspect_screens(config:Config,host=None,paths=None):
+def inspect_screens(config:Config,host=None,paths=None, *, local=False, batch=False):
+    """Read only. batch enters one user helper; local runs inside that helper.
+
+    The legacy path remains available for existing callers. No result or command
+    cache survives this request or authorizes a later change.
+    """
     host,paths=host or Host(),paths or Paths()
-    hardware=hardware_topology(paths)
+    hardware={} if local else hardware_topology(paths)
+    if batch and config.display:
+        try:
+            value=display._user_call(replace(config,runtime_pin=None),host,paths,'screen-observe')
+        except (OSError,ValueError,RuntimeError):
+            value={'state':'unknown','reason':'화면 계정·사용자 runtime의 묶음 조회를 완료하지 못했습니다.'}
+        if (isinstance(value.get('targets'),list) and
+                all(isinstance(t,dict) for t in value['targets']) and
+                [t.get('id') for t in value['targets']]==[s.id for s in config.screen_targets()]):
+            return value | hardware
+        # A failed batch is an unknown observation, never cached success or a
+        # fallback series of slow RPCs that repeats the same unavailable bus.
+        return hardware | {'outputs':[], 'logical_outputs':[], 'output_state':'unknown',
+            'state':'unknown', 'exit_code':1, 'targets':[
+                {'id':s.id,'url':s.url,'output':s.output,'layout':s.layout,'autostart':s.autostart,
+                 'frontend':s.frontend.to_dict(),'service':{},'health':{'state':'unknown'},
+                 'placement':{'state':'unknown'},'state':'unknown','reason':'사용자 화면 묶음 조회를 완료하지 못했습니다.'}
+                for s in config.screen_targets()],
+            'reason':value.get('reason') or '사용자 화면 묶음 조회를 완료하지 못했습니다.'}
+    if local:
+        host=InspectionHost(display.BudgetHost(host,18))
     try:
-        inventory=_inventory(config,host,paths) if config.display else {'state':'not_applicable'}
+        inventory=((topology(host=host) if local else _inventory(config,host,paths))
+                   if config.display else {'state':'not_applicable'})
     except (OSError,ValueError,RuntimeError):
         inventory={'state':'unknown','reason':'사용자 화면 출력 조회를 완료하지 못했습니다.',
                    'next_action':'화면 계정과 활성 GNOME 로그인 세션을 확인하세요.'}
-    targets=[]
-    for screen in config.screen_targets():
+    def observe(screen):
         try:
             context=_applied_context(config,screen.id,host,paths)
-            observed=display.chrome_action('status',context,host=host,paths=paths)
+            if local and context.user != config.user:
+                raise PermissionError('선택한 화면의 사용자 계정이 현재 화면 계정과 다릅니다.')
+            observed=(display._check_user(context,display_home,host,paths) if local else
+                      display.chrome_action('status',context,host=host,paths=paths))
             service=observed.get('service') or {}
             health=observed.get('health') or {'state':'unknown','reason':observed.get('reason','현재 감시 기록 없음')}
             if observed.get('state') in {'running','pending'} and service.get('ActiveState') in {'active','activating'}:
-                placement=display._user_call(context,host,paths,'windows')
+                if local:
+                    from .monitors import placement as read_placement
+                    placement=(read_placement(context,health,host=host,inventory=inventory)
+                               if observed.get('process_verified') is True and health.get('state') not in {'unknown','failed'}
+                               else {'state':'pending','reason':'관리 Chrome의 소유권 검증을 기다립니다.','confirmed_window_count':None})
+                else:
+                    placement=display._user_call(context,host,paths,'windows')
             else:
                 placement={'state':'pending','reason':'관리 Chrome의 실행·창 증거를 기다립니다.','confirmed_window_count':None}
             if context.schema_version==1 and context.output is None:
                 placement={'state':'not_applicable','reason':'기존 기본 화면의 배치를 유지합니다.','confirmed_window_count':None}
-            targets.append({'id':screen.id,'url':screen.url,'applied_url':context.url,'actual_url':None,'output':screen.output,
+            return {'id':screen.id,'url':screen.url,'applied_url':context.url,'actual_url':None,'output':screen.output,
                             'layout':screen.layout,'applied_output':context.output,'applied_layout':context.layout,
                             'autostart':screen.autostart,'frontend':screen.frontend.to_dict(),
                             'service':service,'health':health,'placement':placement,'state':observed.get('state','unknown'),
                             'results':observed.get('results',[]),'next_action':observed.get('next_action',''),
-                            'reason':observed.get('reason','')})
+                            'reason':observed.get('reason','')}
         except (OSError,ValueError,RuntimeError):
-            targets.append({'id':screen.id,'url':screen.url,'actual_url':None,'output':screen.output,
+            return {'id':screen.id,'url':screen.url,'actual_url':None,'output':screen.output,
                             'layout':screen.layout,'autostart':screen.autostart,'frontend':screen.frontend.to_dict(),
                             'service':{},'health':{'state':'unknown'},'placement':{'state':'unknown'},
-                            'state':'unknown','reason':'화면 대상의 관측을 완료하지 못했습니다.'})
+                            'state':'unknown','reason':'화면 대상의 관측을 완료하지 못했습니다.'}
+    if local:
+        import pwd
+        from pathlib import Path
+        display_home=Path(pwd.getpwuid(os.getuid()).pw_dir)
+        with ThreadPoolExecutor(max_workers=min(4,len(config.screen_targets()))) as pool:
+            targets=list(pool.map(observe,config.screen_targets()))
+    else:
+        targets=[observe(screen) for screen in config.screen_targets()]
     failures=any(t['state'] in {'unknown','error','blocked'} or t['placement']['state'] in {'unknown','error','blocked'} for t in targets)
     pending=inventory.get('state') not in {'ok','not_applicable'} or any(t['state'] not in {'running','stopped','not_applicable'} or t['placement']['state']=='pending' for t in targets)
     code=1 if failures else 2 if pending else 0

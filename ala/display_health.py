@@ -247,6 +247,8 @@ class Supervisor:
         self.stopping = False
         self.browser = None
         self.target = self.session = self.frame = self.loader = self.request = None
+        self._bootstrap_loader = None
+        self._bootstrap_pending = False
         self.navigating = False
         self.document_ok = self.loaded = False
         self.deadline = None
@@ -356,12 +358,18 @@ class Supervisor:
             startup_call(method, params, session_id=self.session)
         if self.stopping or self.stop_requested():
             return
-        self.frame = startup_call('Page.getFrameTree', session_id=self.session).get('frameTree', {}).get('frame', {}).get('id')
+        initial_frame = startup_call('Page.getFrameTree', session_id=self.session).get('frameTree', {}).get('frame', {})
+        self.frame = initial_frame.get('id')
+        if (initial_frame.get('url') == RECOVERY_URL and
+                isinstance(initial_frame.get('loaderId'), str) and initial_frame['loaderId']):
+            self._bootstrap_loader = initial_frame['loaderId']
+            self._bootstrap_pending = True
         if not self.frame:
             raise CDPError('표시용 탭의 주 문서를 확인하지 못했습니다.')
         self._save()
 
         if self.config.url is None:
+            self._bootstrap_pending = True
             self.setup_tick()
 
     def _navigate(self, url, *, ensure_document=False):
@@ -627,12 +635,27 @@ class Supervisor:
             if method == 'Page.frameNavigated':
                 frame = params.get('frame', {})
                 if frame.get('id') == self.frame and not frame.get('parentId'):
+                    if (self._bootstrap_pending and self.navigating and not self.document_ok and
+                            frame.get('url') == RECOVERY_URL and
+                            frame.get('loaderId') != self.loader):
+                        # Page.enable can queue the verified launch document's
+                        # commit before our setup navigation. It is not evidence
+                        # that the new setup document loaded or failed.
+                        return
                     if (self.navigating and self.loader is None and frame.get('url') == self._setup_url
                             and isinstance(frame.get('loaderId'), str) and frame['loaderId']):
                         self.loader = frame['loaderId']
                     if frame.get('url') != self._setup_url or frame.get('loaderId') != self.loader:
+                        # A queued commit may describe a document which has
+                        # already been replaced. Re-read the owned main frame;
+                        # never infer setup readiness from that stale event.
+                        current = self._call('Page.getFrameTree').get('frameTree', {}).get('frame', {})
+                        if (current.get('id') == self.frame and not current.get('parentId') and
+                                current.get('url') == self._setup_url and self.loader and current.get('loaderId') == self.loader):
+                            return
                         raise CDPError('설정 안내 문서의 실제 표시를 확인하지 못했습니다.')
                     self.document_ok = True
+                    self._bootstrap_pending = False
                     self._healthy_if_complete()
             elif (method == 'Page.lifecycleEvent' and params.get('frameId') == self.frame
                   and params.get('loaderId') == self.loader and params.get('name') == 'load'):

@@ -219,26 +219,29 @@ class Operations:
             from .runtime import settings_status, snapshot
             from .frontend import read_status
             from .screen_control import read_status as reload_status
+            started = perf_counter()
+            host = InspectionHost(self.host)
             config = self.config()
-            value = inspect_screens(config, host=self.host, paths=self.paths)
+            value = inspect_screens(config, host=host, paths=self.paths, batch=True)
+            observed_at = perf_counter()
             if payload.get('quick') is True:
-                value['session'] = inspect_session(config, self.host)
+                value['session'] = inspect_session(config, host)
             frontend = read_status(paths=self.paths)
             from . import display_onboarding, screen_swap
-            value['initialization'] = display_onboarding.status(paths=self.paths, host=self.host)
+            value['initialization'] = display_onboarding.status(paths=self.paths, host=host)
             from .display_reset import status as reset_status
-            value['reset'] = reset_status(paths=self.paths,host=self.host)
-            for target in value.get('targets', []):
-                target['swap'] = screen_swap.status(paths=self.paths, host=self.host, target=target['id'])
-                target['reload'] = reload_status(target['id'], paths=self.paths, host=self.host)
+            value['reset'] = reset_status(paths=self.paths,host=host)
+            def enrich(target):
+                target['swap'] = screen_swap.status(paths=self.paths, host=host, target=target['id'])
+                target['reload'] = reload_status(target['id'], paths=self.paths, host=host)
                 target['frontend_status'] = frontend.get('targets', {}).get(target['id'], {
                     'state': 'unknown' if frontend.get('state') == 'unknown' else 'pending',
                     'reason': frontend.get('reason') or '배포 연동 미관측'})
                 try:
-                    state = snapshot(target['id'], host=self.host, paths=self.paths)
+                    state = snapshot(target['id'], host=host, paths=self.paths)
                     target['runtime'] = state or {
                         'state': 'pending', 'reason': '관리 버전 최초 등록 대기'}
-                    settings = settings_status(config, target['id'], host=self.host, paths=self.paths, state=state)
+                    settings = settings_status(config, target['id'], host=host, paths=self.paths, state=state)
                     for key in ('applied_url', 'applied_frontend'):
                         if key in settings:
                             target[key] = settings.pop(key)
@@ -247,6 +250,16 @@ class Operations:
                     target['runtime'] = {'state': 'unknown', 'reason': str(exc)}
                     target['settings'] = {'state': 'unknown', 'pending': False,
                                           'reason': '화면의 확정 설정을 확인하지 못했습니다.'}
+                return target
+            from concurrent.futures import ThreadPoolExecutor
+            targets = value.get('targets', [])
+            if targets:
+                with ThreadPoolExecutor(max_workers=min(4, len(targets))) as pool:
+                    value['targets'] = list(pool.map(enrich, targets))
+            finished = perf_counter()
+            value['query_timing'] = {'observation_seconds': observed_at-started,
+                                     'metadata_seconds': finished-observed_at,
+                                     'total_seconds': finished-started}
             return value
         if action == 'screens-apply':
             from .runtime import submit_apply
