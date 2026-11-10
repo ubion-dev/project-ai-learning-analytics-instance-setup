@@ -1,5 +1,12 @@
 # ala 공개판 진행 기록
 
+## 2026-11-10 RC33 서명 배포 완료
+
+- [PR #25](https://github.com/ubion-dev/project-ai-learning-analytics-instance-setup/pull/25)의 두 CI 경로를 통과한 뒤 main의 `b1c34fc`로 병합하고 새 불변 태그 `v0.1.0-rc.33`을 게시했다. [서명 릴리스 실행](https://github.com/ubion-dev/project-ai-learning-analytics-instance-setup/actions/runs/42724116906)이 성공해 [RC33 시험판](https://github.com/ubion-dev/project-ai-learning-analytics-instance-setup/releases/tag/v0.1.0-rc.33)에 설치 묶음·SHA-256·Sigstore 번들을 게시했다. 기존 RC32 파일은 변경하지 않았다.
+- 두 CI 경로와 최종 서명 릴리스에서 각각 회귀 1,966개·하위 검사 56개·샌드박스 Linux Chrome 7개를 통과했다. 네트워크 격리 환경에서 실제 Chrome 세 개의 독립 프로필·안내 문서 로드와 한 창 종료 후 다른 두 안내의 유지를 확인했다. GNOME 47·49의 창 배치·소유권은 모의 검증이며 실제 패널 수용과 구분한다.
+- 로컬과 Linux CI 설치 묶음의 바이트가 일치했다. 게시 파일 3개를 일반 다운로드 URL과 공식 자산 API 양쪽에서 인증 없이 다시 내려받아 동일 바이트·SHA-256·전체 manifest·격리 버전 진입점·RC33 workflow 신원/태그/push 조건의 Sigstore 서명을 검증했다. RC32 신원으로는 거부됨을 확인했고 격리 RC32 설치의 공개 업데이트 조회도 RC33을 제안했다.
+- 실제 장비는 변경하지 않았다. 기존 설치는 `ala update --prerelease` → 버전 `0.1.0rc33` 확인 → 간편 설정 → GNOME 로그아웃·로그인 한 번으로 새 출력별 대기 서비스와 확장을 준비한다. 초기 안내 선택·사이트 유무와 무관하며 기존 사이트를 보존한다. 실제 Rocky의 두 모니터·재부팅 수용은 별도로 확인한다.
+
 ## 2026-11-10 RC33 각 출력의 상시 대기 안내 수정
 
 - 사용자가 간편 설정·재부팅 후 다른 모니터에 Chrome이 표시되지 않는다고 보고했다. RC32는 초기 안내 요청·미설정 장비에 제한된 임시 창 하나였으며, 사이트가 하나라도 있으면 초기 안내 준비를 제외하고 초기 준비 fence가 일반 로그인 시작을 보류하는 경계를 확인했다. 이는 코드 분석이며 실제 장비의 실패 원인을 원격 진단한 결과는 아니다.
