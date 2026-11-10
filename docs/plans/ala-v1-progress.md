@@ -1,5 +1,12 @@
 # ala 공개판 진행 기록
 
+## 2026-11-10 RC35 서명 배포 완료
+
+- [PR #29](https://github.com/ubion-dev/project-ai-learning-analytics-instance-setup/pull/29)를 두 최종 CI 통과 후 main의 `39fc105`로 병합하고 새 불변 태그 `v0.1.0-rc.35`를 게시했다. [서명 릴리스 실행](https://github.com/ubion-dev/project-ai-learning-analytics-instance-setup/actions/runs/42743323694)과 [RC35 시험판](https://github.com/ubion-dev/project-ai-learning-analytics-instance-setup/releases/tag/v0.1.0-rc.35)의 게시 성공을 확인했다.
+- 서명 릴리스에서도 회귀 1,981개·하위 검사 56개·샌드박스 Linux Chrome 7개를 통과했다. 두 최종 PR/push CI에서 각각 회귀 1,981개·하위 검사 56개·샌드박스 Linux Chrome 7개를 통과했다. 초기 로컬 전체 실행의 1,979개·하위 검사 56개 통과와 접힌 상세 즉시 생성 가정의 식별 검사 두 건 실패를 구분한다. 해당 가정을 고친 뒤 식별·화면 흐름 48개 및 최종 전체 CI를 통과했다. 이전 커밋의 중복 CI는 취소했다.
+- 로컬과 Linux CI 설치 묶음의 SHA-256은 `c5ca9e20e0946b7932d0644e1dd1fb933ab51b9f18e17cd7ca66543ffceedf66`으로 동일하다. 익명 공개 주소에서 파일 3개를 내려받아 동일 바이트·전체 manifest·격리 진입점·정확한 태그 신원의 Sigstore 서명을 검증했고 이전 태그 신원은 거부됐다. 격리된 RC34 설치의 공개 업데이트 조회도 RC35를 제안했다.
+- Rocky에서는 `ala update --prerelease` → `ala --version`(`0.1.0rc35`) → 실행 중인 ala 종료 후 재실행으로 적용한다. 이번 UI 변경 때문에 GNOME 재로그인·재부팅은 필요하지 않다. 실제 장비·Chrome·사이트 구성은 변경하지 않았으며 실제 Rocky/SSH/Ghostty 체감과 패널 수용은 미수행이다.
+
 ## 2026-11-10 RC35 모니터 편집 지연 개선
 
 - 사용자는 RC34에서 조회 약 0.2초지만 배치·해상도 창 진입과 모니터 선택이 느리다고 보고했다. 외부 RPC를 합성 응답으로 대체한 로컬 전체 앱에서도 지연을 재현했고, 스타일 재계산·그리기와 선택 목록 재생성을 확인했다. Ghostty 자체의 원인이나 실제 Rocky 반응 시간을 확정하지 않는다.
