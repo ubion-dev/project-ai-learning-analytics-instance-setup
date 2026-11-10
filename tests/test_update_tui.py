@@ -87,7 +87,7 @@ def test_update_menu_requires_explicit_channel_and_start_then_tracks_completion(
             assert not isinstance(app.screen, UpdateScreen)
             assert service.update['state'] == 'running'
             service.update.update(state='completed', installed_version='99.0.0', phase='complete', exit_code=0)
-            await app.poll_update()
+            await app.poll_update(latest=True)
             banner = str(app.query_one('#update-notice', Static).render())
             assert '설치 완료' in banner and '99.0.0' in banner and '재실행 필요' in banner
             assert __version__ in banner

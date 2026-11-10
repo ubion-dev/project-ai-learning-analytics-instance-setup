@@ -120,3 +120,19 @@ class LayoutDraft:
             'below': (anchor['x'], anchor['y'] + anchor['height']),
         }[relation]
         self.drop(source_id, x, y, snap=0)
+
+    def reset_defaults(self):
+        """Build an atomic default draft, preserving identities and site config."""
+        candidate = deepcopy(self)
+        for output in candidate.request['outputs']:
+            modes = candidate.modes(output['id'])
+            mode = next((mode for mode in modes if mode['preferred']), candidate.mode(output['id']))
+            if 1 not in mode['supported_scales']:
+                raise ValueError('기본 해상도에서 100% 배율을 지원하지 않는 출력이 있습니다. 각 모니터에서 지원값을 선택하세요.')
+            output.update(mode_id=mode['id'], scale=1, x=0, y=0)
+        position = 0
+        for output in sorted(candidate.rects(), key=lambda item: item['id']):
+            candidate.output(output['id']).update(x=position, y=0)
+            position += output['width']
+        candidate.validate()
+        self.request = candidate.request

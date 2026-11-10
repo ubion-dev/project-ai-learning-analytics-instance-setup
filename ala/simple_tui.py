@@ -202,6 +202,8 @@ class SimpleApp(App[None]):
     Button.-primary { background: #b5e9d9; color: #10251d; border: tall #b5e9d9; text-style: bold; }
     Button:focus { border: round #f3e8ff; }
     Button:disabled { background: #292831; border: tall #292831; color: #aaa4b4; }
+    MonitorControls #monitor-remote Button { height: 1; min-height: 1; padding: 0; border: none; }
+    MonitorControls #monitor-remote Button:focus { background: #514661; color: #f3e8ff; text-style: bold; }
     #setup-start { width: 24; }
     #chrome-open { width: 16; height: 3; margin-left: 1; padding: 0 1; }
     #screens-actions { height: 3; }
@@ -361,8 +363,8 @@ class SimpleApp(App[None]):
 
     def open_initial_monitor_editor(self):
         if self.is_running:
-            from .monitor_tui import MonitorEditor
-            self.push_screen(MonitorEditor(self.query_one('#screens', ScreenPanel)))
+            self.run_worker(self.query_one('#screens', ScreenPanel).open_monitor_controls(),
+                            group='monitor-open', exit_on_error=False)
 
     def on_resize(self, event: events.Resize):
         if self.is_mounted:
