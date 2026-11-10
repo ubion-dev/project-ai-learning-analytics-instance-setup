@@ -364,7 +364,8 @@ def test_keyboard_position_flows_through_existing_review_apply_and_confirmation(
             await pilot.click('#monitor-review'); await pilot.pause()
             assert isinstance(app.screen, LayoutReview)
             await pilot.click('#layout-review-apply'); await pilot.pause()
-            assert service.calls[-1] == ('monitor-layout-submit', {'layout': editor.draft.request, 'persistent': True})
+            assert [payload for action, payload in service.calls if action == 'monitor-layout-submit'] == [
+                {'layout': editor.draft.request, 'persistent': True}]
             await pilot.click('#monitor-keep'); await pilot.pause()
             assert ('monitor-layout-confirm', {'operation_id': 'a' * 32}) in service.calls
     asyncio.run(scenario())
