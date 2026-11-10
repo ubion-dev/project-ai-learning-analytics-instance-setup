@@ -4,7 +4,7 @@ from copy import deepcopy
 
 import pytest
 from rich.cells import cell_len
-from textual.widgets import Button, Static
+from textual.widgets import Button, Collapsible, Static
 
 from ala.screen_map import ScreenMap
 from ala.screens_tui import ScreenPanel, TargetEditor
@@ -87,6 +87,9 @@ def test_failed_did_and_unknown_identify_have_independent_results_and_visible_ne
             assert isinstance(app.screen, TargetEditor)
             assert 'Chrome 실행 실패' in str(app.screen.query_one('#target-result', Static).render())
             assert '모니터 식별' not in str(app.screen.query_one('#target-result', Static).render())
+            assert not app.screen.query('#screens-detail')
+            app.screen.query_one('#target-details', Collapsible).collapsed = False
+            await pilot.pause()
             assert REASON not in app.screen.query_one('#screens-detail').text
             assert panel.session_notice == UNKNOWN
             await pilot.press('escape')
