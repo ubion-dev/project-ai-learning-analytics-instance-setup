@@ -1,5 +1,13 @@
 # ala 공개판 진행 기록
 
+## 2026-11-10 RC36 텍스트 CLI 서명 배포 완료
+
+- [PR #31](https://github.com/ubion-dev/project-ai-learning-analytics-instance-setup/pull/31)을 두 최종 CI 통과 후 main의 `ca95ac6`로 병합하고 새 불변 태그 `v0.1.0-rc.36`을 게시했다. [서명 릴리스 실행](https://github.com/ubion-dev/project-ai-learning-analytics-instance-setup/actions/runs/42764487670)과 [RC36 시험판](https://github.com/ubion-dev/project-ai-learning-analytics-instance-setup/releases/tag/v0.1.0-rc.36)의 게시 성공을 확인했다.
+- 두 최종 CI에서 각각 회귀 2,008개·하위 검사 56개·샌드박스 Linux Chrome 7개를 통과했다. 초기 로컬 전체 2,007개·하위 검사 56개와 이후 PTY 추가/마지막 입력 처리 변경의 관련 86개 결과를 구분한다. 최종 태그의 서명 워크플로에서도 회귀 2,008개·하위 검사 56개·Linux Chrome 7개를 통과했다.
+- 로컬·Linux CI 설치 묶음의 SHA-256은 `392188ba982643274c62c18e85c3de0c84a9c82a2ff934d8915853286378fff7`으로 동일하다. 배포 묶음의 manifest 100개·새 CLI 모듈·사용 가이드·격리 버전 진입점을 확인했다. 게시 파일 3개를 일반 공개 주소에서 인증 없이 내려받아 동일 바이트·SHA-256·전체 manifest·격리 진입점·정확한 태그 신원의 Sigstore 서명을 검증했다. RC35 태그 신원은 거부됐고 격리 RC35 설치의 업데이트 조회가 RC36을 제안했다.
+- `ala update --prerelease` → `ala --version`(`0.1.0rc36`) → 실행 중 ala 종료·재실행으로 텍스트 메뉴를 사용한다. 사이트·Chrome은 `ala screen`, 모니터는 `ala display edit`, 기본 구성은 `ala config edit`다. 전체 화면은 명시 `ala tui`에서 유지한다. 이 변경만을 위한 GNOME 재로그인·재부팅·간편 설정 재실행은 필요 없다.
+- 실제 Rocky/HIWARE/PuTTY 입력·출력 지연, 장비 화면과 GNOME 수용은 미수행이며 실제 장비·사이트·실행 중 Chrome은 변경하지 않았다. 새 기본 메뉴에서 유휴 RPC·자동 네트워크 조회·전체 화면/마우스 제어 부재는 PTY·합성 API로 검증한 결과다.
+
 ## 2026-11-10 RC36 기본 텍스트 CLI 전환
 
 - 사용자가 HIWARE 제공 PuTTY 환경에서 전체적인 지연을 줄이고 드래그앤드롭 대신 CLI로 운영하기를 요청했다. 기관의 실제 장비·접속 경로는 조작하지 않았다. Python 엔진 전체 재작성 대신 기본 UI의 화면 갱신·이벤트·자동 조회를 제거한다.
