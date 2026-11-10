@@ -1,5 +1,12 @@
 # ala 공개판 진행 기록
 
+## 2026-11-10 RC34 서명 배포 완료
+
+- [PR #27](https://github.com/ubion-dev/project-ai-learning-analytics-instance-setup/pull/27)의 최종 두 CI 경로 통과 후 main의 `c9ada6a`로 병합하고 새 불변 태그 `v0.1.0-rc.34`를 게시했다. [서명 릴리스 실행](https://github.com/ubion-dev/project-ai-learning-analytics-instance-setup/actions/runs/42738516563)이 성공해 [RC34 시험판](https://github.com/ubion-dev/project-ai-learning-analytics-instance-setup/releases/tag/v0.1.0-rc.34)에 설치 묶음·SHA-256·Sigstore 번들을 게시했다. 이전 배포 파일은 변경하지 않았다.
+- 최종 두 CI 경로와 서명 릴리스에서 각각 회귀 1,979개·하위 검사 56개·샌드박스 Linux Chrome 7개를 통과했다. 중간 커밋의 동시 Chrome 검사에서 관측한 이전 문서 이벤트 실패는 현재 주 문서 재확인과 시작 문서 대기 처리로 보완했으며, 새 안내의 실제 문서·로드 증거는 계속 요구한다. 배포 후 이를 위해 기존 고정 Chrome을 자동 재시작하거나 코드를 전환하지 않는다.
+- 로컬과 Linux CI 묶음의 바이트가 일치했다. 게시 파일 3개를 일반 공개 URL에서 인증 없이 다시 내려받아 동일 바이트·SHA-256·전체 manifest·격리 버전 진입점·RC34 workflow 신원/태그/push 조건의 Sigstore 서명을 검증했다. RC33 신원은 거부됐으며 격리 RC33 설치의 공개 업데이트 조회도 RC34를 제안했다.
+- 두 DID의 합성 조회에서 사용자 왕복 5→1, 소유권 검사 4→2, GNOME 출력 3→1을 확인했다. RPC 시작 지연 80ms 모델의 중앙값 0.419→0.084초는 실제 Rocky 개선율이 아니다. 실제 장비는 변경하거나 측정하지 않았다. `ala update --prerelease` 후 버전 `0.1.0rc34`를 확인하고 기존 ala 화면을 종료·재실행하면 조회 성능 변경이 적용되며 화면 관리 상단에서 실제 조회 시간을 확인한다.
+
 ## 2026-11-10 RC34 화면 관리 조회 성능 개선
 
 - 사용자가 화면 관리·모니터 조회의 지연을 지목했다. 실행 중 DID 두 개의 기존 조회는 사용자 프로세스를 최대 5번 실행하고 Chrome 상태·소유권을 4번, GNOME 출력을 3번 읽는 경로였다. 실제 장비에는 접속하지 않았으며 코드·합성 지연 모델로 분석했다.
