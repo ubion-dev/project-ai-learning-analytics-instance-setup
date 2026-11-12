@@ -1,5 +1,13 @@
 # ala 공개판 진행 기록
 
+## 2026-11-12 RC41 비례 배치도·리모컨 서명 배포 완료
+
+- [PR #41](https://github.com/ubion-dev/project-ai-learning-analytics-instance-setup/pull/41)을 두 CI 통과 후 main의 `7530457`로 병합하고 불변 태그 `v0.1.0-rc.41`을 게시했다. [서명 릴리스 실행](https://github.com/ubion-dev/project-ai-learning-analytics-instance-setup/actions/runs/43132130095)과 [RC41 시험판](https://github.com/ubion-dev/project-ai-learning-analytics-instance-setup/releases/tag/v0.1.0-rc.41)의 게시 성공을 확인했다.
+- 두 PR/push CI·병합 후 main CI·태그 서명 워크플로에서 각각 회귀 1,997개·하위 검사 56개·일반 사용자 Linux Chrome 7개를 통과했다. 로컬 최종 관련 159개와 비례 배치의 CJK 셀 너비 검사 두 건을 통과했다. 합성 80×24/120×52 렌더링에서 상대 크기·작은 세로 오프셋·고정폭 리모컨·선택/기준 표시와 스크롤 동선을 확인했다.
+- 로컬·Linux CI·공개 다운로드 설치 묶음 SHA-256은 `ee0428319e3791b51a61a0b84a2ba03d10adffe1b1477ea25170bc6d83302af1`로 동일하다. 공개 URL에서 인증 없이 세 파일을 내려받아 동일 바이트·전체 manifest 100개·격리 진입점·정확한 태그 신원의 Sigstore 서명을 검증했다. RC40 신원은 거부됐고 격리 RC40 설치의 업데이트 조회가 RC41을 제안했다.
+- `ala update --prerelease` → `ala --version`(`0.1.0rc41`) → 실행 중 ala 종료·재실행으로 적용한다. 배치도는 논리 화면의 공통 축척으로 위치·크기를 표시하고 읽기 어려운 정보는 보조 목록으로 제공한다. 사용자가 확정한 고정폭 십자 리모컨·방향키·기준 출력에 붙이기를 제공하며 리모컨 포커스 안에서만 방향키로 초안을 편집한다.
+- `grill-with-docs`의 인터뷰와 용어 정리 결과는 [개선 설계](../../.scratch/monitor-ui-improvement/spec.md)와 용어집에 기록했다. 실제 장비·사이트·화면 코드 선택은 변경하지 않았으며 실제 Rocky/HIWARE 표시와 체감 속도는 후속 수용에서 확인한다. 이번 UI 변경은 CLI 재실행으로 사용한다.
+
 ## 2026-11-12 RC41 배치도·리모컨 개선
 
 - 사용자가 해상도가 작은 화면의 상대 크기와 작은 높이 차이를 배치도에 반영하도록 요청했다. 좌표 순위별 고정 카드 대신 논리 영역의 공통 축척·터미널 셀 비율·공유 경계 반올림을 적용했다. 도형이 작아 정보가 잘리면 보조 목록을 제공하며 위치를 읽기 어렵거나 겹치면 좌표 목록을 사용한다. 반복 표시되던 배치도 도움말 툴팁을 정리했다.
