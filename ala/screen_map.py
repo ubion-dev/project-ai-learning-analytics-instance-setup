@@ -25,11 +25,6 @@ class OutputBox:
     region: Region
 
 
-CARD_WIDTH = 26
-CARD_HEIGHT = 7
-CARD_GAP = 3
-
-
 def _outputs(report):
     """Use geometry for reading order; labels keep the shared ID-based numbers."""
     logical = report.get('logical_outputs') or []
@@ -142,60 +137,86 @@ def _card_status(report, output, targets):
             and health.get('target_matches_config') and matches else '실행 중 · 사이트 확인 필요')
 
 
-def _card(report, output, selected):
-    name = f"#{output['display_number']} {output['id']}"
-    resolution = output_mode_text(report, output)
-    if cell_len(resolution) > 22 and resolution.endswith('배율 미상'):
-        resolution = resolution.removesuffix('배율 미상') + '배율?'
+def _card_values(report, output, selected):
     targets = _targets_for_output(report, output['id'])
     labels = [('> ' if target.get('id') == selected else '') + str(target.get('id', '')) for target in targets]
-    values = (name, resolution, ', '.join(labels) or '배정된 DID 없음', _card_status(report, output, targets))
-    return ['┌' + '─' * 24 + '┐', *['│ ' + _fit(value, 22) + ' │' for value in values],
-            '└' + '─' * 11 + '┬' + '─' * 12 + '┘', ' ' * 11 + '─┴─' + ' ' * 12]
+    return (f"#{output['display_number']} {output['id']}", output_mode_text(report, output),
+            ', '.join(labels) or '배정된 DID 없음', _card_status(report, output, targets))
 
 
-def _topology(report, width, height=7, *, selected=None):
-    """Read-only fixed cards positioned by observed coordinate ranks.
+def _coordinate_list(report, outputs, geometries, width):
+    rows, boxes = ['좌표 목록 · 배치 축소 표시 불가'], []
+    for output, geometry in zip(outputs, geometries):
+        geometry = geometry if isinstance(geometry, dict) else {}
+        targets = _targets_for_output(report, output['id'])
+        labels = ', '.join(t['id'] for t in targets) or '배정 없음'
+        y = len(rows)
+        rows += [_fit(f"#{output['display_number']} {output['id']} · ({geometry.get('x', '?')}, {geometry.get('y', '?')})", width),
+                 _fit(labels + ' · ' + _card_status(report, output, targets), width)]
+        boxes.append(OutputBox(output['id'], safe_text(output['id']), geometry, Region(0, y, width, 2)))
+    return '\n'.join(rows), boxes
 
-    Narrow views use an explicitly labelled coordinate list rather than wrap
-    horizontally arranged outputs into a false vertical arrangement.
+
+def _topology(report, width, height=12, *, selected=None):
+    """Project logical pixel rectangles with one scale and terminal cell aspect.
+
+    Shared projected edges preserve adjacency. Unreadable or overlapping shapes
+    use an explicit list instead of enlarging or moving individual outputs.
     """
-    try: outputs = _outputs(report)
+    try:
+        outputs = _outputs(report)
     except (ValueError, TypeError, AttributeError):
         return '출력 배치를 확인하지 못했습니다. 다시 조회하세요.', []
-    if not outputs: return _empty_text(report), []
-    width = max(CARD_WIDTH, width)
+    if not outputs:
+        return _empty_text(report), []
+    width = max(1, width)
     geometries = [value.get('geometry', value) for value in outputs]
-    valid = all(isinstance(g, dict) and type(g.get('x')) is int and type(g.get('y')) is int for g in geometries)
-    xs = sorted({g['x'] for g in geometries}) if valid else []
-    ys = sorted({g['y'] for g in geometries}) if valid else []
-    unique = valid and len({(g['x'], g['y']) for g in geometries}) == len(outputs)
-    required_width = len(xs) * CARD_WIDTH + max(0, len(xs) - 1) * CARD_GAP
-    if not unique or required_width > width:
-        rows, boxes = ['좌표 목록 · 가로 공간 부족 또는 배치 확인 필요'], []
-        for output, geometry in zip(outputs, geometries):
-            geometry = geometry if isinstance(geometry, dict) else {}
-            targets = _targets_for_output(report, output['id'])
-            labels = ', '.join(t['id'] for t in targets) or '배정 없음'
-            y = len(rows)
-            rows += [_fit(f"#{output['display_number']} {output['id']} · ({geometry.get('x', '?')}, {geometry.get('y', '?')})", width),
-                     _fit(labels + ' · ' + _card_status(report, output, targets), width)]
-            boxes.append(OutputBox(output['id'], safe_text(output['id']), geometry, Region(0, y, width, 2)))
-        return '\n'.join(rows), boxes
-    left = max(0, (width - required_width) // 2)
-    cells, boxes = {}, []
+    valid = all(isinstance(g, dict) and all(type(g.get(key)) is int for key in ('x','y','width','height'))
+                and g['width'] > 0 and g['height'] > 0 for g in geometries)
+    if not valid:
+        return _coordinate_list(report, outputs, geometries, width)
+    origin_x = min(g['x'] for g in geometries)
+    origin_y = min(g['y'] for g in geometries)
+    span_x = max(g['x'] + g['width'] for g in geometries) - origin_x
+    span_y = max(g['y'] + g['height'] for g in geometries) - origin_y
+    factor = min(width / span_x, max(3, height) * 2 / span_y)
+    projected_width = round(span_x * factor)
+    left = max(0, (width - projected_width) // 2)
+    boxes = []
     for output, geometry in zip(outputs, geometries):
-        column, row = xs.index(geometry['x']), ys.index(geometry['y'])
-        cells[row, column] = _card(report, output, selected)
-        boxes.append(OutputBox(output['id'], safe_text(output['id']), geometry,
-            Region(left + column * (CARD_WIDTH + CARD_GAP), row * (CARD_HEIGHT + 1), CARD_WIDTH, CARD_HEIGHT)))
-    rows = []
-    for row in range(len(ys)):
-        for line in range(CARD_HEIGHT):
-            rows.append(' ' * left + (' ' * CARD_GAP).join(
-                cells.get((row, column), [' ' * CARD_WIDTH] * CARD_HEIGHT)[line] for column in range(len(xs))))
-        if row + 1 < len(ys): rows.append(' ' * (left + required_width))
-    return '\n'.join(rows), boxes
+        x = round((geometry['x'] - origin_x) * factor)
+        y = round((geometry['y'] - origin_y) * factor / 2)
+        right = round((geometry['x'] + geometry['width'] - origin_x) * factor)
+        bottom = round((geometry['y'] + geometry['height'] - origin_y) * factor / 2)
+        region = Region(left + x, y, right - x, bottom - y)
+        if region.width < 8 or region.height < 3 or any(region.overlaps(box.region) for box in boxes):
+            return _coordinate_list(report, outputs, geometries, width)
+        boxes.append(OutputBox(output['id'], safe_text(output['id']), geometry, region))
+    rows = [[' '] * (left + projected_width) for _ in range(max(box.region.bottom for box in boxes))]
+    truncated = []
+    for output, box in zip(outputs, boxes):
+        region = box.region
+        values = _card_values(report, output, selected)
+        lines = ['┌' + '─' * (region.width - 2) + '┐']
+        for index in range(region.height - 2):
+            value = values[index] if index < len(values) else ''
+            lines.append('│' + _fit(value, region.width - 2) + '│')
+        lines.append('└' + '─' * (region.width - 2) + '┘')
+        if region.height - 2 < len(values) or any(cell_len(v) > region.width - 2 for v in values):
+            truncated.append(values)
+        for row, line in enumerate(lines):
+            # CJK text occupies two terminal cells while using one code point.
+            cells = []
+            for char in line:
+                cells.append(char)
+                cells.extend([''] * max(0, cell_len(char) - 1))
+            rows[region.y + row][region.x:region.right] = cells
+    drawing = [''.join(row) for row in rows]
+    if truncated:
+        drawing.append('모니터 정보')
+        for values in truncated:
+            drawing.extend((values[0] + ' · ' + values[1], values[2] + ' · ' + values[3]))
+    return '\n'.join(drawing), boxes
 
 
 def topology_text(report, width=100, height=7):

@@ -589,7 +589,7 @@ class ScreenPanel(Vertical):
                     output.update(width=mode['width'], height=mode['height'])
         self.query_one('#screens-layout-preview', Static).update('배치 초안 · 아직 적용하지 않았습니다. 변경 검토 후 적용하세요.' if map_report is not self.report else '')
         map_view.update_report(map_report, self.selected)
-        map_view.tooltip = '설정을 펼친 동안 클릭·Enter는 편집할 모니터를 선택합니다. 사이트는 이 모니터의 사이트 버튼을 사용하세요.'
+        map_view.tooltip = None
         assigned = {target['id'] for output in self.report.get('logical_outputs') or []
                     for target in self.targets_on_output(output['id'])}
         unassigned = [target for target in targets if target['id'] not in assigned]

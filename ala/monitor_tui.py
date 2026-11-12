@@ -3,6 +3,7 @@ from copy import deepcopy
 
 from rich.text import Text
 from textual import on
+from textual.binding import Binding
 from textual.message_pump import MessagePump
 from textual.containers import Grid, Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen
@@ -49,6 +50,17 @@ class LayoutReview(ModalScreen[bool]):
         event.stop(); self.dismiss(event.button.id == 'layout-review-apply')
 
 
+class MonitorRemote(Grid, can_focus=True):
+    """Arrow keys act only while focus is inside this remote."""
+    BINDINGS = [Binding(key, f"place_direction('{relation}')", show=False)
+                for key, relation in [('left','left'), ('right','right'), ('up','above'), ('down','below')]]
+
+    def action_place_direction(self, relation):
+        button = self.query_one('#monitor-' + relation, Button)
+        if not button.disabled:
+            button.press()
+
+
 class MonitorSettings(MessagePump):
     inline = False
     BINDINGS = [('escape', 'close_editor', '닫기')]
@@ -77,6 +89,7 @@ class MonitorSettings(MessagePump):
         self.operation_state = None; self.polling = False; self.persistent = True
         self.trial_supported = False
         self._select_options = {}
+        self._remote_context = None
 
     def compose(self):
         with Vertical(id='monitor-editor'):
@@ -92,16 +105,18 @@ class MonitorSettings(MessagePump):
                     yield Label('기준 모니터')
                     yield Select([], prompt='다른 모니터 선택', id='monitor-anchor')
                 if self.inline:
-                    with Grid(id='monitor-remote'):
-                        yield Static('')
-                        yield Button('↑ 위', id='monitor-above', disabled=True, compact=True)
-                        yield Static('')
-                        yield Button('← 왼쪽', id='monitor-left', disabled=True, compact=True)
-                        yield Static('기준 대비', id='monitor-remote-center')
-                        yield Button('오른쪽 →', id='monitor-right', disabled=True, compact=True)
-                        yield Static('')
-                        yield Button('아래 ↓', id='monitor-below', disabled=True, compact=True)
-                        yield Static('')
+                    with Horizontal(id='monitor-position-controls'):
+                        with MonitorRemote(id='monitor-remote'):
+                            yield Static('')
+                            yield Button('↑ 위', id='monitor-above', disabled=True)
+                            yield Static('')
+                            yield Button('← 왼쪽', id='monitor-left', disabled=True)
+                            yield Static('선택', id='monitor-remote-center')
+                            yield Button('오른쪽 →', id='monitor-right', disabled=True)
+                            yield Static('')
+                            yield Button('아래 ↓', id='monitor-below', disabled=True)
+                            yield Static('')
+                        yield Static('모니터 선택 대기', id='monitor-remote-context', markup=False)
                 else:
                     with Horizontal(id='monitor-directions'):
                         for relation, label in [('left', '← 왼쪽'), ('right', '오른쪽 →'), ('above', '↑ 위'), ('below', '아래 ↓')]:
@@ -219,7 +234,17 @@ class MonitorSettings(MessagePump):
         self.query_one('#monitor-keep', Button).disabled = not waiting or self.busy
         self.query_one('#monitor-revert', Button).disabled = self.busy
         self.query_one('#monitor-revert', Button).label = '복구 재시도' if self.operation_state == 'recovery_required' else '원래 배치로 복원'
-        if self.inline: self.panel.render_report()
+        if self.inline:
+            selected = self.draft.selected if self.draft else None
+            ids = sorted(o['id'] for o in self.draft.request['outputs']) if self.draft else []
+            selection = f"#{ids.index(selected) + 1} {selected}" if selected in ids else '선택 대기'
+            reference = f"#{ids.index(anchor) + 1} {anchor}" if anchor in ids else '다른 모니터 선택'
+            context = f"선택 {selection}\n기준 {reference}\n기준의 상하좌우에 붙이기\n리모컨에 포커스 후 방향키"
+            if self._remote_context != context:
+                self.query_one('#monitor-remote-context', Static).update(safe_text(context))
+                self.query_one('#monitor-remote-center', Static).update('#' + str(ids.index(selected) + 1) if selected in ids else '선택')
+                self._remote_context = context
+            self.panel.render_report()
 
     @on(Select.Changed)
     def selected(self, event):
@@ -370,9 +395,11 @@ class MonitorControls(MonitorSettings, Vertical):
     MonitorControls { height: auto; }
     MonitorControls #monitor-editor { width: 100%; height: auto; padding: 0 1; }
     MonitorControls #monitor-settings { height: auto; }
-    MonitorControls #monitor-remote { height: 3; layout: grid; grid-size: 3 3; grid-rows: 1 1 1; }
-    MonitorControls #monitor-remote Button { width: 1fr; height: 1; min-height: 1; min-width: 10; padding: 0; border: none; }
-    MonitorControls #monitor-remote-center { content-align: center middle; height: 1; }
+    MonitorControls #monitor-position-controls { height: 9; }
+    MonitorControls #monitor-remote { width: 38; height: 9; layout: grid; grid-size: 3 3; grid-rows: 3 3 3; }
+    MonitorControls #monitor-remote-context { width: 1fr; height: auto; padding: 1 1; }
+    MonitorControls #monitor-remote Button { width: 1fr; height: 3; min-height: 3; min-width: 8; padding: 0; }
+    MonitorControls #monitor-remote-center { content-align: center middle; height: 3; }
     MonitorControls #monitor-reset { width: 100%; height: 3; }
     '''
 

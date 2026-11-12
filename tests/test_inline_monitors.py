@@ -127,3 +127,29 @@ def test_open_is_single_flight_and_hiding_preserves_unsaved_monitor_draft():
             view.focus(); await pilot.press('right','enter'); await pilot.pause()
             assert len(app.screen_stack) == 1
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize('size', [(80,24),(120,40)])
+def test_compact_remote_keyboard_is_local_and_select_fields_keep_arrow_navigation(size):
+    from ala.monitor_tui import MonitorRemote
+    async def scenario():
+        service=Service();app=SimpleApp(service=service,initial_section='screens')
+        async with app.run_test(size=size) as pilot:
+            await pilot.pause();await pilot.click('#screens-monitor-layout');await pilot.pause()
+            controls=app.query_one(MonitorControls);remote=app.query_one(MonitorRemote)
+            assert remote.region.width == 38 and remote.region.height == 9
+            for direction in ('left','right','above','below'):
+                button=controls.query_one('#monitor-'+direction,Button)
+                assert button.region.width <= 13 and button.region.height == 3
+            context=str(controls.query_one('#monitor-remote-context',Static).render())
+            assert '#1 DP-1' in context and '#2 DP-2' in context
+            remote.focus();await pilot.press('down');await pilot.pause()
+            assert controls.draft.output()['y']==1080
+            before=deepcopy(controls.draft.request)
+            controls.query_one('#monitor-port',Select).focus();await pilot.press('left');await pilot.pause()
+            assert controls.draft.request==before
+            controls.query_one('#monitor-anchor',Select).value=Select.NULL;await pilot.pause()
+            remote.focus();await pilot.press('up','right');await pilot.pause()
+            assert controls.draft.request==before
+            assert service.monitors.calls==[('monitor-layout-status',None),('monitor-layout-state',None)]
+    asyncio.run(scenario())

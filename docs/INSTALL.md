@@ -139,7 +139,7 @@ Rocky Linux 10 x86_64, GNOME/GDM, 기존 일반 sudo 사용자를 지원합니�
 Textual과 고정 의존성은 배포 묶음의 wheel로 전용 venv에 설치하며 시스템 Python 패키지를 덮어쓰지 않습니다.
 환경 설정 단계에는 Google·Docker·NVIDIA 등 필요한 패키지 저장소 접속이 필요합니다.
 
-`ala-0.1.0rc40.tar.gz`와 `.tar.gz.sha256`은 같은 릴리스에서 받습니다.
+`ala-0.1.0rc41.tar.gz`와 `.tar.gz.sha256`은 같은 릴리스에서 받습니다.
 수동 설치는 GitHub HTTPS 경로에서 받은 파일을 SHA-256과 설치 manifest로 확인합니다.
 자동 운영 준비와 자동 CLI 갱신은 Sigstore 서명도 검증합니다. [업데이트 절차](UPDATES.md)
 검사가 실패하면 설치하지 않습니다. GitHub의 Source code 압축은 wheel과 manifest가 없는 개발 소스이므로 설치용 배포 파일과 다릅니다.
@@ -152,8 +152,8 @@ Rocky가 GitHub에 직접 접속하지 못하는 경우 사용합니다. Mac 터
 ```bash
 (
   set -e
-  VERSION='0.1.0rc40'
-  RELEASE='v0.1.0-rc.40'
+  VERSION='0.1.0rc41'
+  RELEASE='v0.1.0-rc.41'
   BASE_URL="https://github.com/ubion-dev/project-ai-learning-analytics-instance-setup/releases/download/${RELEASE}"
   mkdir -p "$HOME/Downloads/ala-$VERSION"
   cd "$HOME/Downloads/ala-$VERSION"
@@ -173,9 +173,9 @@ ssh user@서버IP
 (
   set -e
   cd ~
-  sha256sum -c ala-0.1.0rc40.tar.gz.sha256
-  tar -xzf ala-0.1.0rc40.tar.gz
-  cd ala-0.1.0rc40
+  sha256sum -c ala-0.1.0rc41.tar.gz.sha256
+  tar -xzf ala-0.1.0rc41.tar.gz
+  cd ala-0.1.0rc41
   sudo bash ./install.sh
   ala --version
 )
@@ -220,10 +220,10 @@ python3 -m venv .venv
 .venv/bin/python scripts/build-release.py
 ```
 
-`dist/ala-0.1.0rc40.tar.gz`와 `.sha256`을 생성합니다. 기존 wheel이 있으면 `--wheelhouse /경로/wheels`를 지정할 수 있으며 해시 검증은 유지됩니다.
+`dist/ala-0.1.0rc41.tar.gz`와 `.sha256`을 생성합니다. 기존 wheel이 있으면 `--wheelhouse /경로/wheels`를 지정할 수 있으며 해시 검증은 유지됩니다.
 빌더는 허용 목록의 코드·운영 문서·고정 wheel·파일별 manifest만 포함합니다. Git 이력, 테스트, 개발 가상환경과 작업 기록은 포함하지 않습니다.
 게시된 파일을 같은 버전으로 다시 만들거나 덮어쓰지 않습니다.
-후보 태그 `v0.1.0-rc.40`와 Python 버전 `0.1.0rc40`의 표기 차이에 주의하세요.
+후보 태그 `v0.1.0-rc.41`와 Python 버전 `0.1.0rc41`의 표기 차이에 주의하세요.
 
 릴리스는 자동 테스트와 실제 Rocky 수용을 구분합니다. 현재 후보의 실제 장비 설치·GNOME·GPU·재부팅은 미검증입니다.
 
