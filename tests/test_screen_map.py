@@ -101,7 +101,7 @@ def test_missing_resolution_and_scale_are_explicitly_unknown():
 
 
 @pytest.mark.parametrize('size', [(80, 24), (120, 36)])
-def test_scaled_physical_mode_keeps_fixed_cards_and_click_regions(size):
+def test_scaled_mode_keeps_proportional_shapes_and_click_regions(size):
     async def scenario():
         observation = report()
         observation['logical_outputs'][1].update(x=-2560, width=2560, height=1440, scale=1.5)
@@ -112,7 +112,9 @@ def test_scaled_physical_mode_keeps_fixed_cards_and_click_regions(size):
             await pilot.pause()
             view = app.query_one(ScreenMap)
             assert '3840×2160 · 150%' in str(view.render())
-            assert all((region.width, region.height) == (26, 7) for region in view.output_regions.values())
+            regions = view.output_regions
+            assert regions['side'].width > regions['main'].width
+            assert regions['side'].height > regions['main'].height
             await pilot.click(offset=point(view, 'side'))
             await pilot.pause()
             assert app.activations == ['side'] and not app.moves
@@ -165,7 +167,7 @@ async def start_drag(pilot, view):
 
 
 @pytest.mark.parametrize('size', [(80, 24), (120, 36)])
-def test_fixed_monitor_shape_click_and_keyboard_activation_are_read_only(size):
+def test_equal_monitor_shapes_click_and_keyboard_activation_are_read_only(size):
     async def scenario():
         app = MapApp()
         before = deepcopy(app.observation)
@@ -173,7 +175,8 @@ def test_fixed_monitor_shape_click_and_keyboard_activation_are_read_only(size):
             await pilot.pause()
             view = app.query_one(ScreenMap)
             regions = view.output_regions
-            assert all((region.width, region.height) == (26, 7) for region in regions.values())
+            assert abs(regions['main'].width - regions['side'].width) <= 1
+            assert regions['main'].height == regions['side'].height
             assert regions['main'].y == regions['side'].y
             for output in ('main', 'side'):
                 await pilot.click(offset=point(view, output))
@@ -274,7 +277,9 @@ def test_observed_layout_controls_display_positions_and_keyboard_navigation(vert
 
 def test_narrow_layout_uses_coordinate_list_instead_of_false_wrapped_diagram():
     async def scenario():
-        app = MapApp()
+        observation = report()
+        observation['logical_outputs'][1].update(width=64, height=64)
+        app = MapApp(observation)
         async with app.run_test(size=(50, 24)) as pilot:
             await pilot.pause(); view = app.query_one(ScreenMap)
             assert '좌표 목록' in str(view.render()) and '(1920, 0)' in str(view.render())
@@ -282,3 +287,51 @@ def test_narrow_layout_uses_coordinate_list_instead_of_false_wrapped_diagram():
             view.focus(); await pilot.press('down', 'enter'); await pilot.pause()
             assert app.activations == ['side'] and not app.moves
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize('width', [80, 120])
+def test_smaller_offset_screen_preserves_proportions_and_vertical_overlap(width):
+    from ala.screen_map import _topology
+    observation = {'output_state': 'ok', 'targets': [], 'logical_outputs': [
+        {'id':'west','x':0,'y':164,'width':1280,'height':720,'confirmed':True},
+        {'id':'center','x':1280,'y':0,'width':1920,'height':1080,'confirmed':True},
+        {'id':'east','x':3200,'y':0,'width':1920,'height':1080,'confirmed':True}]}
+    before = deepcopy(observation)
+    drawing, boxes = _topology(observation, width)
+    regions = {box.output_id: box.region for box in boxes}
+    west, center, east = (regions[key] for key in ('west','center','east'))
+    assert '좌표 목록' not in drawing
+    assert west.width / center.width == pytest.approx(2/3, abs=.07)
+    assert west.height / center.height == pytest.approx(2/3, abs=.1)
+    assert center.size == east.size and center.y == east.y
+    assert 0 <= west.y - center.y <= 2
+    assert west.y < center.bottom and center.y < west.bottom
+    assert west.right == center.x and center.right == east.x
+    assert all(cell_len(line) == max(box.region.right for box in boxes)
+               for line in drawing.splitlines()[:max(box.region.bottom for box in boxes)])
+    assert observation == before
+
+
+def test_projection_uses_logical_dimensions_and_handles_rotated_negative_origin():
+    from ala.screen_map import _topology
+    observation={'output_state':'ok','targets':[], 'logical_outputs':[
+        {'id':'portrait','x':-1080,'y':-200,'width':1080,'height':1920,'scale':1,'transform':1},
+        {'id':'landscape','x':0,'y':0,'width':1920,'height':1080,'scale':2}]}
+    _, boxes = _topology(observation, 100)
+    a,b = [box.region for box in boxes]
+    assert a.x >= 0 and a.y == 0 and a.right == b.x
+    assert a.width < b.width and a.height > b.height
+
+
+@pytest.mark.parametrize('condition',['missing','overlap','tiny'])
+def test_unreadable_projection_uses_coordinate_list_without_moving_outputs(condition):
+    from ala.screen_map import _topology
+    observation=report()
+    if condition=='missing': observation['logical_outputs'][1].pop('width')
+    if condition=='overlap': observation['logical_outputs'][1]['x']=0
+    if condition=='tiny': observation['logical_outputs'][1].update(width=32,height=32)
+    before=deepcopy(observation)
+    drawing, boxes=_topology(observation,80)
+    assert '좌표 목록' in drawing
+    assert all(box.region.height==2 for box in boxes)
+    assert observation==before
