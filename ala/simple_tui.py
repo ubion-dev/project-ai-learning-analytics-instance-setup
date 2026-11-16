@@ -313,10 +313,10 @@ class SimpleApp(App[None]):
                     with Horizontal(id='setup-toolbar'):
                         with Vertical(id='setup-context'):
                             yield Static('현재 구성을 확인하고 있습니다.', id='config-summary', markup=False)
-                            option = Checkbox('Bash 자동 제안·구문 강조 설치', id='setup-bash-assist', disabled=True)
-                            option.tooltip = '이번 설정에서 일반 운영 계정에 설치합니다. 다음 대화형 SSH 로그인부터 적용됩니다.'
+                            option = Checkbox('Bash 자동 제안·구문 강조 설치', value=True, id='setup-bash-assist', disabled=True)
+                            option.tooltip = '기본 설치 항목입니다. 기존 사용자 설정은 보존하며 다음 대화형 SSH 로그인부터 적용됩니다.'
                             yield option
-                            initial = Checkbox('모니터별 안내 화면 준비', id='setup-initialize-displays', disabled=True)
+                            initial = Checkbox('초기 안내 DID 설정 생성', id='setup-initialize-displays', disabled=True)
                             initial.tooltip = '미설정 장비에서만 연결된 모든 논리 화면에 안내 DID를 준비합니다. 실행 전 변경 내용을 확인합니다.'
                             yield initial
                         with Horizontal(classes='actions', id='setup-actions'):
@@ -455,6 +455,12 @@ class SimpleApp(App[None]):
         if not eligible:
             initialization.value = False
         initialization.disabled = disabled or not eligible
+        initialization.label = ('초기 안내 DID 설정 생성' if eligible else
+                                '초기 안내 생성 제외 · 기존 사이트 보존' if (self._config or {}).get('display', True) else
+                                '초기 안내 생성 제외 · 화면 기능 꺼짐')
+        initialization.tooltip = ('빈 출력의 대기 안내는 간편 설정에 기본 포함됩니다. '
+                                  '이 항목은 사이트가 없는 장비의 출력별 DID 설정을 생성합니다. '
+                                  '기존 사이트 또는 프론트 연동이 있으면 생성을 차단합니다.')
         self.render_setup_header()
 
     def can_initialize_displays(self):
@@ -697,7 +703,6 @@ class SimpleApp(App[None]):
             if not self.is_running:
                 return
             if job is not None:
-                option.value = False
                 initialization.value = False
                 if payload.get('initialize_displays'):
                     self._initialization_status = {'state': 'pending', 'reason': '설치 후 모니터별 안내를 준비합니다.'}

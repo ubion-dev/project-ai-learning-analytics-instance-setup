@@ -232,7 +232,7 @@ def test_new_configuration_preselects_initialization_and_reviews_before_submit(a
                 return {'state': 'ready', 'targets': [{'id': 'default', 'output': 'HDMI-1'}]}
             if action == 'submit':
                 self.calls.append((action, deepcopy(payload)))
-                assert payload == {'expected_config': self.config, 'initialize_displays': True}
+                assert payload == {'expected_config': self.config, 'initialize_displays': True, 'bash_assist': True}
                 return {'run_id': 'initial-run', 'state': 'queued', 'stages': []}
             return await super().call(action, payload)
 
@@ -289,6 +289,8 @@ def test_site_configuration_clears_an_initialization_choice_that_became_ineligib
             service.config['url'] = 'https://example.com/display'
             await app.load_state()
             assert option.disabled and not option.value
+            assert '기존 사이트 보존' in str(option.label)
+            assert '기본 포함' in option.tooltip
             app.query_one('#setup-start', Button).focus()
             await pilot.press('enter')
             await pilot.pause()
