@@ -20,7 +20,7 @@ class FakeService:
         self.jobs = {}
         self.gate = None
         self.fail_status = False
-        self.bash_assist = False
+        self.bash_assist = True
 
     async def call(self, action, payload=None):
         self.calls.append((action, deepcopy(payload)))
@@ -98,7 +98,7 @@ def test_status_is_read_only_and_separates_podman_blocker_from_reboot_wait():
     asyncio.run(scenario())
 
 
-def test_bash_assist_is_an_opt_in_for_one_setup_request():
+def test_bash_assist_is_selected_by_default_and_preserved_after_submit():
     async def scenario():
         service = FakeService()
         service.bash_assist = True
@@ -106,16 +106,12 @@ def test_bash_assist_is_an_opt_in_for_one_setup_request():
         async with app.run_test(size=(80, 24)) as pilot:
             await pilot.pause()
             checkbox = app.query_one('#setup-bash-assist', Checkbox)
-            assert not checkbox.value and not checkbox.disabled
-            checkbox.focus()
-            await pilot.press('space')
-            await pilot.pause()
-            assert checkbox.value
+            assert checkbox.value and not checkbox.disabled
             assert not any(action == 'submit' for action, _ in service.calls)
             assert await pilot.click('#setup-start')
             await pilot.pause()
             assert ('submit', {'expected_config': service.config, 'bash_assist': True}) in service.calls
-            assert not checkbox.value and checkbox.disabled
+            assert checkbox.value and checkbox.disabled
             assert '진행' in str(app.query_one('#setup-next', Static).render())
 
     asyncio.run(scenario())
@@ -344,3 +340,20 @@ def test_podman_review_requires_explicit_approval_and_cancel_submits_nothing():
     for size in ((80, 24), (120, 36)):
         for ready, approve in ((True, False), (False, False), (True, True)):
             asyncio.run(scenario(size, ready, approve))
+
+
+def test_bash_assist_can_be_excluded_from_setup():
+    async def scenario():
+        service = FakeService()
+        service.bash_assist = False
+        app = SimpleApp(service=service)
+        async with app.run_test(size=(80, 24)) as pilot:
+            await pilot.pause()
+            checkbox = app.query_one('#setup-bash-assist', Checkbox)
+            checkbox.focus()
+            await pilot.press('space')
+            await pilot.pause()
+            assert not checkbox.value
+            await app.start_setup()
+            assert ('submit', {'expected_config': service.config}) in service.calls
+    asyncio.run(scenario())
