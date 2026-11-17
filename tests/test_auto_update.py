@@ -203,3 +203,24 @@ def test_check_finishing_after_disable_never_resurrects_enabled_flag(fixture, mo
     monkeypatch.setattr('ala.update.submit', submit)
     assert auto_update.run_scheduled('check', paths=paths, host=host) == 0
     assert auto_update._load(paths)['enabled'] is False
+
+
+def test_bootstrap_finishing_between_record_and_unit_reads_is_not_interrupted(fixture, monkeypatch):
+    # The worker records completion before its unit becomes inactive; a status
+    # read that saw the running record first must not report an interruption.
+    paths, host, releases = fixture
+    monkeypatch.setattr(signature, 'ensure_verifier', lambda *_: '/verified/fixture')
+    response = auto_update.submit_bootstrap(releases[1], paths=paths, host=host)
+    value = auto_update._load(paths)
+    value['bootstrap']['started_at'] = '2000-01-01T00:00:00+00:00'
+    auto_update._save(paths, value)
+    def finished(args, **kwargs):
+        if args[0] == 'systemctl' and 'show' in args:
+            latest = auto_update._load(paths)
+            latest['bootstrap'].update(state='completed', reason='완료')
+            auto_update._save(paths, latest)
+            return Command(0, 'ActiveState=inactive\nLoadState=loaded\n')
+        return Command(0)
+    host.run = finished
+    result = auto_update.status(paths=paths, host=host)['bootstrap']
+    assert result['run_id'] == response['run_id'] and result['state'] == 'completed'

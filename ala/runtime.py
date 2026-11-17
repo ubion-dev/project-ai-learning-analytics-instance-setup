@@ -598,7 +598,9 @@ def bootstrap_from_observation(config, reports, *, release=None, paths=None, hos
                     results.append({'target_id': target.id, 'state': 'pending', 'reason': '현재 감독 버전·기존 구성의 실행 근거가 필요합니다.'})
                     continue
                 selected = store.paths.at('/opt/ala/releases') / version
-            elif service.get('ActiveState') != 'inactive' or service.get('QueryError'):
+            # A failed unit has no supervisor and no pending restart; stop
+            # keeps it failed, so it is a stopped display, not an unknown one.
+            elif service.get('ActiveState') not in {'inactive', 'failed'} or service.get('QueryError'):
                 results.append({'target_id': target.id, 'state': 'pending', 'reason': '현재 화면 실행 여부를 확인하지 못했습니다.'})
                 continue
             elif skip_inactive:

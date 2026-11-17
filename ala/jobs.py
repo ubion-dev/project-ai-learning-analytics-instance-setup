@@ -90,6 +90,10 @@ class JobStore:
                 confirmed_stopped = properties.get('LoadState') == 'not-found' or (
                     active.returncode == 0 and properties.get('ActiveState') in {'inactive', 'failed'})
                 if age > 15 and confirmed_stopped:
+                    # The worker may have finished between the record and unit reads.
+                    latest = json.loads((self.directory(run_id) / 'result.json').read_text())
+                    if latest.get('state') not in {'queued', 'running'}:
+                        return latest
                     value = dict(value, state='interrupted', reason='실행 unit이 없거나 종료 기록이 없습니다.')
                 elif active.returncode or not properties.get('ActiveState'):
                     value = dict(value, query_warning='unit 상태 조회 불가. 실행 중단으로 단정하지 않습니다.')
