@@ -519,7 +519,11 @@ class ScreenPanel(Vertical):
                 shown=await self.owner.service.call('config-show')
                 self.owner._config=deepcopy(shown['config'])
                 self._reset_config_seen=reset['operation_id']
-            if reset.get('state') in {'queued','running','unknown','recovery_required'} or (self._reset_follow and reset.get('operation_id')==self._reset_follow):
+            shown_reset=(self.session_notice or {}).get('label')=='DID 전체 초기화' and (self.session_notice or {}).get('operation_id')
+            if (reset.get('state') in {'queued','running','unknown','recovery_required'}
+                    or (self._reset_follow and reset.get('operation_id')==self._reset_follow)
+                    # A notice adopted from an already-running reset must follow it to its result.
+                    or (shown_reset and reset.get('operation_id')==shown_reset)):
                 self.session_notice = dict(reset,label='DID 전체 초기화')
                 if reset.get('state') in {'completed','rolled_back'}:
                     self._reset_follow=None

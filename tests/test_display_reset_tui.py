@@ -85,3 +85,22 @@ def test_reconnected_completed_reset_refreshes_edit_configuration_and_shows_reco
             await panel.refresh_state()
             assert not any(a=='screens-reset-submit' for a,_ in service.calls)
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize('size',[(80,24),(120,36)])
+def test_reset_already_running_on_open_shows_completion_instead_of_stale_progress(size):
+    async def scenario():
+        service=ResetService()
+        service.reset={'state':'running','phase':'stopping','operation_id':'c'*32,
+                       'targets':['default'],'reason':'관리 Chrome 중지 중'}
+        app=SimpleApp(service=service,initial_section='screens')
+        async with app.run_test(size=size) as pilot:
+            await pilot.pause()
+            panel=app.query_one('#screens',ScreenPanel)
+            assert '진행' in str(panel.query_one('#screens-result',Static).render())
+            service.reset=dict(service.reset,state='completed',phase='completed',reason='모니터별 안내 준비 완료')
+            await panel.refresh_state(); await pilot.pause()
+            result=str(panel.query_one('#screens-result',Static).render())
+            assert '완료' in result and '진행' not in result
+            assert panel.action_state('start',panel.target())[0]
+    asyncio.run(scenario())
