@@ -494,3 +494,23 @@ def test_failed_did_is_a_stopped_display_for_reset(fixture,monkeypatch,result,ex
     assert reset.Store(paths,host).load(request['operation_id'])['backup']['running'][failed] is False
     control,_=controller(fixture)
     assert execute(fixture,request['operation_id'],control=control)['state']=='completed'
+
+
+def test_readiness_failure_names_the_target_that_was_not_ready(fixture):
+    # On the test device the last started target was blamed while another
+    # target's window was the one stuck on the wrong output.
+    request=submit(fixture)
+    control,_=controller(fixture)
+    stuck=[]
+    def one_stuck(store,target,action,selection,**kwargs):
+        report=control(store,target,action,selection,**kwargs)
+        if action=='start' and not stuck:
+            stuck.append(target)
+        if action=='check' and stuck and target==stuck[0]:
+            report=dict(report,placement={'state':'pending'})
+        return report
+    result=execute(fixture,request['operation_id'],control=one_stuck)
+    assert result['state']=='recovery_required'
+    assert result['current_target']==stuck[0]
+    assert result['results'][stuck[0]]=={'state':'unknown'}
+    assert result['next_action'].startswith(stuck[0])

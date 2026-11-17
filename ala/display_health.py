@@ -23,7 +23,7 @@ from . import __version__
 from .system import Paths, atomic_json
 
 INTERVAL = 30
-STUCK_WINDOW_SECONDS = 60
+STUCK_WINDOW_SECONDS = 30
 TIMEOUT = 5
 FAILURES = 3
 SUCCESSES = 2
