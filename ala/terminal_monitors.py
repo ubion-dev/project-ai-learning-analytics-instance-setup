@@ -6,6 +6,22 @@ from .terminal import Cancelled
 
 
 ACTIVE = {'queued', 'applying', 'awaiting_confirmation', 'rolling_back', 'recovery_required'}
+OUTCOMES = {'confirmed': '배치 확정 · 적용한 배치를 유지합니다.',
+            'rolled_back': '배치 복원 · 변경이 적용되지 않았습니다.',
+            'not_applied': '배치 미적용 · 변경이 적용되지 않았습니다.',
+            'recovery_required': '배치 복구 확인 필요 · 모니터 메뉴에서 복구를 재시도하세요.'}
+
+
+def follow(t, operation_id, seconds=60):
+    """A recorded decision is not the result; report the worker's final state."""
+    for attempt in range(seconds):
+        status = t.service.request('monitor-layout-status')
+        if status.get('operation_id') != operation_id:
+            t.write('배치 작업이 변경됐습니다. 모니터 메뉴에서 다시 조회하세요.'); return
+        if status.get('state') in OUTCOMES:
+            t.write(' '.join(filter(None, (OUTCOMES[status['state']], status.get('reason'))))); return
+        if attempt + 1 < seconds: t.sleep(1)
+    t.write('배치 결과를 아직 확인하지 못했습니다. 모니터 메뉴를 다시 열어 상태를 확인하세요.')
 
 
 def describe(model, item):
@@ -50,9 +66,11 @@ def operation(t, status):
         if t.yes('이 배치 유지', deadline=status.get('deadline_monotonic')):
             t.result(t.call('monitor-layout-confirm', {'operation_id': operation_id}))
         else: t.result(t.call('monitor-layout-revert', {'operation_id': operation_id}))
+        follow(t, operation_id)
     elif status['state'] == 'recovery_required':
         if t.yes('원래 배치 복구 재시도'):
             t.result(t.call('monitor-layout-recover', {'operation_id': operation_id}))
+            follow(t, operation_id)
     elif status['state'] in ACTIVE:
         t.write('작업이 진행 중입니다. 모니터 메뉴를 다시 열어 상태를 확인하세요.')
 
@@ -86,6 +104,7 @@ def apply(t, model, settings):
         operation(t, status)
     except Cancelled as exc:
         t.write(str(exc) or '배치 확인을 취소했습니다. 서버의 확인 기한과 복원 처리는 유지됩니다.')
+        if operation_id: follow(t, operation_id)
     return True
 
 

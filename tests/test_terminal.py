@@ -35,7 +35,10 @@ class Service:
             self.operation = {'state': 'awaiting_confirmation', 'operation_id': 'a' * 32,
                               'deadline_monotonic': time.monotonic() + 30}
             return deepcopy(self.operation)
-        if action in {'monitor-layout-confirm', 'monitor-layout-revert'}: return {'state': 'decision_recorded'}
+        if action in {'monitor-layout-confirm', 'monitor-layout-revert'}:
+            self.operation = dict(self.operation, state='confirmed' if action.endswith('confirm') else 'rolled_back',
+                                  reason='합성 결과')
+            return {'state': 'decision_recorded'}
         if action == 'screens-save':
             if self.reject_save: raise RuntimeError('다른 작업에서 구성이 변경됐습니다.')
             assert payload['expected_config'] == self.config
@@ -94,7 +97,11 @@ def test_apply_checks_plan_and_tracks_only_owned_operation(decision, expected):
     t, _ = terminal(service, ['1', '1', '4', '1', 'b', 'a', '', 'yes', decision])
     monitors(t)
     actions = [a for a, _ in service.calls]
-    assert actions == ['monitor-layout-status', 'monitor-layout-state', 'monitor-layout-plan', 'monitor-layout-submit', expected]
+    assert actions == ['monitor-layout-status', 'monitor-layout-state', 'monitor-layout-plan', 'monitor-layout-submit', expected,
+                       'monitor-layout-status']
+    # The accepted decision is not the result; the final state is reported distinctly.
+    final = _.getvalue().rsplit('\n', 3)
+    assert ('배치 확정' if decision else '배치 복원 · 변경이 적용되지 않았습니다') in '\n'.join(final)
     plan = service.calls[2][1]['layout']; submission = service.calls[3][1]
     assert submission == {'layout': plan, 'persistent': True}
     assert [o['x'] for o in plan['outputs']] == [1920, 1920, 3840]
@@ -230,3 +237,17 @@ def test_real_pty_explicit_console_exits_without_screen_or_mouse_modes():
             process.kill(); process.wait()
     assert b'\x1b' not in output
     assert '텍스트 메뉴'.encode() in output
+
+
+def test_unanswered_trial_reports_the_server_revert_result():
+    service = Service()
+    def expire(prompt, **kwargs):
+        if kwargs.get('deadline') is not None:
+            service.operation = dict(service.operation, state='rolled_back', reason='합성 복원')
+            raise Cancelled('확인 시간이 지났습니다.')
+        return original(prompt, **kwargs)
+    t, out = terminal(service, ['1', '1', '4', '1', 'b', 'a', '', 'yes'])
+    original = t.ask; t.ask = expire
+    monitors(t)
+    assert not any(a in {'monitor-layout-confirm', 'monitor-layout-revert'} for a, _ in service.calls)
+    assert '배치 복원 · 변경이 적용되지 않았습니다' in out.getvalue()
