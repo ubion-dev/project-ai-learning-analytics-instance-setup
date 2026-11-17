@@ -528,3 +528,32 @@ def test_unchanged_editor_status_does_not_rewrite_labels_but_changes_remain_visi
             assert calls == ['target-result']
             assert '합성 변경 상태' in str(result.render())
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize('size', [(80, 24), (120, 36)])
+def test_unregistered_did_points_to_setup_registration_instead_of_start(size):
+    async def scenario():
+        service = Service()
+        added = service.screens['targets'][1]
+        added['service'] = {'ActiveState': 'inactive', 'LoadState': 'not-found', 'MainPID': '0'}
+        added['health'] = {}; added['placement'] = {'state': 'not_applicable'}
+        failed = service.screens['targets'][0]
+        failed['service'] = {'ActiveState': 'inactive', 'LoadState': 'not-found', 'MainPID': '0',
+                             'QueryError': 'synthetic query failure'}
+        app = SimpleApp(service=service, initial_section='screens')
+        async with app.run_test(size=size) as pilot:
+            await pilot.pause()
+            panel = app.query_one('#screens', ScreenPanel)
+            headline, next_action, primary, _ = panel.priority(added)
+            # Saving a new DID asks for setup registration; start cannot launch a missing unit.
+            assert primary != 'start' and '간편 설정' in next_action and '등록' in headline
+            assert not panel.action_state('start', added)[0]
+            assert '간편 설정' in panel.action_state('start', added)[1]
+            assert panel.action_state('stop', added)[0] and panel.action_state('edit', added)[0]
+            headline, _, primary, _ = panel.priority(failed)
+            assert primary != 'start' and '확인 불가' in headline
+            editor = await open_target(pilot, app, 'display-2', operations=True)
+            assert editor.query_one('#screens-start', Button).disabled
+            assert not editor.query_one('#target-primary', Button).display
+            assert '간편 설정' in str(editor.query_one('#target-next', Static).render())
+    asyncio.run(scenario())

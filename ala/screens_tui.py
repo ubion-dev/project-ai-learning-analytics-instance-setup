@@ -40,6 +40,13 @@ RESULT_LABELS = {
     'rolled_back': '실패 · 원래 배정 복구', 'recovery_required': '복구 확인 필요',
 }
 _AUTO_OUTPUT = ''
+UNREGISTERED = '간편 설정에서 화면 등록을 실행한 뒤 시작하세요.'
+
+
+def unit_missing(value):
+    """A saved DID without its Chrome unit cannot start until setup registers it."""
+    service = (value or {}).get('service') or {}
+    return service.get('LoadState') == 'not-found' and not service.get('QueryError')
 
 
 def site_label(value):
@@ -662,6 +669,8 @@ class ScreenPanel(Vertical):
             return False, '이 화면의 설정을 적용하고 있습니다.' if applying else settings.get('reason') or '먼저 변경한 설정을 저장하세요.'
         if key == 'retry' and not self.retry_enabled(value):
             return False, RETRY_DISABLED
+        if key in {'start', 'restart'} and unit_missing(value):
+            return False, UNREGISTERED
         if applying and key in {'start', 'restart', 'reload', 'edit', 'retry'}:
             return False, '설정 적용이 끝나면 사용할 수 있습니다.'
         return True, help_text
@@ -684,6 +693,10 @@ class ScreenPanel(Vertical):
             return '작업 진행 중', '작업 결과를 확인하세요.', None, '#cbc2ef'
         if state == 'failed':
             return 'Chrome 실행 실패', '선택한 화면의 Chrome 로그를 확인하세요.', 'logs', '#f3b8c5'
+        if (value.get('service') or {}).get('QueryError'):
+            return '화면 상태 확인 불가', 'r로 다시 확인하고 화면 상세를 살펴보세요.', None, '#f1d5a3'
+        if unit_missing(value):
+            return '화면 서비스 미등록', UNREGISTERED, None, '#f1d5a3'
         if state not in {'active', 'inactive', 'activating', 'deactivating'} or settings.get('state') == 'unknown':
             return '화면 상태 확인 불가', 'r로 다시 확인하고 화면 상세를 살펴보세요.', None, '#f1d5a3'
         if settings.get('state') in {'failed', 'interrupted'}:

@@ -8,7 +8,7 @@ from textual.containers import Horizontal, Vertical
 from textual.widgets import Button, Select, Static, TextArea
 
 from .chrome_tui import safe_logs, safe_text
-from .screens_tui import ScreenPanel
+from .screens_tui import UNREGISTERED, ScreenPanel, unit_missing
 
 
 SESSION_ISSUES = {
@@ -43,6 +43,10 @@ def diagnosis(report, target):
         if (target.get('runtime') or {}).get('stopped') and running != 'active':
             reason, action = '운영자가 이 DID를 중지했습니다', '표시를 다시 시작하려면 시작을 선택하세요.'
             next_button = 'control'
+        elif unit_missing(target):
+            # Logs and start cannot help before setup registers this DID's unit.
+            reason, action = 'DID 화면 서비스 미등록', UNREGISTERED
+            next_button = None
         elif running == 'failed':
             reason, action = 'Chrome 서비스 시작 실패', '이번 부팅의 Chrome 로그를 확인하세요.'
         elif running == 'inactive':
@@ -144,7 +148,8 @@ class QuickPanel(Vertical):
     def control(self, target):
         state = (target.get('service') or {}).get('ActiveState')
         if (self.report.get('session') != 'ok'
-                or (target.get('settings') or {}).get('state') in {'queued', 'running'}):
+                or (target.get('settings') or {}).get('state') in {'queued', 'running'}
+                or unit_missing(target)):
             return None
         return {'inactive': 'start', 'failed': 'start', 'active': 'restart'}.get(state)
 
