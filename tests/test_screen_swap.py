@@ -671,3 +671,23 @@ def test_live_recovery_owner_is_not_duplicated_even_after_attempt_started(fixtur
     journals.save(value)
     monkeypatch.setattr(screen_swap, '_execute', lambda *_args, **_kwargs: pytest.fail('live recovery duplicated'))
     assert screen_swap.recover_all(paths=paths, host=host) == 0
+
+
+@pytest.mark.parametrize('duration', [.4, 2.5])
+def test_swap_stable_observation_gives_each_check_a_full_query_budget(fixture, duration):
+    clock = fixture[2]
+    request = submit(fixture)
+    controller, _ = control_for(fixture)
+    budgets = []
+
+    def timed(target, action, selection, **kwargs):
+        report = controller(target, action, selection, **kwargs)
+        if action == 'check':
+            budgets.append(kwargs['timeout'])
+            clock.sleep(duration)
+            if kwargs['timeout'] < duration:
+                report = dict(report, placement={'state': 'unknown', 'reason': '조회 제한 시간 초과'})
+        return report
+    result = execute(fixture, request['operation_id'], control=timed)
+    assert result['state'] == 'completed', result
+    assert min(budgets) >= 5

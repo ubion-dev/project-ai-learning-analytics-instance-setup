@@ -1592,3 +1592,24 @@ def test_ala29_unsupported_foreign_title_with_display_profile_evidence_blocks_la
         assert result['exit_code']==1 and result['state'] in {'unknown','blocked'}
     assert not _started_commands(host)
     assert not any(argv[0]=='pkill' or 'reset-failed' in argv for argv,_ in host.calls)
+
+
+
+@pytest.mark.parametrize('initial',['active','failed'])
+def test_stop_accepts_unit_that_is_failed_after_stop_request(setup,initial):
+    # SIGTERM to the whole cgroup can make the supervisor exit 1 while stopping,
+    # and systemd keeps a failed unit failed on a repeated stop request.
+    config,paths,host,home=user_fixture(setup)
+    host.states[display.UNIT].update(ActiveState=initial,Result='exit-code' if initial=='failed' else 'success')
+    original=host.run
+    def run(argv,**kwargs):
+        if argv[:3]==['systemctl','--user','stop']:
+            host.calls.append((argv,kwargs))
+            host.states[display.UNIT].update(ActiveState='failed',Result='exit-code',MainPID='0')
+            return Command(0)
+        return original(argv,**kwargs)
+    host.run=run
+    value=display.user_action('stop',config=config,home=home,host=host,paths=paths)
+    assert value['state']=='stopped' and value['exit_code']==0
+    assert not _started_commands(host)
+    assert not any('reset-failed' in argv for argv,_ in host.calls)

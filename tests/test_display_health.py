@@ -344,6 +344,26 @@ def test_runtime_control_failure_is_visible_and_closes_child(fixture,problem):
     assert supervisor.value['state']=='failed' and supervisor.browser.closed
 
 
+@pytest.mark.parametrize('problem',['detached','process_exit'])
+def test_browser_loss_after_stop_signal_is_a_clean_stop(fixture,problem):
+    # systemd signals the whole cgroup; Chrome can end before the loop sees SIGTERM.
+    supervisor,_,_,_=fixture
+    original=supervisor.transport_factory
+    def factory(argv):
+        browser=original(argv)
+        def next_event(timeout=1):
+            supervisor.stopping=True
+            if problem=='process_exit':
+                raise cdp.CDPError('브라우저 제어 pipe 연결이 종료되었습니다.')
+            return {'method':'Inspector.detached','params':{},'sessionId':supervisor.session}
+        browser.next_event=next_event
+        return browser
+    supervisor.transport_factory=factory
+    assert supervisor.run()==0
+    assert supervisor.value['state']=='unknown' and supervisor.browser.closed
+    assert supervisor.value['reason']=='표시 서비스가 중지되었습니다.'
+
+
 def transport_pair():
     transport=object.__new__(cdp.PipeBrowser)
     incoming_r,incoming_w=os.pipe(); outgoing_r,outgoing_w=os.pipe()

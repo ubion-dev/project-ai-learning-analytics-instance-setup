@@ -447,7 +447,8 @@ def _registration(store,model,*,reloading=True):
 
 def _finish(store,value,state,reason):
     # Terminal private record last: interrupted fence publication stays recoverable.
-    value.update(phase=state,reason=reason)
+    # A finished run must not keep a previous failure's recovery instruction.
+    value.update(phase=state,reason=reason,next_action='')
     store.publish(value,terminal=True)
     value['state']=state
     store.save(value)
@@ -486,6 +487,9 @@ def _stop_all(store,value,control,clock,pause):
             raise RuntimeError('관리 Chrome 종료 확인 시간 초과')
 
 
+CHECK_TIMEOUT=5
+
+
 def _ready(store,value,selections,targets,control,clock,pause,*,stable=False):
     deadline=clock()+(60 if stable else 90)
     while clock()<deadline:
@@ -495,7 +499,10 @@ def _ready(store,value,selections,targets,control,clock,pause,*,stable=False):
             if target in latest['stop_requests']:
                 continue
             selection=selections[target]['committed']
-            report=control(store,target,'check',selection,timeout=min(5,max(.1,deadline-clock())))
+            # Each check gets a full query budget. The window bounds how long we
+            # observe, not how long one observation may take; a remainder-sized
+            # budget made the last stable check time out on healthy screens.
+            report=control(store,target,'check',selection,timeout=CHECK_TIMEOUT)
             model=Config.from_dict(store.runtime._validate_selection(selection)).for_screen(target)
             ready &= code_ready(report,selection['version'],selection['revision'],setup=model.url is None)
         if ready and not stable:
@@ -535,7 +542,9 @@ def execute(operation_id,*,paths=None,host=None,recovering=False,control=None,mo
             if recovering:
                 if _owner(store,value)!='inactive':
                     raise RuntimeError('기존 초기화 실행기 종료를 확인하지 못했습니다.')
-                value.update(owner_unit='ala-display-reset-recover.service',owner_boot_id=store.runtime.boot_id(),automatic_recovery_attempted=True)
+                # Report the claimed recovery as running; a dead owner still
+                # turns back into recovery_required through status().
+                value.update(state='running',owner_unit='ala-display-reset-recover.service',owner_boot_id=store.runtime.boot_id(),automatic_recovery_attempted=True)
                 store.save(value)
             elif value['state']!='queued' or value['boot_id']!=store.runtime.boot_id():
                 raise RuntimeError('신규 실행 대신 초기화 복구를 요청하세요.')

@@ -746,10 +746,18 @@ class Supervisor:
                 self.control_tick()
                 self.frontend_tick()
                 self.placement_tick()
-            self.value.update(state='unknown', reason='표시 서비스가 중지되었습니다.', next_action='다음 시작 시 감시를 다시 시작합니다.')
-            self._save()
+            self._mark_stopped()
             return 0
         except (CDPError, OSError, ValueError, KeyError, IndexError, StopIteration, TypeError, AttributeError) as exc:
+            if isinstance(exc, CDPError) and self.stopping:
+                # systemd signals the whole cgroup, so Chrome can disappear
+                # before the loop observes SIGTERM. Losing the browser while
+                # stopping is the requested stop, not a display failure.
+                try:
+                    self._mark_stopped()
+                    return 0
+                except (OSError, ValueError) as save_error:
+                    exc = save_error
             self.value.update(state='failed' if isinstance(exc, CDPError) else 'unknown',
                               reason=str(exc) if isinstance(exc, CDPError) else '표시 감시 실행 또는 기록을 확인하지 못했습니다.',
                               next_action='Chrome 로그와 서비스 상태를 확인하세요. 반복 실패는 기존 systemd 시작 제한을 유지합니다.')
@@ -764,3 +772,7 @@ class Supervisor:
                 self.browser.close()
             for signum, handler in previous.items():
                 signal.signal(signum, handler)
+
+    def _mark_stopped(self):
+        self.value.update(state='unknown', reason='표시 서비스가 중지되었습니다.', next_action='다음 시작 시 감시를 다시 시작합니다.')
+        self._save()
