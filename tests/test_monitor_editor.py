@@ -344,3 +344,20 @@ def test_clearing_anchor_disables_direction_buttons_and_initial_trial_is_visible
             for direction in ('left', 'right', 'above', 'below'):
                 assert editor.query_one('#monitor-' + direction, Button).disabled
     asyncio.run(scenario(False)); asyncio.run(scenario(True))
+
+
+@pytest.mark.parametrize('axis', ['horizontal', 'vertical'])
+def test_swap_of_adjacent_screens_with_an_offset_keeps_them_touching(axis):
+    # A smaller screen beside a larger one is often offset (e.g. vertically
+    # centred). Swapping must still close the pair footprint, not leave a gap.
+    raw = current_state(2)
+    raw[1][1][1][0][6] = {}; raw[1][1][1][1][6] = {'is-current': True}
+    raw[2][1][0:2] = [1920, 200] if axis == 'horizontal' else [300, 1080]
+    model = LayoutDraft(read_settings(raw))
+    model.place('DP-2', 'swap', 'DP-1')
+    plan = model.validate()
+    rects = {o['id']: o for o in plan['outputs']}
+    if axis == 'horizontal':
+        assert rects['DP-2']['x'] == 0 and rects['DP-1']['x'] == 1280
+    else:
+        assert rects['DP-2']['y'] == 0 and rects['DP-1']['y'] == 720
