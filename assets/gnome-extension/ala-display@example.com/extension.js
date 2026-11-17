@@ -538,26 +538,22 @@ export default class AlaDisplay extends Extension {
                     window.is_fullscreen() === (request.layout === 'fullscreen') && window.located_on_workspace(workspace);
                 if (correct()) return {state:'ok',windows:[windowData(window)]};
                 const resize = area => window.move_resize_frame(false,area.x,area.y,area.width,area.height);
-                if (request.layout === 'fullscreen' && window.is_fullscreen()) {
-                    // A fullscreen window on another monitor ignores
-                    // move/resize; GNOME 49 left it on the primary output
-                    // after a monitor change. Leave fullscreen first and
-                    // then use the same move-then-fullscreen path.
-                    window.unmake_fullscreen();
-                    if (!await this._waitPlacement(operation,() => !window.is_fullscreen())) return pending();
-                    if (!operation.valid()) return pending();
-                }
                 if (request.layout === 'fullscreen') {
-                    // Wayland sizes/positions take effect after the client's
-                    // configure acknowledgement. Fullscreen only after the
-                    // frame really reaches this output, never its old monitor.
-                    const seed=usable;
-                    unmaximize(window);
-                    resize(seed);
-                    if (!await this._waitPlacement(operation,() => window.get_monitor() === index &&
-                        sameRect(window.get_frame_rect(),seed) && !window.is_fullscreen())) return pending();
-                    if (!operation.valid()) return pending();
-                    window.make_fullscreen();
+                    // Observed on a GNOME 49 device: a normal-state size is only
+                    // a suggestion to a Wayland client and Chrome kept its own
+                    // (even larger than the target), so geometry waits never
+                    // ended, and move/resize of a fullscreen window is ignored.
+                    // Enter fullscreen where the window is (the client must
+                    // take the fullscreen size), then hand the fullscreen
+                    // window to the target output like the move-to-monitor
+                    // shortcut does.
+                    if (!window.is_fullscreen()) {
+                        unmaximize(window);
+                        window.make_fullscreen();
+                        if (!await this._waitPlacement(operation,() => window.is_fullscreen())) return pending();
+                        if (!operation.valid()) return pending();
+                    }
+                    if (window.get_monitor() !== index) window.move_to_monitor(index);
                 } else {
                     if (request.layout !== 'fullscreen') {
                         if (window.is_fullscreen()) window.unmake_fullscreen();
