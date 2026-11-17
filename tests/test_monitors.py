@@ -238,3 +238,31 @@ def test_split_on_output_with_top_bar_expects_half_of_the_reported_work_area(mon
     monkeypatch.setattr(monitors,'bridge',lambda *a,**kw:{'state':'ok','windows':[{'id':1,'rect':half,
         'fullscreen':False,'workspace_index':0,'on_active_workspace':True}]})
     assert monitors.placement(config,health,inventory=inventory)['expected']['height']==1080
+
+
+@pytest.mark.parametrize('interruption', ['extension', 'topology'])
+def test_default_target_keeps_its_pinned_output_through_a_transient_failure(monkeypatch, interruption):
+    # The default DID was pinned while it was the only output. A screen lock
+    # (extension disabled) or an unconfirmed hotplug read must not forget the
+    # pin, or the next tick with two outputs can never select it again.
+    config=Config(schema_version=2,user='user',screens=(ScreenConfig(),)).for_screen()
+    health={'supervisor_pid':10,'browser_pid':20,'supervisor_start_ticks':'100',
+            'browser_start_ticks':'200','boot_id':'test-boot'}
+    first={'id':'HDMI-1','connectors':['HDMI-1'],'confirmed':True,'x':0,'y':0,'width':1920,'height':1080}
+    second={'id':'DP-1','connectors':['DP-1'],'confirmed':True,'x':1920,'y':0,'width':1920,'height':1080}
+    window={'id':1,'rect':{k:first[k] for k in ('x','y','width','height')},'fullscreen':True,
+            'workspace_index':0,'on_active_workspace':True}
+    reply={'state':'ok','windows':[window]}
+    monkeypatch.setattr(monitors,'bridge',lambda *a,**kw:reply)
+    health['placement']=monitors.placement(config,health,inventory={'state':'ok','logical_outputs':[first]})
+    assert health['placement']['state']=='ok' and health['placement']['output']=='HDMI-1'
+    if interruption=='extension':
+        reply={'state':'pending','reason':'GNOME 화면 확장에 연결되지 않았습니다.'}
+        inventory={'state':'ok','logical_outputs':[first,second]}
+    else:
+        inventory={'state':'ok','logical_outputs':[dict(first,confirmed=False),second]}
+    health['placement']=monitors.placement(config,health,inventory=inventory)
+    assert health['placement']['state']!='ok'
+    reply={'state':'ok','windows':[window]}
+    result=monitors.placement(config,health,inventory={'state':'ok','logical_outputs':[first,second]})
+    assert result['state']=='ok' and result['output']=='HDMI-1'

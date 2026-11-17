@@ -254,6 +254,19 @@ def ownership(health):
 
 
 def placement(config,health,*,host=None,apply=False,inventory=None):
+    result=_placement(config,health,host=host,apply=apply,inventory=inventory)
+    previous=health.get('placement')
+    pinned=previous.get('output') if isinstance(previous,dict) and isinstance(previous.get('output'),str) else None
+    # The supervisor stores only the latest result. Keep an automatically
+    # selected output through a failed read (screen lock, hotplug), or a
+    # default DID could never be selected again once a second output exists.
+    if (pinned and config.output is None and result.get('state')!='not_applicable'
+            and not isinstance(result.get('output'),str)):
+        result=result | {'output':pinned}
+    return result
+
+
+def _placement(config,health,*,host=None,apply=False,inventory=None):
     if config.schema_version==1 and config.output is None:
         return {'state':'not_applicable','reason':'기존 기본 화면의 배치는 유지합니다.','windows':[],
                 'confirmed_window_count':None}
