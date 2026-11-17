@@ -240,6 +240,8 @@ class MonitorSettings(MessagePump):
         keep.label = '이 배치 유지' + (f' · {remaining}초 남음' if remaining is not None else '')
         self.query_one('#monitor-revert', Button).disabled = self.busy
         self.query_one('#monitor-revert', Button).label = '복구 재시도' if self.operation_state == 'recovery_required' else '원래 배치로 복원'
+        # Closing during a trial requests the revert; say so on the button.
+        self.query_one('#monitor-close', Button).label = ('복원 후 ' if waiting else '') + ('접기' if self.inline else '닫기')
         if self.inline:
             selected = self.draft.selected if self.draft else None
             ids = sorted(o['id'] for o in self.draft.request['outputs']) if self.draft else []

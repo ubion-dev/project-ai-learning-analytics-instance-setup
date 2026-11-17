@@ -178,10 +178,12 @@ def test_inline_trial_focuses_visible_countdown_and_reports_revert_distinctly(si
             assert app.focused is keep
             assert 0 <= keep.region.y and keep.region.bottom <= size[1]
             assert '초' in str(keep.label)
+            assert str(controls.query_one('#monitor-close', Button).label) == '복원 후 접기'
             service.monitors.operation.update(state=outcome, reason='적용 전 실제 모니터 배치를 다시 확인했습니다.'
                                               if outcome == 'rolled_back' else '현재 세션의 모니터 배치를 확인했습니다.')
             await controls.poll(); await pilot.pause()
             assert controls.operation is None
+            assert str(controls.query_one('#monitor-close', Button).label) == '접기'
             message = str(controls.query_one('#monitor-message', Static).render())
             assert notes, 'the final result must be visible even when the message line is scrolled away'
             if outcome == 'rolled_back':
