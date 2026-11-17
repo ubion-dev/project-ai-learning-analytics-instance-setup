@@ -228,12 +228,19 @@ def test_start_requires_owned_service_and_reports_extension_relogin(environment,
     class UserHost:
         def run(self,argv,**options):
             calls.append(argv)
+            if argv==['systemctl','--user','show-environment']:
+                return Command(0,'WAYLAND_DISPLAY=wayland-0\n')
+            if argv[:2]==['loginctl','list-sessions']:
+                return Command(0,'2 1000 user seat0\n')
+            if argv[:2]==['loginctl','show-session']:
+                return Command(0,'User=1000\nType=wayland\nClass=user\nRemote=no\nActive=yes\nState=active\nLockedHint=no\n')
             if '--property=FragmentPath' in argv:
                 path='/home/user/external.service' if issue=='shadow' else '/etc/systemd/user/'+coverage.UNIT
                 return Command(0,'LoadState=loaded\nFragmentPath='+path+'\n')
             if argv[:3]==['systemctl','--user','show']:
                 return Command(0,'LoadState=loaded\nActiveState='+('active' if running else 'inactive')+'\nResult=success\n')
             return Command(0)
+    monkeypatch.setattr(display.os,'getuid',lambda:1000)
     monkeypatch.setattr('ala.monitors.bridge',lambda *a,**kw:{'state':'ok','capabilities':[] if issue=='old-extension' else ['output-waiting-windows']})
     result=coverage.ensure(config,paths.at('/home/user'),UserHost(),paths)
     starts=[a for a in calls if a[:3]==['systemctl','--user','start']]
@@ -241,3 +248,61 @@ def test_start_requires_owned_service_and_reports_extension_relogin(environment,
     assert result['exit_code']==(0 if issue is None else 2)
     if issue=='old-extension': assert '로그아웃·로그인' in result['reason']
     assert not any('restart' in a or 'reset-failed' in a or 'stop' in a for a in calls)
+
+
+@pytest.mark.parametrize('graphical',['no-environment','no-session'])
+def test_setup_does_not_start_waiting_service_without_a_graphical_login(environment,monkeypatch,graphical):
+    paths,host,release,config,*_=enable(environment)
+    calls=[]
+    class UserHost:
+        def run(self,argv,**options):
+            calls.append(argv)
+            if argv==['systemctl','--user','show-environment']:
+                return Command(0,'HOME=/home/user\n' if graphical=='no-environment' else 'WAYLAND_DISPLAY=wayland-0\n')
+            if argv[:2]==['loginctl','list-sessions']:
+                return Command(0,'')
+            if '--property=FragmentPath' in argv:
+                return Command(0,'LoadState=loaded\nFragmentPath=/etc/systemd/user/'+coverage.UNIT+'\n')
+            if argv[:3]==['systemctl','--user','show']:
+                return Command(0,'LoadState=loaded\nActiveState=inactive\nResult=success\n')
+            return Command(0)
+    monkeypatch.setattr(display.os,'getuid',lambda:1000)
+    monkeypatch.setattr('ala.monitors.bridge',lambda *a,**kw:{'state':'ok','capabilities':['output-waiting-windows']})
+    result=coverage.ensure(config,paths.at('/home/user'),UserHost(),paths)
+    assert not any(a[:3]==['systemctl','--user','start'] for a in calls)
+    assert result['state']=='pending' and result['exit_code']==2
+    assert 'GNOME' in result['reason']
+
+
+def test_one_rejected_did_selection_does_not_stop_waiting_windows_on_other_outputs(environment,monkeypatch):
+    paths,host,release,config,*_=enable(environment)
+    config=Config(user='user',schema_version=2,screens=(ScreenConfig(id='left',output='DP-2'),ScreenConfig(id='right',output='DP-3')))
+    monkeypatch.setattr('ala.screen_swap.guard',lambda **kw:None)
+    monkeypatch.setattr('ala.display_reset.guard',lambda **kw:None)
+    monkeypatch.setattr('ala.monitors.topology',lambda **kw:inventory())
+    original=display._committed_screen
+    def committed(cfg,target,store):
+        if target=='left': raise ValueError('synthetic rejected selection')
+        return original(cfg,target,store)
+    monkeypatch.setattr(display,'_committed_screen',committed)
+    monkeypatch.setattr(display,'_check_user',lambda *a:{'process_verified':False})
+    # The DID with an unreadable selection is ambiguous: no duplicate there,
+    # but every other uncovered output keeps its waiting window.
+    assert coverage.frame(config,paths.at('/home/user'),host,paths)=={'DP-1','DP-3'}
+
+
+def test_hand_off_and_return_does_not_consume_the_crash_retry_budget():
+    spawned=[]
+    class Child:
+        def __init__(self): self.result=None
+        def poll(self): return self.result
+        def terminate(self): self.result=0
+    def spawn(output):
+        child=Child();spawned.append(child);return child
+    children=coverage.Children(spawn,clock=lambda:0)
+    for _ in range(5):
+        children.reconcile({'DP-1'})   # no managed DID: waiting window
+        children.reconcile(set())      # DID verified on DP-1: step aside
+        children.reconcile(set())      # our own child has exited
+    children.reconcile({'DP-1'})       # DID failed again: waiting returns
+    assert len(spawned)==6 and 'DP-1' in children.running

@@ -272,3 +272,10 @@ def test_valid_event_without_final_check_is_not_reported_as_missing_record():
     assert rows['chrome']['state'] == 'unknown' and rows['chrome']['evidence'] == 'event'
     assert rows['timezone']['state'] == 'unknown' and rows['timezone']['evidence'] == 'missing'
     assert not current
+
+
+def test_waiting_service_and_user_registration_results_are_visible_in_a_setup_detail():
+    rows, _ = children('chrome', report=checks(('chrome.unit', 'ok'), ('chrome.autostart', 'ok'),
+                                               ('display.waiting', 'pending'), ('display.prepare', 'ok')))
+    assert rows['service']['state'] == 'pending'
+    assert 'display.waiting' in rows['service']['detail'] and 'display.prepare' in rows['service']['detail']
