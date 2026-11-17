@@ -18,6 +18,10 @@ const IFACE = `<node><interface name="org.ala.Display1">
 <method name="Place"><arg type="s" direction="in"/><arg type="s" direction="out"/></method>
 <method name="Closed"><arg type="s" direction="in"/><arg type="s" direction="out"/></method>
 </interface></node>`;
+// GNOME Shell disables user-mode extensions on screen lock and enables them
+// again on unlock. The module lives as long as this Shell process, i.e. this
+// login, so a lock must not look like a new layout session.
+const LAYOUT_SESSION = GLib.uuid_string_random();
 const decoder = new TextDecoder('utf-8', {fatal: true});
 function read(path, limit = 1048576) {
     const [ok, data] = GLib.file_get_contents(path);
@@ -152,7 +156,7 @@ function layoutRect(rect,layout) {
 export default class AlaDisplay extends Extension {
     enable() {
         this._uid = new Gio.Credentials().get_unix_user();
-        this._layoutSession = GLib.uuid_string_random();
+        this._layoutSession = LAYOUT_SESSION;
         this._placements = new Map();
         // These public signals exist in both supported Mutter versions. Do not
         // fight a person's interactive drag with the periodic placement check.

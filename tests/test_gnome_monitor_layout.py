@@ -82,3 +82,19 @@ deferred=true;const response=layout();await new Promise(resolve=>setImmediate(re
 assert.equal(waiting.length,1);extension.disable();waiting.shift()();
 assert.equal((await response).state,'unknown');assert.equal(applications.length,0);assertClean();
 """))
+
+
+def test_screen_lock_reenable_keeps_the_login_layout_session():
+    # GNOME Shell disables user-mode extensions on lock and enables them
+    # again on unlock. That is still the same login: a trial started before
+    # the lock must stay recoverable and a saved profile must not be
+    # reapplied over this login's later manual layout.
+    run_extension(scenario(r"""
+let next=1;GLib.uuid_string_random=()=>`00000000-0000-0000-0000-${String(++next).padStart(12,'0')}`;
+const before=extension._layoutSession;
+extension.disable();extension.enable();
+assert.equal(extension._layoutSession,before);
+request.session=before;
+assert.equal((await layout()).state,'ok');
+extension.disable();assertClean();
+"""))
