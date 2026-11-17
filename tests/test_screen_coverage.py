@@ -306,3 +306,19 @@ def test_hand_off_and_return_does_not_consume_the_crash_retry_budget():
         children.reconcile(set())      # our own child has exited
     children.reconcile({'DP-1'})       # DID failed again: waiting returns
     assert len(spawned)==6 and 'DP-1' in children.running
+
+
+def test_unreadable_waiting_policy_does_not_block_did_autostart_on_login(environment,monkeypatch):
+    # The waiting controller is an add-on; a damaged policy file must not stop
+    # the login entry from starting committed DID screens.
+    paths,host,release,config,*_=enable(environment)
+    config=replace(config,url='https://example.com/did',autostart=True)
+    coverage.policy_path(paths).write_text('{"protocol": "broken"}')
+    monkeypatch.setattr(display.os,'getuid',lambda:1000)
+    monkeypatch.setattr(display,'_session_connection',lambda host,paths:host)
+    monkeypatch.setattr(display,'_workspace_policy',lambda *a,**kw:{'state':'ok','exit_code':0})
+    started=[]
+    monkeypatch.setattr(display,'_session_target_start',lambda context,*a: started.append(context.target_id) or 0)
+    monkeypatch.setattr(coverage,'ensure',lambda *a: pytest.fail('broken policy must not start the waiting service'))
+    assert display.session_start(config=config,home=paths.at('/home/user'),host=host,paths=paths,environment={})==0
+    assert started

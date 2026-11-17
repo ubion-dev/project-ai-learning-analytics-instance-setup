@@ -1427,8 +1427,15 @@ def session_start(*, config=None, home=None, host=None, paths=None, environment=
             except (OSError, ValueError, RuntimeError, KeyError):
                 log('configuration', 'selection_rejected', 1)
                 codes.append(1)
-    from .screen_coverage import enabled as coverage_enabled
-    if not targets and not initializing and not coverage_enabled(config, paths):
+    from .screen_coverage import enabled as coverage_policy
+    try:
+        coverage_enabled = coverage_policy(config, paths)
+    except (OSError, ValueError, RuntimeError):
+        # The waiting controller is an add-on: an unreadable policy must not
+        # stop committed DID screens from starting at login.
+        log('coverage', 'policy_unreadable', 1)
+        coverage_enabled = False
+    if not targets and not initializing and not coverage_enabled:
         if not codes:
             log('configuration','disabled')
         return 1 if codes else 0
@@ -1467,8 +1474,8 @@ def session_start(*, config=None, home=None, host=None, paths=None, environment=
         # A workspace policy failure must not stop or replace existing Chrome.
         # The read-only workspace checks retain its unresolved settings.
         log('workspace', 'unknown', 1)
-    from .screen_coverage import enabled as coverage_enabled, ensure as ensure_coverage
-    if coverage_enabled(config, paths):
+    from .screen_coverage import ensure as ensure_coverage
+    if coverage_enabled:
         try:
             result = ensure_coverage(config, home, host, paths)
             log('coverage', result.get('state', 'unknown'), result.get('exit_code', 2))
