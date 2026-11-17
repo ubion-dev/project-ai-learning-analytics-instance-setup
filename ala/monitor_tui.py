@@ -1,5 +1,6 @@
 """Directional monitor settings; the observed layout is shown on the main tab."""
 from copy import deepcopy
+from time import monotonic
 
 from rich.text import Text
 from textual import on
@@ -88,6 +89,7 @@ class MonitorSettings(MessagePump):
         self.draft = None; self.syncing = False; self.busy = False; self.operation = None
         self.operation_state = None; self.polling = False; self.persistent = True
         self.trial_supported = False
+        self.deadline = None
         self._select_options = {}
         self._remote_context = None
 
@@ -155,7 +157,7 @@ class MonitorSettings(MessagePump):
         try:
             operation = await self.service.call('monitor-layout-status')
             if operation.get('state') not in {'none', 'confirmed', 'rolled_back', 'not_applied'}:
-                self.operation = operation.get('operation_id'); self.operation_state = operation.get('state')
+                self.operation = operation.get('operation_id'); self.track(operation)
                 self.message(operation.get('reason') or '진행·복구 상태를 확인하세요.'); self.update_controls(); return
             settings = await self.service.call('monitor-layout-state')
             self.trial_supported = bool(settings.get('trial_supported'))
@@ -231,9 +233,15 @@ class MonitorSettings(MessagePump):
                 self.query_one('#monitor-review', Button).disabled = True
         waiting = self.operation_state == 'awaiting_confirmation'
         self.query_one('#monitor-confirm-buttons').display = waiting or self.operation_state == 'recovery_required'
-        self.query_one('#monitor-keep', Button).disabled = not waiting or self.busy
+        keep = self.query_one('#monitor-keep', Button)
+        keep.disabled = not waiting or self.busy
+        remaining = (max(0, int(self.deadline - monotonic() + 0.999))
+                     if waiting and isinstance(self.deadline, (int, float)) else None)
+        keep.label = '이 배치 유지' + (f' · {remaining}초 남음' if remaining is not None else '')
         self.query_one('#monitor-revert', Button).disabled = self.busy
         self.query_one('#monitor-revert', Button).label = '복구 재시도' if self.operation_state == 'recovery_required' else '원래 배치로 복원'
+        # Closing during a trial requests the revert; say so on the button.
+        self.query_one('#monitor-close', Button).label = ('복원 후 ' if waiting else '') + ('접기' if self.inline else '닫기')
         if self.inline:
             selected = self.draft.selected if self.draft else None
             ids = sorted(o['id'] for o in self.draft.request['outputs']) if self.draft else []
@@ -271,18 +279,46 @@ class MonitorSettings(MessagePump):
         try:
             result = await self.service.call('monitor-layout-status')
             if result.get('operation_id') != self.operation:
-                raise RuntimeError('배치 작업이 변경됐습니다. 다시 조회하세요.')
-            self.operation_state = result.get('state')
+                # Refresh is disabled while an operation is tracked; adopt the
+                # current record instead of locking every control.
+                self.operation = None; self.operation_state = None; self.deadline = None
+                await self.panel.refresh_state(wait=True)
+                await self.load()
+                if not self.operation:
+                    self.message('배치 작업이 다른 작업으로 바뀌어 최신 상태를 다시 조회했습니다.')
+                return
+            self.track(result)
             self.message(result.get('reason') or self.operation_state)
             if self.operation_state in {'confirmed', 'rolled_back', 'not_applied'}:
-                message = result.get('reason') or ''
-                self.operation = None
+                # A revert must never read like a kept layout, and the inline
+                # message line may be scrolled away from the confirm buttons.
+                headline, severity = {
+                    'confirmed': ('배치 확정 · 적용한 배치를 유지합니다.', 'information'),
+                    'rolled_back': ('배치 복원 · 변경이 적용되지 않았습니다.', 'warning'),
+                    'not_applied': ('배치 미적용 · 변경이 적용되지 않았습니다.', 'warning'),
+                }[self.operation_state]
+                message = ' '.join(filter(None, (headline, result.get('reason'))))
+                self.operation = None; self.deadline = None
                 await self.panel.refresh_state(wait=True)
                 await self.load()
                 self.message(message)
+                self.app.notify(message, severity=severity, timeout=10)
         except Exception as exc: self.message(str(exc))
         finally:
             self.polling = False; self.update_controls()
+
+    def track(self, status):
+        previous = self.operation_state
+        self.operation_state = status.get('state')
+        self.deadline = status.get('deadline_monotonic') if self.operation_state == 'awaiting_confirmation' else None
+        if self.operation_state == 'awaiting_confirmation' and previous != self.operation_state:
+            # The trial reverts on its own; the pending decision takes focus.
+            self.call_after_refresh(self.focus_keep)
+
+    def focus_keep(self):
+        keep = self.query_one('#monitor-keep', Button)
+        if self.operation_state == 'awaiting_confirmation' and keep.display and not keep.disabled:
+            keep.focus()
 
     async def apply(self, accepted, request, persistent):
         if not accepted or self.operation or self.busy:
@@ -290,8 +326,9 @@ class MonitorSettings(MessagePump):
         self.busy = True; self.update_controls()
         try:
             result = await self.service.call('monitor-layout-submit', {'layout': request, 'persistent': persistent})
-            self.operation = result.get('operation_id'); self.operation_state = result.get('state')
-            self.message(result.get('reason') or '배치 적용 상태를 확인하세요.')
+            self.operation = result.get('operation_id'); self.track(result)
+            self.message(result.get('reason') or ('변경 사항이 없어 모니터 배치를 적용하지 않았습니다.'
+                         if result.get('state') == 'unchanged' else '배치 적용 상태를 확인하세요.'))
         except Exception as exc: self.message(str(exc))
         finally:
             self.busy = False; self.update_controls()
@@ -330,7 +367,7 @@ class MonitorSettings(MessagePump):
                     fallback = '로그인 복원을 껐습니다.' if key.endswith('disable') else '저장 배치 복원 상태를 확인하세요.'
                     self.message(result.get('reason') or fallback)
                     if result.get('operation_id'):
-                        self.operation = result['operation_id']; self.operation_state = result.get('state')
+                        self.operation = result['operation_id']; self.track(result)
                 except Exception as exc: self.message(str(exc))
                 finally: self.busy = False; self.update_controls()
             elif key == 'monitor-undo':

@@ -361,3 +361,21 @@ def test_swap_of_adjacent_screens_with_an_offset_keeps_them_touching(axis):
         assert rects['DP-2']['x'] == 0 and rects['DP-1']['x'] == 1280
     else:
         assert rects['DP-2']['y'] == 0 and rects['DP-1']['y'] == 720
+
+
+def test_unchanged_session_trial_says_nothing_was_applied():
+    class Unchanged(Service):
+        async def call(self, action, payload=None):
+            if action == 'monitor-layout-submit':
+                self.calls.append((action, deepcopy(payload)))
+                return {'state': 'unchanged', 'persistent': False}
+            return await super().call(action, payload)
+    async def scenario():
+        service = Unchanged(); app = EditorApp(service)
+        async with app.run_test(size=(100, 36)) as pilot:
+            await pilot.pause(); editor = app.screen
+            await editor.apply(True, deepcopy(editor.draft.request), False); await pilot.pause()
+            message = str(editor.query_one('#monitor-message').render())
+            assert '변경 사항이 없어' in message and editor.operation is None
+            assert not editor.query_one('#monitor-review', Button).disabled
+    asyncio.run(scenario())

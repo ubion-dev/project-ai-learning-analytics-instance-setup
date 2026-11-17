@@ -315,3 +315,16 @@ def test_swap_request_message_tracks_the_persisted_completion_after_poll():
             assert '두 화면 교환 · 완료' in panel.messages['default']
             assert '접수' not in panel.messages['default']
     asyncio.run(scenario())
+
+
+def test_quick_diagnosis_sends_unregistered_did_to_setup_not_logs_or_start():
+    from types import SimpleNamespace
+    from ala.quick_tui import QuickPanel
+    target = {'id': 'display-2', 'autostart': True,
+              'service': {'ActiveState': 'inactive', 'LoadState': 'not-found', 'MainPID': '0'}}
+    reason, action, _, _, button, _ = diagnosis({'session': 'ok'}, target)
+    assert '미등록' in reason and '간편 설정' in action and button is None
+    panel = SimpleNamespace(report={'session': 'ok'})
+    assert QuickPanel.control(panel, target) is None
+    target['service']['QueryError'] = 'synthetic query failure'
+    assert '미등록' not in diagnosis({'session': 'ok'}, target)[0]
