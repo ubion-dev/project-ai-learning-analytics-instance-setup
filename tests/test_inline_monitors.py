@@ -153,3 +153,41 @@ def test_compact_remote_keyboard_is_local_and_select_fields_keep_arrow_navigatio
             assert controls.draft.request==before
             assert service.monitors.calls==[('monitor-layout-status',None),('monitor-layout-state',None)]
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize('size', [(80, 24), (120, 36)])
+@pytest.mark.parametrize('outcome', ['confirmed', 'rolled_back'])
+def test_inline_trial_focuses_visible_countdown_and_reports_revert_distinctly(size, outcome):
+    import time
+    async def scenario():
+        service = Service(); app = SimpleApp(service=service, initial_section='screens')
+        notes = []
+        app.notify = lambda message, **kwargs: notes.append((str(message), kwargs.get('severity')))
+        async with app.run_test(size=size) as pilot:
+            await pilot.pause()
+            await pilot.click('#screens-monitor-layout'); await pilot.pause()
+            controls = app.query_one(MonitorControls)
+            controls.draft.place('DP-1', 'below', 'DP-2'); controls.sync_fields()
+            controls.query_one('#monitor-review', Button).focus(); await pilot.press('enter'); await pilot.pause()
+            await pilot.click('#layout-review-apply'); await pilot.pause()
+            service.monitors.operation['deadline_monotonic'] = time.monotonic() + 25
+            await controls.poll(); await pilot.pause(); await pilot.pause()
+            keep = controls.query_one('#monitor-keep', Button)
+            # The 30-second decision is reachable without scrolling or hunting for it;
+            # the focused button must not be the one that reverts on Enter.
+            assert app.focused is keep
+            assert 0 <= keep.region.y and keep.region.bottom <= size[1]
+            assert '초' in str(keep.label)
+            service.monitors.operation.update(state=outcome, reason='적용 전 실제 모니터 배치를 다시 확인했습니다.'
+                                              if outcome == 'rolled_back' else '현재 세션의 모니터 배치를 확인했습니다.')
+            await controls.poll(); await pilot.pause()
+            assert controls.operation is None
+            message = str(controls.query_one('#monitor-message', Static).render())
+            assert notes, 'the final result must be visible even when the message line is scrolled away'
+            if outcome == 'rolled_back':
+                assert '복원' in message and '적용되지 않' in message
+                assert '복원' in notes[-1][0] and notes[-1][1] == 'warning'
+            else:
+                assert '확정' in message and '복원' not in message
+                assert notes[-1][1] == 'information'
+    asyncio.run(scenario())
