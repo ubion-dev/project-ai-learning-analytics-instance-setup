@@ -500,9 +500,18 @@ def _stop_all(store,value,control,clock,pause):
 
 def _ready(store,value,selections,targets,control,clock,pause,*,stable=False):
     deadline=clock()+(60 if stable else 90)
+    waiting=[]
+    def blame():
+        # Name the target that was not ready, not the last one started.
+        if waiting:
+            with change_lock(store.paths,blocking=True):
+                latest=store.load(value['operation_id'])
+                latest['current_target']=waiting[0]
+                store.save(latest)
     while clock()<deadline:
         latest=store.load(value['operation_id'])
         ready=True
+        waiting=[]
         for target in targets:
             if target in latest['stop_requests']:
                 continue
@@ -512,13 +521,17 @@ def _ready(store,value,selections,targets,control,clock,pause,*,stable=False):
             # budget made the last stable check time out on healthy screens.
             report=control(store,target,'check',selection,timeout=CHECK_TIMEOUT)
             model=Config.from_dict(store.runtime._validate_selection(selection)).for_screen(target)
-            ready &= code_ready(report,selection['version'],selection['revision'],setup=model.url is None)
+            if not code_ready(report,selection['version'],selection['revision'],setup=model.url is None):
+                ready=False
+                waiting.append(target)
         if ready and not stable:
             return
         if not ready and stable:
+            blame()
             raise RuntimeError('안내 화면 안정 관측 실패')
         pause(min(1,max(0,deadline-clock())))
     if not stable:
+        blame()
         raise RuntimeError('화면 실행·문서·배치 후조건 확인 시간 초과')
 
 

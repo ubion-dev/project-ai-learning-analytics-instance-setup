@@ -23,6 +23,7 @@ from . import __version__
 from .system import Paths, atomic_json
 
 INTERVAL = 30
+STUCK_WINDOW_SECONDS = 30
 TIMEOUT = 5
 FAILURES = 3
 SUCCESSES = 2
@@ -238,6 +239,8 @@ class Supervisor:
         self.setup_context_callback = setup_context_callback
         self._setup_url = None
         self._next_placement = 0
+        self._stuck_window = None
+        self.relaunch_requested = False
         self._next_frontend_observation = 0
         self.paths = paths or Paths()
         self.opener = opener
@@ -619,7 +622,32 @@ class Supervisor:
         except (OSError, ValueError, RuntimeError, TypeError, KeyError, AttributeError):
             value = {'state': 'unknown', 'reason': '관리 창 배치를 확인하지 못했습니다.'}
         self.value['placement'] = value
+        self._track_stuck_window(value)
         self._save()
+
+    def _track_stuck_window(self, value):
+        # On a real GNOME 49 device a Chrome window created during login kept
+        # an invalid geometry and ignored every move, while a fresh browser was
+        # placed at once. Only one observed window that stays unchanged and
+        # unplaced counts; progress, success or no window resets the timer.
+        windows = value.get('windows') if isinstance(value, dict) else None
+        if value.get('state') != 'pending' or not isinstance(windows, list) or len(windows) != 1:
+            self._stuck_window = None
+            return
+        window = windows[0] if isinstance(windows[0], dict) else {}
+        expected, rect = value.get('expected'), window.get('rect')
+        if (not isinstance(expected, dict) or not isinstance(rect, dict) or
+                all(isinstance(rect.get(k), int) and isinstance(expected.get(k), int)
+                    and abs(rect[k] - expected[k]) <= 2 for k in ('x', 'y', 'width', 'height'))):
+            # Only a window away from its target rectangle; a correctly placed
+            # window pending for another reason (e.g. workspace) is kept.
+            self._stuck_window = None
+            return
+        key = json.dumps([window.get('id'), window.get('rect'), window.get('fullscreen')], sort_keys=True)
+        if self._stuck_window is None or self._stuck_window[0] != key:
+            self._stuck_window = (key, self.monotonic())
+        elif self.monotonic() - self._stuck_window[1] >= STUCK_WINDOW_SECONDS:
+            self.relaunch_requested = True
 
     def event(self, event):
         method, params = event.get('method'), event.get('params', {})
@@ -746,6 +774,10 @@ class Supervisor:
                 self.control_tick()
                 self.frontend_tick()
                 self.placement_tick()
+                if self.relaunch_requested:
+                    # Exit non-zero: the unit's Restart=always starts a fresh
+                    # browser after RestartSec; StartLimitBurst still bounds it.
+                    raise CDPError('관리 창이 배치 요청에 응답하지 않아 표시용 Chrome을 다시 시작합니다.')
             self._mark_stopped()
             return 0
         except (CDPError, OSError, ValueError, KeyError, IndexError, StopIteration, TypeError, AttributeError) as exc:
