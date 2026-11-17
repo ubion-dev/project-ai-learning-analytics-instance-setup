@@ -172,11 +172,21 @@ function fakeWindow(target='first',options={}) {
         move_to_monitor(index) {
             this.calls.push(['monitor',index]);
             const m=Main.layoutManager.monitors[index];
+            // Device: the move-to-monitor path re-fullscreens on the target
+            // output; the client must take the fullscreen size.
+            if (this.fullscreen) {
+                this.monitor=index;
+                this.configure(this.fullscreenBounds || m);
+                return;
+            }
             this.configure({...this.rect,x:m.x,y:m.y+24});
         },
         move_resize_frame(user,x,y,width,height) {
             this.calls.push(['resize',user,x,y,width,height]);
             let rect={x,y,width,height};
+            // Device: a normal-state size is only a suggestion; Chrome kept
+            // its own size and the compositor never reached the request.
+            if (this.ownSize && !this.fullscreen) return;
             // Observed on a GNOME 49.4 test device: a fullscreen window stays
             // on its current monitor and ignores move/resize requests.
             if (this.fullscreen)
@@ -225,7 +235,7 @@ def run_extension(scenario, version='47.4'):
 
 
 @pytest.mark.parametrize('version', ['47.4', '49.0'])
-def test_waits_for_destination_before_fullscreen_and_does_not_touch_other_windows(version):
+def test_fullscreens_then_hands_window_to_destination_without_touching_others(version):
     run_extension("""
 const extension=new AlaDisplay(); extension.enable();
 const window=fakeWindow();
@@ -236,7 +246,7 @@ await sleep(150);
 assert.deepEqual(window.rect,request().rect);
 assert.equal(window.monitor,1);
 assert.equal(result.state,'ok');
-assert.deepEqual(window.calls.filter(c => c[0]==='fullscreen'),[['fullscreen',1]]);
+assert.deepEqual(window.calls.filter(c => ['fullscreen','monitor','resize','move'].includes(c[0])),[['fullscreen',0],['monitor',1]]);
 assert.deepEqual(other.calls,[]); assert.deepEqual(ordinary.calls,[]);
 assert.equal((await invoke(extension,'Inspect',request())).windows.length,1);
 extension.disable(); assert.equal(timers.size,0);
@@ -244,15 +254,14 @@ extension.disable(); assert.equal(timers.size,0);
 
 
 @pytest.mark.parametrize('version', ['47.4', '49.0'])
-def test_fullscreen_window_on_wrong_monitor_leaves_fullscreen_moves_and_reenters(version):
+def test_fullscreen_window_on_wrong_monitor_is_handed_to_target_without_leaving_fullscreen(version):
     run_extension("""
 const extension=new AlaDisplay(); extension.enable();
 const window=fakeWindow('first',{fullscreen:true,rect:{...Main.layoutManager.monitors[0]}});
 assert.equal((await invoke(extension,'Place',request())).state,'ok');
 assert.deepEqual(window.rect,request().rect);
 assert.equal(window.fullscreen,true);
-assert.deepEqual(window.calls.map(c => c[0]),['unfullscreen','unmaximize','resize','fullscreen']);
-assert.deepEqual(window.calls.at(-1),['fullscreen',1]);
+assert.deepEqual(window.calls,[['monitor',1]]);
 window.calls=[];
 assert.equal((await invoke(extension,'Place',request())).state,'ok');
 assert.deepEqual(window.calls,[]);
@@ -269,7 +278,7 @@ const window=fakeWindow('first',{fullscreen:true,rect:{...Main.layoutManager.mon
 const other=fakeWindow('second');
 assert.equal((await invoke(extension,'Place',request())).state,'pending');
 assert.deepEqual(window.rect,window.fullscreenBounds);
-assert.deepEqual(window.calls.map(c => c[0]),['unfullscreen','unmaximize','resize','fullscreen']);
+assert.deepEqual(window.calls,[['monitor',1]]);
 assert.deepEqual(other.calls,[]);
 extension.disable(); assert.equal(timers.size,0);
 """, version)
@@ -344,7 +353,7 @@ const observed=await invoke(extension,'Inspect',req);
 assert.equal(observed.state,'ok'); assert.deepEqual(window.calls,[]);
 assert.equal((await invoke(extension,'Place',req)).state,'pending');
 assert.equal((await first).state,'ok');
-assert.equal(window.calls.filter(c => c[0]==='resize').length,1);
+assert.equal(window.calls.filter(c => c[0]==='monitor').length,1);
 assert.equal(window.calls.filter(c => c[0]==='fullscreen').length,1);
 extension.disable(); assert.equal(timers.size,0);
 """)
@@ -359,17 +368,18 @@ extension.disable(); assert.equal(timers.size,0);
     'actors.push(fakeWindow("first",{id:3}))',
     'extension.disable()',
 ])
-def test_invalidated_pending_resize_never_enters_fullscreen(change):
+def test_invalidated_pending_placement_makes_no_further_window_change(change):
     run_extension(f"""
 const extension=new AlaDisplay(); extension.enable();
 const window=fakeWindow('first',{{delay:200}}),req=request();
 const pending=invoke(extension,'Place',req);
 await sleep(30);
-assert.equal(window.calls.filter(c => c[0]==='resize').length,1);
+assert.equal(window.calls.filter(c => c[0]==='monitor').length,1);
+const before=window.calls.length;
 {change};
 assert.notEqual((await pending).state,'ok');
 await sleep(220);
-assert.equal(window.calls.filter(c => c[0]==='fullscreen').length,0);
+assert.equal(window.calls.length,before);
 extension.disable(); assert.equal(timers.size,0);
 """)
 
@@ -396,10 +406,7 @@ const extension=new AlaDisplay(); extension.enable();
 const window=fakeWindow('first',{stalled:true}),req=request(),start=Date.now();
 assert.equal((await invoke(extension,'Place',req)).state,'pending');
 assert.ok(Date.now()-start<2500);
-assert.equal(window.calls.filter(c => c[0]==='fullscreen').length,0);
 assert.equal(timers.size,0); assert.equal(extension._placements.size,0);
-window.stalled=false;
-assert.equal((await invoke(extension,'Place',req)).state,'ok');
 extension.disable();
 """)
 
@@ -465,7 +472,6 @@ const pending=invoke(extension,'Place',req);
 await sleep(30);
 window.children=[other];
 assert.equal((await pending).state,'blocked');
-assert.equal(window.calls.filter(c => c[0]==='fullscreen').length,0);
 {'assert.deepEqual(window.calls,[]);' if phase == 'query' else ''}
 assert.deepEqual(other.calls,[]);
 extension.disable(); assert.equal(timers.size,0);
@@ -482,7 +488,6 @@ const pending=invoke(extension,'Place',req);
 await sleep(30);
 window.get_transient_for=() => {{throw new Error('unmanaged');}};
 assert.equal((await pending).state,'unknown');
-assert.equal(window.calls.filter(c => c[0]==='fullscreen').length,0);
 {'assert.deepEqual(window.calls,[]);' if phase == 'query' else ''}
 extension.disable(); assert.equal(timers.size,0);
 """)
@@ -556,15 +561,16 @@ extension.disable(); assert.equal(signals.size,0);
     'activeWorkspace=workspaces[1]',
     'window.workspace=workspaces[1]',
 ])
-def test_workspace_change_during_geometry_wait_does_not_enter_fullscreen(change):
+def test_workspace_change_during_geometry_wait_makes_no_further_change(change):
     run_extension(f"""
 const extension=new AlaDisplay(); extension.enable();
 const window=fakeWindow('first',{{delay:200}});
 const pending=invoke(extension,'Place',request());
-await sleep(30); assert.equal(window.calls.filter(c => c[0]==='resize').length,1);
+await sleep(30); assert.equal(window.calls.filter(c => c[0]==='monitor').length,1);
+const before=window.calls.length;
 {change};
 assert.equal((await pending).state,'pending');
-assert.equal(window.calls.filter(c => c[0]==='fullscreen').length,0);
+assert.equal(window.calls.length,before);
 assert.equal(window.calls.filter(c => c[0]==='workspace').length,0);
 extension.disable(); assert.equal(timers.size,0);
 """)
@@ -614,6 +620,35 @@ const window=fakeWindow('first',{stalled:true}),wallClock=Date.now,start=process
 setTimeout(() => {Date.now=() => wallClock()-86400000;},25);
 assert.equal((await invoke(extension,'Place',request())).state,'pending');
 assert.ok(Number(process.hrtime.bigint()-start)/1e6<2500);
-assert.equal(window.calls.filter(c => c[0]==='fullscreen').length,0);
+extension.disable(); assert.equal(timers.size,0);
+""")
+
+
+@pytest.mark.parametrize('version', ['47.4', '49.0'])
+@pytest.mark.parametrize('start', [{'rect':{'x':0,'y':0,'width':500,'height':46}},
+                                   {'rect':{'x':100,'y':100,'width':1270,'height':700}},
+                                   {'rect':{'x':0,'y':0,'width':1920,'height':1080}}])
+def test_client_chosen_normal_size_still_reaches_fullscreen_on_target(version, start):
+    # GNOME 49 device: after login Chrome kept its own normal-state size
+    # (500x46 or its saved size), so an exact work-area wait never ended.
+    run_extension(f"""
+const extension=new AlaDisplay(); extension.enable();
+const window=fakeWindow('first',{{ownSize:true,...{json.dumps(start)}}});
+assert.equal((await invoke(extension,'Place',request())).state,'ok');
+assert.deepEqual(window.rect,request().rect);
+assert.equal(window.fullscreen,true);
+assert.equal(window.calls.filter(c => c[0]==='resize').length,0);
+assert.deepEqual(window.calls.at(-1),['monitor',1]);
+extension.disable(); assert.equal(timers.size,0);
+""", version)
+
+
+def test_oversized_normal_window_reaches_target_through_fullscreen():
+    run_extension("""
+const extension=new AlaDisplay(); extension.enable();
+const window=fakeWindow('first',{ownSize:true,rect:{x:0,y:0,width:1920,height:1080}});
+assert.equal((await invoke(extension,'Place',request())).state,'ok');
+assert.deepEqual(window.rect,request().rect);
+assert.equal(window.calls.filter(c => c[0]==='resize' || c[0]==='move').length,0);
 extension.disable(); assert.equal(timers.size,0);
 """)
