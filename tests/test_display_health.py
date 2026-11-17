@@ -435,3 +435,61 @@ def test_spawn_maps_high_private_fds_to_three_and_four_without_preexec():
     transport.close()
     assert len(calls)==1
     assert not any('remote-debugging-port' in arg for arg in calls[0][1])
+
+
+EXPECTED = {'x': 6400, 'y': 0, 'width': 3840, 'height': 2160}
+
+
+def stuck_window(rect):
+    return {'state': 'pending', 'confirmed_window_count': 1, 'reason': '실제 창 배치 적용·확인을 기다립니다.',
+            'expected': dict(EXPECTED), 'windows': [{'id': 1, 'rect': rect, 'fullscreen': False}]}
+
+
+def test_window_stuck_unplaced_after_login_relaunches_through_systemd(fixture):
+    # Real device: a Chrome window created during GNOME login kept an invalid
+    # geometry and ignored every move; a fresh browser placed correctly.
+    supervisor,_,clock,_=healthy(fixture)
+    supervisor.placement_callback=lambda value: stuck_window({'x':0,'y':0,'width':500,'height':46})
+    for _ in range(12):
+        supervisor.placement_tick()
+        clock.now+=5
+    supervisor.placement_tick()
+    assert supervisor.relaunch_requested
+    assert supervisor.value['placement']['state']=='pending'
+
+
+@pytest.mark.parametrize('change',['moving','placed','no_window','in_place_other_reason'])
+def test_progressing_or_unobservable_placement_never_relaunches(fixture,change):
+    supervisor,_,clock,_=healthy(fixture)
+    step={'n':0}
+    def placement(value):
+        step['n']+=1
+        if change=='moving':
+            return stuck_window({'x':step['n'],'y':0,'width':500,'height':46})
+        if change=='placed':
+            return {'state':'ok','confirmed_window_count':1,'windows':[{'id':1,'rect':{'x':0,'y':0,'width':10,'height':10}}]}
+        if change=='in_place_other_reason':
+            return stuck_window(dict(EXPECTED)) | {'reason':'현재 작업 공간에 있는 관리 창인지 확인할 수 없습니다.'}
+        return {'state':'pending','confirmed_window_count':None,'windows':[]}
+    supervisor.placement_callback=placement
+    for _ in range(30):
+        supervisor.placement_tick()
+        clock.now+=5
+    assert not supervisor.relaunch_requested
+
+
+def test_relaunch_request_ends_the_run_non_zero_for_systemd_restart(fixture):
+    supervisor,_,clock,_=fixture
+    original=supervisor.transport_factory
+    def factory(argv):
+        browser=original(argv)
+        def next_event(timeout=1):
+            clock.now+=5
+            return None
+        browser.next_event=next_event
+        return browser
+    supervisor.transport_factory=factory
+    supervisor.placement_callback=lambda value: stuck_window({'x':0,'y':0,'width':500,'height':46})
+    assert supervisor.run()==1
+    assert supervisor.value['state']=='failed' and '다시 시작' in supervisor.value['reason']
+    assert supervisor.browser.closed
