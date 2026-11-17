@@ -406,3 +406,47 @@ def test_timer_disable_failure_does_not_undo_committed_configuration(fixture,mon
     assert result['state']=='completed' and result['decision']=='commit'
     assert result['schedule_warning']
     assert all(s.url is None for s in Config.load(fixture[0].config).screen_targets())
+
+
+@pytest.mark.parametrize('duration', [.4, 2.5])
+def test_stable_observation_gives_each_check_a_full_query_budget(fixture, duration):
+    # A real check takes time; the last check of the 60 s window must not get
+    # only the window's remainder and fail as a query timeout.
+    clock=fixture[2]
+    request=submit(fixture)
+    control,_=controller(fixture)
+    budgets=[]
+    def timed(store,target,action,selection,**kwargs):
+        report=control(store,target,action,selection,**kwargs)
+        if action=='check':
+            budgets.append(kwargs['timeout'])
+            clock.sleep(duration)
+            if kwargs['timeout']<duration:
+                report=dict(report,placement={'state':'unknown','reason':'조회 제한 시간 초과'})
+        return report
+    result=execute(fixture,request['operation_id'],control=timed)
+    assert result['state']=='completed',result
+    assert min(budgets)>=5
+
+
+def test_status_reports_running_while_requested_recovery_executes(fixture):
+    # The TUI showed "recovery required" for the whole recovery run.
+    paths,host=fixture[0],fixture[1]
+    request=submit(fixture)
+    control,_=controller(fixture)
+    def blocked(store,target,action,selection,**kwargs):
+        if action=='stop':
+            return {'state':'blocked','exit_code':1}
+        return control(store,target,action,selection,**kwargs)
+    assert execute(fixture,request['operation_id'],control=blocked)['state']=='recovery_required'
+    store=reset.Store(paths,host)
+    host.units.discard(store.load(request['operation_id'])['unit'])
+    host.units.add('ala-display-reset-recover.service')
+    seen=[]
+    def hook(store,target,action,selection):
+        if action=='check':
+            seen.append(reset.status(paths=paths,host=host)['state'])
+    control,_=controller(fixture,hook)
+    result=execute(fixture,request['operation_id'],control=control,recovering=True)
+    assert result['state']=='rolled_back' and not result.get('next_action')
+    assert seen and set(seen)=={'running'}

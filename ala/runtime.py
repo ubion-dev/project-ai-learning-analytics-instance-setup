@@ -723,6 +723,9 @@ def _prepare_nightly_selection(store, target):
         return state
 
 
+CHECK_TIMEOUT = 5
+
+
 def apply_target(target, *, paths=None, host=None, control=None, monotonic=None, sleep=None,
                  unit='ala-runtime-nightly.service', settings_operation_id=None, preserve_screen_settings=False):
     """Observe outside the root lock; commit only the same live generation.
@@ -772,6 +775,10 @@ def apply_target(target, *, paths=None, host=None, control=None, monotonic=None,
             remaining = deadline - clock()
             if remaining <= 0:
                 raise RuntimeError('화면 전환 단계의 제한 시간이 초과됐습니다.')
+            if action == 'check':
+                # The phase deadline bounds the observation window, not one
+                # query; a remainder budget failed healthy stable windows.
+                remaining = max(remaining, CHECK_TIMEOUT)
             return control(action, selection, timeout=min(30, remaining))
 
         if action in {'start', 'stop'}:
@@ -783,7 +790,9 @@ def apply_target(target, *, paths=None, host=None, control=None, monotonic=None,
                 result = run()
         else:
             result = run()
-        if clock() >= deadline:
+        # A check that ends after the window still carries a valid observation;
+        # the caller's loop ends the window. Lifecycle requests keep the limit.
+        if action != 'check' and clock() >= deadline:
             raise RuntimeError('화면 전환 단계의 제한 시간이 초과됐습니다.')
         return result
 

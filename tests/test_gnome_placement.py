@@ -176,17 +176,17 @@ function fakeWindow(target='first',options={}) {
         move_resize_frame(user,x,y,width,height) {
             this.calls.push(['resize',user,x,y,width,height]);
             let rect={x,y,width,height};
-            // Both tagged Mutter versions choose the fullscreen constraint's
-            // logical monitor from the NEW rectangle, not get_monitor(). An
-            // explicit X11 spanning hint overrides that monitor rectangle.
+            // Observed on a GNOME 49.4 test device: a fullscreen window stays
+            // on its current monitor and ignores move/resize requests.
             if (this.fullscreen)
-                rect=this.fullscreenBounds || Main.layoutManager.monitors[monitorForRect(rect)];
+                rect=this.fullscreenBounds || Main.layoutManager.monitors[this.monitor];
             this.configure(rect);
         },
         make_fullscreen() {
             this.calls.push(['fullscreen',this.monitor]);
             this.fullscreen=true;
-            this.configure(Main.layoutManager.monitors[this.monitor]);
+            // An explicit X11 spanning hint overrides the monitor rectangle.
+            this.configure(this.fullscreenBounds || Main.layoutManager.monitors[this.monitor]);
         },
         ...options,
     };
@@ -234,13 +234,15 @@ extension.disable(); assert.equal(timers.size,0);
 
 
 @pytest.mark.parametrize('version', ['47.4', '49.0'])
-def test_fullscreen_move_preserves_fullscreen_and_correct_placement_is_idempotent(version):
+def test_fullscreen_window_on_wrong_monitor_leaves_fullscreen_moves_and_reenters(version):
     run_extension("""
 const extension=new AlaDisplay(); extension.enable();
 const window=fakeWindow('first',{fullscreen:true,rect:{...Main.layoutManager.monitors[0]}});
 assert.equal((await invoke(extension,'Place',request())).state,'ok');
 assert.deepEqual(window.rect,request().rect);
-assert.deepEqual(window.calls,[['resize',false,1920,-180,1280,720]]);
+assert.equal(window.fullscreen,true);
+assert.deepEqual(window.calls.map(c => c[0]),['unfullscreen','unmaximize','resize','fullscreen']);
+assert.deepEqual(window.calls.at(-1),['fullscreen',1]);
 window.calls=[];
 assert.equal((await invoke(extension,'Place',request())).state,'ok');
 assert.deepEqual(window.calls,[]);
@@ -257,7 +259,7 @@ const window=fakeWindow('first',{fullscreen:true,rect:{...Main.layoutManager.mon
 const other=fakeWindow('second');
 assert.equal((await invoke(extension,'Place',request())).state,'pending');
 assert.deepEqual(window.rect,window.fullscreenBounds);
-assert.deepEqual(window.calls,[['resize',false,1920,-180,1280,720]]);
+assert.deepEqual(window.calls.map(c => c[0]),['unfullscreen','unmaximize','resize','fullscreen']);
 assert.deepEqual(other.calls,[]);
 extension.disable(); assert.equal(timers.size,0);
 """, version)

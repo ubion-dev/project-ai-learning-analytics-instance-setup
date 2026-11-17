@@ -21,6 +21,8 @@ MARKER = '# ala managed screen swap recovery v1'
 LEASE = 900
 
 
+CHECK_TIMEOUT = 5
+
 def _now():
     return datetime.now(timezone.utc).isoformat()
 
@@ -431,7 +433,9 @@ def _execute(operation_id, *, paths=None, host=None, control=None, monotonic=Non
                 if not recovery and not _valid(store, latest):
                     raise RuntimeError('화면 교환이 취소됐습니다.')
                 return control(target, action, selection, timeout=min(30, remaining))
-        return control(target, action, selection, timeout=min(30, remaining))
+        # A phase deadline bounds the observation window, not one query: the
+        # last check of a stable window must not fail on a remainder budget.
+        return control(target, action, selection, timeout=min(30, max(remaining, CHECK_TIMEOUT)))
 
     def stop(target, selection, deadline, *, recovery=False):
         while clock() < deadline:

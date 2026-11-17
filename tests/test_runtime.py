@@ -515,3 +515,25 @@ def test_legacy_settings_apply_requires_explicit_code_migration(fixture):
     assert value['state'] == 'pending' and '최초 이전' in value['next_action']
     assert not any(args[0] == 'systemd-run' for args, _ in host.calls)
     assert store.load('default')['operation'] is None
+
+
+@pytest.mark.parametrize('duration', [.4, 2.5])
+def test_stable_observation_gives_each_check_a_full_query_budget(fixture, duration):
+    # On the test device a settings apply failed at the end of the 60 s window
+    # because the last check received only the window's remainder.
+    paths, host, clock, store, *_ = fixture
+    control, _ = controller(paths)
+    budgets = []
+
+    def timed(action, selection, **kwargs):
+        report = control(action, selection, **kwargs)
+        if action == 'check':
+            budgets.append(kwargs['timeout'])
+            clock.sleep(duration)
+            if kwargs['timeout'] < duration:
+                report = dict(report, placement={'state': 'unknown', 'reason': '조회 제한 시간 초과'})
+        return report
+    result = runtime.apply_target('default', paths=paths, host=host, control=timed,
+                                  monotonic=clock, sleep=clock.sleep)
+    assert result['state'] == 'completed', result
+    assert min(budgets) >= 5

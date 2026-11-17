@@ -511,7 +511,16 @@ export default class AlaDisplay extends Extension {
                     window.is_fullscreen() === (request.layout === 'fullscreen') && window.located_on_workspace(workspace);
                 if (correct()) return {state:'ok',windows:[windowData(window)]};
                 const resize = area => window.move_resize_frame(false,area.x,area.y,area.width,area.height);
-                if (request.layout === 'fullscreen' && !window.is_fullscreen()) {
+                if (request.layout === 'fullscreen' && window.is_fullscreen()) {
+                    // A fullscreen window on another monitor ignores
+                    // move/resize; GNOME 49 left it on the primary output
+                    // after a monitor change. Leave fullscreen first and
+                    // then use the same move-then-fullscreen path.
+                    window.unmake_fullscreen();
+                    if (!await this._waitPlacement(operation,() => !window.is_fullscreen())) return pending();
+                    if (!operation.valid()) return pending();
+                }
+                if (request.layout === 'fullscreen') {
                     // Wayland sizes/positions take effect after the client's
                     // configure acknowledgement. Fullscreen only after the
                     // frame really reaches this output, never its old monitor.

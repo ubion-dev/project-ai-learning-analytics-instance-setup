@@ -1261,7 +1261,9 @@ def user_action(action, *, target='default', config=None, home=None, host=None, 
             if not _confirmed_unit_state(after):
                 return {'exit_code':1,'state':'unknown','reason':'중지 요청 후 서비스 상태를 조회하지 못해 종료를 확인할 수 없습니다.',
                         'next_action':'사용자 서비스 연결과 Chrome 상태를 다시 확인하세요.'}
-            if after.get('ActiveState') != 'inactive':
+            # A failed unit has no running supervisor and no pending restart;
+            # systemd keeps it failed on stop, so both mean the service ended.
+            if after.get('ActiveState') not in {'inactive','failed'}:
                 return {'exit_code':1,'state':'blocked','reason':'중지 요청 후 서비스가 중지 상태로 전환되지 않았습니다.',
                         'next_action':'Chrome 로그와 서비스 상태를 확인하세요.'}
         postcondition=_stop_postcondition(config,home,host,paths,evidence)
