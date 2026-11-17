@@ -90,6 +90,18 @@ def ensure(config, home, host, paths):
     running = current.get('ActiveState') in {'active', 'activating'}
     if not running and (current.get('ActiveState') != 'inactive' or current.get('Result') == 'start-limit-hit'):
         return {'state': 'pending', 'exit_code': 2}
+    if not running:
+        # A user manager (e.g. an SSH login) is not a graphical login. Starting
+        # here would exhaust the child retry budget before GNOME is ready; the
+        # GNOME login entry starts the service instead.
+        try:
+            display._manager(host)
+            sessions, _ = display._graphical_sessions(host, os.getuid())
+        except RuntimeError:
+            sessions = None
+        if not sessions or len(sessions) != 1 or sessions[0][1].get('Active') != 'yes':
+            return {'state': 'pending', 'exit_code': 2,
+                    'reason': '활성 GNOME 로그인이 없어 대기 안내 시작을 다음 GNOME 로그인으로 미뤘습니다.'}
     if not running and host.run(['systemctl', '--user', 'daemon-reload']).returncode:
         return {'state': 'pending', 'exit_code': 2}
     loaded = host.run(['systemctl', '--user', 'show', UNIT, '--property=FragmentPath', '--property=LoadState'])
@@ -159,9 +171,14 @@ def frame(config, home, host, paths):
     states, observations = {}, {}
     bounded = display.BudgetHost(host, 8)
     for screen in config.screen_targets():
-        context, state = display._committed_screen(config, screen.id, store)
+        try:
+            context, state = display._committed_screen(config, screen.id, store)
+            suppressed = bool(state and (store.is_stopped(state) or store.active(state)))
+        except (OSError, ValueError, RuntimeError, KeyError):
+            # Like the login entry, isolate one rejected selection: never add a
+            # duplicate on its saved output, but keep covering the others.
+            context, suppressed = config.for_screen(screen.id), True
         context = bound_context(context, inventory)
-        suppressed = bool(state and (store.is_stopped(state) or store.active(state)))
         states[screen.id] = (context, {'suppressed': suppressed})
         if suppressed: continue
         try:
@@ -205,12 +222,21 @@ class Children:
     """Only child handles created here can ever receive terminate()."""
     def __init__(self, spawn, clock=time.monotonic):
         self.spawn, self.clock, self.running, self.attempts = spawn, clock, {}, {}
+        self.retired = set()
 
     def reconcile(self, wanted):
         now = self.clock()
         for output, child in list(self.running.items()):
-            if child.poll() is not None: del self.running[output]
-            elif output not in wanted: child.terminate()
+            if child.poll() is not None:
+                del self.running[output]
+                self.retired.discard(child)
+            elif output not in wanted:
+                if child not in self.retired:
+                    # Stepping aside for a DID or an unplugged output is not a
+                    # crash; only failed windows consume the retry budget.
+                    self.retired.add(child)
+                    if self.attempts.get(output): self.attempts[output].pop()
+                child.terminate()
         for output in wanted:
             if output in self.running: continue
             attempts = [t for t in self.attempts.get(output, []) if now-t < 300]
