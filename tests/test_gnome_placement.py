@@ -106,8 +106,12 @@ const GLib = {
 };
 const actors=[];
 global.get_window_actors=() => actors.map(meta_window => ({meta_window}));
-const workspaces=[{index:() => 0,activate() {throw new Error('must not activate workspace');}},
-                  {index:() => 1,activate() {throw new Error('must not activate workspace');}}];
+function workArea(index) {
+    const m=Main.layoutManager.monitors[index];
+    return {...m,y:m.y+24,height:m.height-24};
+}
+const workspaces=[0,1].map(i => ({index:() => i,activate() {throw new Error('must not activate workspace');},
+    get_work_area_for_monitor:workArea}));
 let activeWorkspace=workspaces[0];
 global.workspace_manager={
     get_active_workspace:() => activeWorkspace,
@@ -154,10 +158,7 @@ function fakeWindow(target='first',options={}) {
         },
         activate() { throw new Error('must not focus or activate managed window'); },
         focus() { throw new Error('must not focus or activate managed window'); },
-        get_work_area_for_monitor(index) {
-            const m=Main.layoutManager.monitors[index];
-            return {...m,y:m.y+24,height:m.height-24};
-        },
+        get_work_area_for_monitor:workArea,
         unmake_fullscreen() { this.calls.push(['unfullscreen']); this.fullscreen=false; },
         unmaximize(...args) { this.calls.push(['unmaximize',...args]); },
         configure(rect) {
@@ -180,6 +181,15 @@ function fakeWindow(target='first',options={}) {
             // on its current monitor and ignores move/resize requests.
             if (this.fullscreen)
                 rect=this.fullscreenBounds || Main.layoutManager.monitors[this.monitor];
+            else {
+                // Mutter's constrain_fully_onscreen (not a user action): a
+                // normal window is clamped and shoved into the work area, so
+                // it never covers the top bar strut.
+                const work=this.get_work_area_for_monitor(monitorForRect(rect));
+                const w=Math.min(width,work.width),h=Math.min(height,work.height);
+                rect={x:Math.min(Math.max(x,work.x),work.x+work.width-w),
+                      y:Math.min(Math.max(y,work.y),work.y+work.height-h),width:w,height:h};
+            }
             this.configure(rect);
         },
         make_fullscreen() {
@@ -274,8 +284,11 @@ Object.assign(Main.layoutManager.monitors[1],{{x:-1537,y:-80,width:1537,height:8
 logical[1][0]=-1537; logical[1][1]=-80; logical[1][2]=1.25;
 const window=fakeWindow('first',{{fullscreen:true}}),req=request();
 req.layout='{layout}';
+const inspected=await invoke(extension,'Inspect',req);
+assert.deepEqual(inspected.work_area,{{x:-1537,y:-56,width:1537,height:840}});
 assert.equal((await invoke(extension,'Place',req)).state,'ok');
-assert.deepEqual(window.rect,{{x:{'-1537' if layout == 'left' else '-769'},y:-80,width:{768 if layout == 'left' else 769},height:864}});
+// The half of the work area: a normal window cannot cover the top bar.
+assert.deepEqual(window.rect,{{x:{'-1537' if layout == 'left' else '-769'},y:-56,width:{768 if layout == 'left' else 769},height:840}});
 assert.equal(window.fullscreen,false);
 assert.equal(window.calls.filter(c => c[0]==='fullscreen').length,0);
 assert.deepEqual(window.calls.find(c => c[0]==='unmaximize').slice(1),{'[3]' if version.startswith('47') else '[]'});

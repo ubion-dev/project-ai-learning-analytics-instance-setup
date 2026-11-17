@@ -335,3 +335,23 @@ def test_unreadable_projection_uses_coordinate_list_without_moving_outputs(condi
     assert '좌표 목록' in drawing
     assert all(box.region.height==2 for box in boxes)
     assert observation==before
+
+
+def test_arrow_key_moves_to_the_adjacent_offset_screen_not_past_it():
+    # A smaller middle screen offset vertically (e.g. a 1440p panel between
+    # two 4K panels) is the right-hand neighbour; the aligned far screen is not.
+    async def scenario():
+        observation = {'output_state': 'ok', 'targets': [], 'logical_outputs': [
+            {'id': 'DP-1', 'connectors': ['DP-1'], 'x': 0, 'y': 0, 'width': 3840, 'height': 2160, 'confirmed': True},
+            {'id': 'HDMI-1', 'connectors': ['HDMI-1'], 'x': 3840, 'y': 382, 'width': 2560, 'height': 1440, 'confirmed': True},
+            {'id': 'DVI-D-1', 'connectors': ['DVI-D-1'], 'x': 6400, 'y': 0, 'width': 3840, 'height': 2160, 'confirmed': True}]}
+        app = MapApp(observation)
+        async with app.run_test(size=(120, 24)) as pilot:
+            await pilot.pause(); view = app.query_one(ScreenMap)
+            assert view.output_regions['HDMI-1'].y > view.output_regions['DP-1'].y
+            view.focus(); view._focused_output = 'DP-1'
+            await pilot.press('right', 'enter'); await pilot.pause()
+            await pilot.press('right', 'enter'); await pilot.pause()
+            await pilot.press('left', 'left', 'enter'); await pilot.pause()
+            assert app.activations == ['HDMI-1', 'DVI-D-1', 'DP-1']
+    asyncio.run(scenario())

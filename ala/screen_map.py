@@ -367,13 +367,22 @@ class ScreenMap(Static, can_focus=True):
 
     def _navigate(self, direction):
         current = next((box for box in self._boxes if box.output_id == self._focused_output), self._boxes[0])
-        x, y = current.region.x, current.region.y
+        here = current.region
+        x, y = here.x, here.y
         candidates = []
         for box in self._boxes:
-            dx, dy = box.region.x - x, box.region.y - y
+            there = box.region
+            dx, dy = there.x - x, there.y - y
             if ((direction == 'left' and dx < 0) or (direction == 'right' and dx > 0)
                     or (direction == 'up' and dy < 0) or (direction == 'down' and dy > 0)):
-                distance = (abs(dy), abs(dx)) if direction in {'left', 'right'} else (abs(dx), abs(dy))
+                # Prefer screens sharing a row (column) even when offset, e.g.
+                # a smaller vertically centred neighbour, then the nearest one.
+                if direction in {'left', 'right'}:
+                    shared = there.y < here.bottom and here.y < there.bottom
+                    distance = (not shared, abs(dx), abs(dy))
+                else:
+                    shared = there.x < here.right and here.x < there.right
+                    distance = (not shared, abs(dy), abs(dx))
                 candidates.append((distance, box))
         if candidates:
             self._focused_output = min(candidates, key=lambda item: item[0])[1].output_id

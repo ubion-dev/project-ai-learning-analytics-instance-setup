@@ -70,14 +70,17 @@ class LayoutDraft:
         if target_id and target_id != source_id:
             target, b = self.output(target_id), boxes[target_id]
             source['x'], source['y'], target['x'], target['y'] = b['x'], b['y'], a['x'], a['y']
-            # Adjacent unequal screens share the same pair footprint after a swap.
-            if a['y'] == b['y'] and a['x'] + a['width'] == b['x']:
+            # Adjacent unequal screens share the same pair footprint after a swap,
+            # also when the smaller one is offset along the shared edge.
+            rows = min(a['y'] + a['height'], b['y'] + b['height']) > max(a['y'], b['y'])
+            columns = min(a['x'] + a['width'], b['x'] + b['width']) > max(a['x'], b['x'])
+            if rows and a['x'] + a['width'] == b['x']:
                 source['x'] = a['x'] + b['width']
-            elif a['y'] == b['y'] and b['x'] + b['width'] == a['x']:
+            elif rows and b['x'] + b['width'] == a['x']:
                 target['x'] = b['x'] + a['width']
-            elif a['x'] == b['x'] and a['y'] + a['height'] == b['y']:
+            elif columns and a['y'] + a['height'] == b['y']:
                 source['y'] = a['y'] + b['height']
-            elif a['x'] == b['x'] and b['y'] + b['height'] == a['y']:
+            elif columns and b['y'] + b['height'] == a['y']:
                 target['y'] = b['y'] + a['height']
         else:
             others = [b for key, b in boxes.items() if key != source_id]
