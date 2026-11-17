@@ -120,7 +120,10 @@ def _card_status(report, output, targets):
         return '화면 작업 진행 중'
     if settings.get('pending'):
         return '설정 적용 대기'
-    state = (target.get('service') or {}).get('ActiveState')
+    service = target.get('service') or {}
+    if service.get('LoadState') == 'not-found' and not service.get('QueryError'):
+        return '미등록 · 간편 설정 필요'
+    state = service.get('ActiveState')
     if state == 'failed' or settings.get('state') in {'failed', 'interrupted'}:
         return '실패 · 로그 확인'
     if state == 'inactive':

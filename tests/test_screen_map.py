@@ -355,3 +355,15 @@ def test_arrow_key_moves_to_the_adjacent_offset_screen_not_past_it():
             await pilot.press('left', 'left', 'enter'); await pilot.pause()
             assert app.activations == ['HDMI-1', 'DVI-D-1', 'DP-1']
     asyncio.run(scenario())
+
+
+def test_unregistered_did_card_points_to_setup_not_stopped():
+    # Matches the settings view: a saved DID without its Chrome unit cannot be
+    # started until setup registers it, so "중지됨" would invite a futile start.
+    from ala.screen_map import _card_status
+    report = {'output_state': 'ok'}
+    output = {'confirmed': True}
+    target = {'service': {'ActiveState': 'inactive', 'LoadState': 'not-found'}, 'settings': {}}
+    assert _card_status(report, output, [target]) == '미등록 · 간편 설정 필요'
+    target['service']['LoadState'] = 'loaded'
+    assert _card_status(report, output, [target]) == '중지됨'
