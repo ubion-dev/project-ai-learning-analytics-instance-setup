@@ -277,7 +277,14 @@ class MonitorSettings(MessagePump):
         try:
             result = await self.service.call('monitor-layout-status')
             if result.get('operation_id') != self.operation:
-                raise RuntimeError('배치 작업이 변경됐습니다. 다시 조회하세요.')
+                # Refresh is disabled while an operation is tracked; adopt the
+                # current record instead of locking every control.
+                self.operation = None; self.operation_state = None; self.deadline = None
+                await self.panel.refresh_state(wait=True)
+                await self.load()
+                if not self.operation:
+                    self.message('배치 작업이 다른 작업으로 바뀌어 최신 상태를 다시 조회했습니다.')
+                return
             self.track(result)
             self.message(result.get('reason') or self.operation_state)
             if self.operation_state in {'confirmed', 'rolled_back', 'not_applied'}:

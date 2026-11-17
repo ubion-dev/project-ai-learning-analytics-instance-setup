@@ -191,3 +191,44 @@ def test_inline_trial_focuses_visible_countdown_and_reports_revert_distinctly(si
                 assert '확정' in message and '복원' not in message
                 assert notes[-1][1] == 'information'
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize('replacement', ['rolled_back', 'awaiting_confirmation'])
+def test_replaced_trial_does_not_lock_controls_with_disabled_refresh(replacement):
+    async def scenario():
+        service = Service(); app = SimpleApp(service=service, initial_section='screens')
+        async with app.run_test(size=(100, 36)) as pilot:
+            await pilot.pause()
+            await pilot.click('#screens-monitor-layout'); await pilot.pause()
+            controls = app.query_one(MonitorControls)
+            controls.draft.place('DP-1', 'below', 'DP-2'); controls.sync_fields()
+            await controls.apply(True, deepcopy(controls.draft.request), True); await pilot.pause()
+            assert controls.operation == 'a' * 32
+            # Another entry point (line terminal, login restore) replaced the record.
+            service.monitors.operation = {'operation_id': 'b' * 32, 'state': replacement, 'reason': '다른 작업'}
+            await controls.poll(); await pilot.pause()
+            if replacement == 'rolled_back':
+                assert controls.operation is None and controls.draft is not None
+                assert not controls.query_one('#monitor-refresh', Button).disabled
+            else:
+                # The live replacement is adopted so it can still be kept or reverted.
+                assert controls.operation == 'b' * 32
+                assert not controls.query_one('#monitor-keep', Button).disabled
+    asyncio.run(scenario())
+
+
+def test_reopening_unchanged_monitor_controls_reads_the_current_layout():
+    async def scenario():
+        service = Service(); app = SimpleApp(service=service, initial_section='screens')
+        async with app.run_test(size=(100, 36)) as pilot:
+            await pilot.pause(); panel = app.query_one(ScreenPanel)
+            await panel.open_monitor_controls(); await pilot.pause()
+            controls = app.query_one(MonitorControls)
+            assert not controls.draft.dirty
+            await controls.action_close_editor(); await pilot.pause()
+            # The scale changed elsewhere (GNOME settings, line terminal, login restore).
+            service.monitors.settings['edit_template']['outputs'][0]['scale'] = 2.0
+            await panel.open_monitor_controls(); await pilot.pause()
+            assert controls.draft.output('DP-1')['scale'] == 2.0
+            assert controls.query_one('#monitor-scale', Select).value == '2.0'
+    asyncio.run(scenario())

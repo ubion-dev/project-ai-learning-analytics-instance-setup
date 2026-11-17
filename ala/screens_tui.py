@@ -955,6 +955,10 @@ class ScreenPanel(Vertical):
                 await self.query_one('#screens-monitor-host').mount(self.monitor_controls)
             else:
                 self.monitor_controls.display = True
+                controls = self.monitor_controls
+                if not controls.operation and not (controls.draft and controls.draft.dirty):
+                    # Only an unsaved draft is worth keeping; otherwise show current values.
+                    await controls.load()
             self.monitor_controls.query_one('#monitor-port', Select).focus(scroll_visible=False)
             self.query_one('#screens-map-scroll', VerticalScroll).scroll_to(y=0, animate=False)
             self.render_report()
