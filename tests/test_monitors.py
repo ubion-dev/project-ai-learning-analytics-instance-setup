@@ -212,3 +212,29 @@ def test_old_extension_missing_workspace_evidence_never_receives_place(monkeypat
     result=monitors.placement(config,health,inventory=inventory,apply=True)
     assert result['state']=='pending' and '재로그인' in result['next_action']
     assert calls==['Inspect']
+
+
+@pytest.mark.parametrize('layout', ['left', 'right'])
+def test_split_on_output_with_top_bar_expects_half_of_the_reported_work_area(monkeypatch, layout):
+    # Mutter keeps a normal window inside the work area. On the primary output
+    # the top bar strut makes the full-height half rectangle unreachable.
+    config=Config(schema_version=2,user='user',screens=(ScreenConfig(output='HDMI-1',layout=layout),)).for_screen()
+    health={'supervisor_pid':10,'browser_pid':20,'supervisor_start_ticks':'100',
+            'browser_start_ticks':'200','boot_id':'test-boot'}
+    rect={'x':0,'y':0,'width':1921,'height':1080}
+    work={'x':0,'y':32,'width':1921,'height':1048}
+    inventory={'state':'ok','logical_outputs':[dict(rect,id='HDMI-1',connectors=['HDMI-1'],confirmed=True)]}
+    half={'x':0 if layout=='left' else 960,'y':32,'width':960 if layout=='left' else 961,'height':1048}
+    calls=[]
+    def bridge(method, request=None, **kwargs):
+        calls.append(method)
+        return {'state':'ok','work_area':work,'windows':[{'id':1,'rect':half,'fullscreen':False,
+                'workspace_index':0,'on_active_workspace':True}]}
+    monkeypatch.setattr(monitors,'bridge',bridge)
+    result=monitors.placement(config,health,inventory=inventory,apply=True)
+    assert result['state']=='ok' and result['expected']==half
+    assert calls==['Inspect']
+    # An older extension without the work area keeps the previous contract.
+    monkeypatch.setattr(monitors,'bridge',lambda *a,**kw:{'state':'ok','windows':[{'id':1,'rect':half,
+        'fullscreen':False,'workspace_index':0,'on_active_workspace':True}]})
+    assert monitors.placement(config,health,inventory=inventory)['expected']['height']==1080

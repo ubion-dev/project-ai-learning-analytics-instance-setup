@@ -218,8 +218,25 @@ def resolve_output(inventory, selector, *, auto=False):
     return {'state':'ok','output':matches[0], 'selector':selector or matches[0]['id']}
 
 
-def desired_rect(output,layout):
+def usable_area(output,work_area):
+    """Clip an output to the extension-reported work area, if one is valid."""
+    x,y,w,h=(int(output[k]) for k in ('x','y','width','height'))
+    if (not isinstance(work_area,dict)
+            or any(type(work_area.get(k)) is not int or not _number(work_area[k]) for k in ('x','y','width','height'))):
+        return {'x':x,'y':y,'width':w,'height':h}
+    left,top=max(x,work_area['x']),max(y,work_area['y'])
+    right=min(x+w,work_area['x']+work_area['width'])
+    bottom=min(y+h,work_area['y']+work_area['height'])
+    if right-left<1 or bottom-top<1:
+        return {'x':x,'y':y,'width':w,'height':h}
+    return {'x':left,'y':top,'width':right-left,'height':bottom-top}
+
+
+def desired_rect(output,layout,work_area=None):
+    """Fullscreen covers the output. Mutter keeps a normal window inside the
+    work area, so split layouts halve the area that excludes the top bar."""
     if layout not in {'fullscreen','left','right'}:raise ValueError('지원하지 않는 배치입니다.')
+    if layout!='fullscreen':output=usable_area(output,work_area)
     x,y,w,h=(int(output[k]) for k in ('x','y','width','height'))
     if layout=='left':w=w//2
     elif layout=='right':x,w=x+w//2,w-w//2
@@ -261,7 +278,7 @@ def placement(config,health,*,host=None,apply=False,inventory=None):
     if len(windows)!=1:
         return {'state':'pending' if not windows else 'blocked','windows':windows,
                 'confirmed_window_count':len(windows),'reason':'관리 창 하나의 생성·식별을 기다립니다.' if not windows else '관리 창이 여러 개여서 임의로 배치하지 않습니다.'}
-    expected=desired_rect(selected,config.layout)
+    expected=desired_rect(selected,config.layout,observed.get('work_area'))
     actual=windows[0].get('rect',{})
     on_active_workspace=windows[0].get('on_active_workspace')
     if type(on_active_workspace) is not bool:

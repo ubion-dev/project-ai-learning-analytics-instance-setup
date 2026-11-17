@@ -144,6 +144,16 @@ function unmaximize(window) {
 function sameRect(left,right) {
     return ['x','y','width','height'].every(k => Math.abs(left[k]-right[k]) <= 2);
 }
+function usableArea(rect,work) {
+    // Mutter keeps a normal (non-fullscreen) window inside the work area, so
+    // a frame may never cover the top bar or another strut of this output.
+    const x=Math.max(rect.x,work.x),y=Math.max(rect.y,work.y);
+    const area={x,y,width:Math.min(rect.x+rect.width,work.x+work.width)-x,
+        height:Math.min(rect.y+rect.height,work.y+work.height)-y};
+    if (!['x','y','width','height'].every(k => Number.isSafeInteger(area[k])) || area.width<1 || area.height<1)
+        throw new Error('work area');
+    return area;
+}
 function layoutRect(rect,layout) {
     const result={...rect};
     if (layout === 'left') result.width=Math.floor(rect.width/2);
@@ -397,7 +407,18 @@ export default class AlaDisplay extends Extension {
         this._handle(invocation,async uid => {
             if (text.length>8192) throw new Error('request');
             const request=JSON.parse(text), browser=validate(request,uid);
-            return {state:'ok',windows:windows(request,uid,browser.ticks).map(windowData)};
+            const result={state:'ok',windows:windows(request,uid,browser.ticks).map(windowData)};
+            const rect=request.rect;
+            const matches=Main.layoutManager.monitors.filter(m => ['x','y','width','height'].every(k => Number.isSafeInteger(rect?.[k]) && rect[k] === m[k]));
+            const workspace=global.workspace_manager.get_active_workspace();
+            if (matches.length === 1 && workspace) {
+                // The split layouts' destination is the usable work area.
+                try {
+                    const work=workspace.get_work_area_for_monitor(Main.layoutManager.monitors.indexOf(matches[0]));
+                    result.work_area=usableArea(rect,{x:work.x,y:work.y,width:work.width,height:work.height});
+                } catch (_) {}
+            }
+            return result;
         });
     }
     ClosedAsync([text],invocation) {
@@ -510,7 +531,9 @@ export default class AlaDisplay extends Extension {
                 }
                 operation.workspaceReady=true;
                 if (!operation.valid()) return pending();
-                const desired=layoutRect(rect,request.layout);
+                const work=window.get_work_area_for_monitor(index);
+                const usable=usableArea(rect,{x:work.x,y:work.y,width:work.width,height:work.height});
+                const desired=request.layout === 'fullscreen' ? rect : layoutRect(usable,request.layout);
                 const correct=() => window.get_monitor() === index && sameRect(window.get_frame_rect(),desired) &&
                     window.is_fullscreen() === (request.layout === 'fullscreen') && window.located_on_workspace(workspace);
                 if (correct()) return {state:'ok',windows:[windowData(window)]};
@@ -528,12 +551,7 @@ export default class AlaDisplay extends Extension {
                     // Wayland sizes/positions take effect after the client's
                     // configure acknowledgement. Fullscreen only after the
                     // frame really reaches this output, never its old monitor.
-                    const work=window.get_work_area_for_monitor(index);
-                    const x=Math.max(rect.x,work.x),y=Math.max(rect.y,work.y);
-                    const seed={x,y,width:Math.min(rect.x+rect.width,work.x+work.width)-x,
-                        height:Math.min(rect.y+rect.height,work.y+work.height)-y};
-                    if (!['x','y','width','height'].every(k => Number.isSafeInteger(seed[k])) || seed.width<1 || seed.height<1)
-                        throw new Error('work area');
+                    const seed=usable;
                     unmaximize(window);
                     resize(seed);
                     if (!await this._waitPlacement(operation,() => window.get_monitor() === index &&
