@@ -325,7 +325,8 @@ class MonitorSettings(MessagePump):
         try:
             result = await self.service.call('monitor-layout-submit', {'layout': request, 'persistent': persistent})
             self.operation = result.get('operation_id'); self.track(result)
-            self.message(result.get('reason') or '배치 적용 상태를 확인하세요.')
+            self.message(result.get('reason') or ('변경 사항이 없어 모니터 배치를 적용하지 않았습니다.'
+                         if result.get('state') == 'unchanged' else '배치 적용 상태를 확인하세요.'))
         except Exception as exc: self.message(str(exc))
         finally:
             self.busy = False; self.update_controls()
