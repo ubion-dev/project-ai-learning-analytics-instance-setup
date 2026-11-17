@@ -450,3 +450,47 @@ def test_status_reports_running_while_requested_recovery_executes(fixture):
     result=execute(fixture,request['operation_id'],control=control,recovering=True)
     assert result['state']=='rolled_back' and not result.get('next_action')
     assert seen and set(seen)=={'running'}
+
+
+def test_stop_and_start_requests_get_a_lifecycle_budget(fixture):
+    # A real stop waits for the supervisor's graceful Chrome close (up to 5 s)
+    # inside a runuser call; a 5 s total budget cut healthy stops and starts
+    # into query timeouts and rolled the reset back.
+    clock=fixture[2]
+    request=submit(fixture)
+    control,_=controller(fixture)
+    budgets=[]
+    def timed(store,target,action,selection,**kwargs):
+        if action in {'stop','start'}:
+            budgets.append((action,kwargs['timeout']))
+            clock.sleep(7)
+            if kwargs['timeout']<7:
+                return {'exit_code':1,'state':'unknown','reason':'조회 제한 시간 초과'}
+        return control(store,target,action,selection,**kwargs)
+    result=execute(fixture,request['operation_id'],control=timed)
+    assert result['state']=='completed',result
+    assert {action for action,_ in budgets}=={'stop','start'}
+    assert min(timeout for _,timeout in budgets)>=7
+
+
+@pytest.mark.parametrize('result,expected',[('exit-code','completed'),('start-limit-hit','blocked')])
+def test_failed_did_is_a_stopped_display_for_reset(fixture,monkeypatch,result,expected):
+    # `ala chrome stop` leaves a failed unit failed, so treating it as an
+    # unknown state blocked every reset. A start limit needs an explicit restart.
+    paths,host,_,_,config,_,releases,active=fixture
+    failed=next(iter(active))
+    active[failed]=False
+    def status(_action,_config,target,**_):
+        if target==failed:
+            return {'service':{'ActiveState':'failed','Result':result}}
+        return {'service':{'ActiveState':'active' if active[target] else 'inactive'}}
+    monkeypatch.setattr(screens,'screen_action',status)
+    plan=reset.preview(config,release=releases[1],paths=paths,host=host)
+    if expected=='blocked':
+        assert plan['state']=='blocked' and 'ala chrome restart' in plan['reason']
+        return
+    assert plan['state']=='ready',plan
+    request=reset.submit(plan['review'],release=releases[1],paths=paths,host=host)
+    assert reset.Store(paths,host).load(request['operation_id'])['backup']['running'][failed] is False
+    control,_=controller(fixture)
+    assert execute(fixture,request['operation_id'],control=control)['state']=='completed'

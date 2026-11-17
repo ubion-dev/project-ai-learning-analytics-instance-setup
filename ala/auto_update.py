@@ -123,7 +123,13 @@ def status(*, paths=None, host=None):
             age = (datetime.now(timezone.utc) - datetime.fromisoformat(operation['started_at'])).total_seconds()
             if age > 15 and (props.get('LoadState') == 'not-found' or (
                     response.returncode == 0 and props.get('ActiveState') in {'inactive', 'failed'})):
-                operation.update(state='interrupted', reason='최초 준비 서비스가 완료 기록 없이 종료됐습니다.')
+                # The worker may have finished between the record and unit reads.
+                latest = _load(paths).get('bootstrap')
+                if (isinstance(latest, dict) and latest.get('run_id') == operation.get('run_id')
+                        and latest.get('state') not in {'queued', 'running'}):
+                    operation = dict(latest)
+                else:
+                    operation.update(state='interrupted', reason='최초 준비 서비스가 완료 기록 없이 종료됐습니다.')
             elif response.returncode or not props.get('ActiveState'):
                 operation.update(state='unknown', reason='최초 준비 서비스의 상태를 확인하지 못했습니다.')
     return value | {'bootstrap': operation, 'verifier': verifier, 'runtime_version': __version__,

@@ -234,8 +234,13 @@ def _observe(config, store, release):
             _capable(store,state[key])
         report = screen_action('status',config,target=screen.id,host=store.host,paths=store.paths)
         service = report.get('service') or {}
-        if service.get('QueryError') or service.get('ActiveState') not in {'active','inactive'}:
+        # A failed unit has no supervisor and no pending restart (stop keeps it
+        # failed), so it is a stopped display. A start limit still needs the
+        # documented explicit restart before reset can start its guide page.
+        if service.get('QueryError') or service.get('ActiveState') not in {'active','inactive','failed'}:
             raise RuntimeError('기존 DID 서비스 실행 상태를 확인하지 못했습니다.')
+        if service['ActiveState']=='failed' and service.get('Result')=='start-limit-hit':
+            raise RuntimeError(f'{screen.id} 화면이 시작 제한에 걸렸습니다. 로그 확인 후 ala chrome restart로 먼저 해제하세요.')
         if service['ActiveState']=='active':
             from .runtime import _observed_release_matches
             if not _observed_release_matches(store.runtime,report,state['committed']['version'],screen.id,config):
@@ -468,6 +473,10 @@ def _checkpoint(store,operation_id,phase,*,check_stop=True):
         return value
 
 
+CHECK_TIMEOUT=5
+LIFECYCLE_TIMEOUT=30
+
+
 def _stop_all(store,value,control,clock,pause):
     deadline=clock()+90
     for target,state in value['backup']['states'].items():
@@ -477,7 +486,9 @@ def _stop_all(store,value,control,clock,pause):
             latest['results'][target]={'state':'stopping'}
             store.save(latest)
         while clock()<deadline:
-            response=control(store,target,'stop',state['committed'],timeout=min(5,deadline-clock()))
+            # A stop waits for the supervisor's graceful Chrome close inside a
+            # runuser call; give it the same lifecycle budget as swap/apply.
+            response=control(store,target,'stop',state['committed'],timeout=min(LIFECYCLE_TIMEOUT,max(.1,deadline-clock())))
             if response.get('exit_code')==0 and response.get('state')=='stopped':
                 break
             if response.get('exit_code',1) not in {0,2}:
@@ -485,9 +496,6 @@ def _stop_all(store,value,control,clock,pause):
             pause(min(1,max(0,deadline-clock())))
         else:
             raise RuntimeError('관리 Chrome 종료 확인 시간 초과')
-
-
-CHECK_TIMEOUT=5
 
 
 def _ready(store,value,selections,targets,control,clock,pause,*,stable=False):
@@ -524,7 +532,7 @@ def _start(store,value,selections,targets,control,clock,pause):
             latest['results'][target]={'state':'starting'}
             latest['current_target']=target
             store.save(latest)
-            response=control(store,target,'start',selections[target]['committed'],timeout=5)
+            response=control(store,target,'start',selections[target]['committed'],timeout=LIFECYCLE_TIMEOUT)
             if response.get('exit_code',1) not in {0,2}:
                 raise RuntimeError('안내 화면 시작 요청 실패')
     _ready(store,value,selections,targets,control,clock,pause)

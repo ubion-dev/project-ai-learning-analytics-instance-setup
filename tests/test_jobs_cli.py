@@ -356,3 +356,15 @@ def test_invalid_podman_approval_cannot_start_job(store, token):
     with pytest.raises(ValueError):
         store.submit(Config(user='user'), Path('/release'), Path('/python'), podman_cleanup=token)
     assert not store.paths.runs.exists()
+
+def test_worker_finishing_between_record_and_unit_reads_is_not_interrupted(store):
+    # The worker writes its final record, then its unit goes inactive. A status
+    # read that saw the running record first must not report an interruption.
+    job=store.submit(Config(user='user'),Path('/release'),Path('/python'))
+    job['started_at']=(datetime.now(timezone.utc)-timedelta(minutes=2)).isoformat()
+    store.save(job)
+    def finished(*_args,**_kwargs):
+        store.save(dict(job,state='completed',exit_code=0))
+        return Command(0,'ActiveState=inactive\nLoadState=loaded\n','')
+    store.host.run=finished
+    assert store.load(job['run_id'])['state']=='completed'

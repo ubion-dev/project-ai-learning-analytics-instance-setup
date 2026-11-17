@@ -287,6 +287,19 @@ def test_first_save_can_skip_inactive_enrollment(fixture):
     assert store.load('default') is None
 
 
+@pytest.mark.parametrize('skip_inactive, expected', [(True, 'not_applicable'), (False, 'completed')])
+def test_failed_unit_enrolls_like_a_stopped_display(fixture, skip_inactive, expected):
+    # A failed unit has no supervisor and no pending restart. `ala chrome stop`
+    # leaves it failed, so treating it as unknown blocked every first save.
+    paths, host, clock, store, old, new, config = fixture
+    shutil.rmtree(store.base)
+    report = {'service': {'ActiveState': 'failed', 'Result': 'exit-code'}}
+    result = runtime.bootstrap_from_observation(config, {'default': report}, paths=paths, host=host,
+                                                release=new, skip_inactive=skip_inactive)
+    assert result['state'] == 'completed'
+    assert result['results'][0]['state'] == expected
+
+
 def test_setup_queued_before_reservation_blocks_display_operation(fixture, monkeypatch):
     paths, host, clock, store, *_ = fixture
     monkeypatch.setattr('ala.jobs.JobStore.list', lambda *_: [{'state': 'queued'}])
